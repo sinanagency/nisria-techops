@@ -1,0 +1,21 @@
+# dependencies / build
+node_modules/
+.next/
+out/
+dist/
+
+# env & secrets — NEVER commit
+.env
+.env.local
+.env*.local
+*.key
+
+# os / editor
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# data exports that may contain PII — keep out of git
+*-export.csv
+data/*.private.*

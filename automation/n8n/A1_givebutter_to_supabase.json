@@ -1,0 +1,74 @@
+{
+  "name": "A1 · Givebutter → Supabase (donor + donation sync)",
+  "_doc": "Importable n8n scaffold. Trigger: Givebutter webhook on new donation (⚑ confirm Givebutter webhook availability; else swap Webhook node for a Schedule+HTTP poll of the Givebutter API). Upserts donor, inserts donation (deduped on external_id). Configure Supabase + email credentials in n8n credential store, never inline.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "givebutter-donation",
+        "responseMode": "lastNode"
+      },
+      "id": "webhook",
+      "name": "Givebutter Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Map Givebutter payload → our shapes. ⚑ adjust field paths to Givebutter's actual schema.\nconst p = $json.body || $json;\nconst donor = {\n  full_name: p.donor_name || p.first_name + ' ' + (p.last_name||''),\n  email: (p.email||'').toLowerCase() || null,\n  phone: p.phone || null,\n  source: 'givebutter',\n  type: p.donor_type || 'individual'\n};\nconst donation = {\n  external_id: p.transaction_id || p.id,\n  amount: Number(p.amount),\n  currency: p.currency || 'USD',\n  channel: 'givebutter',\n  is_recurring: !!p.recurring,\n  status: (p.status||'succeeded'),\n  donated_at: p.created_at || new Date().toISOString(),\n  campaign_external: p.campaign_id || null\n};\nreturn [{ json: { donor, donation } }];"
+      },
+      "id": "map",
+      "name": "Map Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "tableId": "donors",
+        "matchingColumns": "email",
+        "dataToSend": "autoMapInputData"
+      },
+      "id": "upsertDonor",
+      "name": "Upsert Donor (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [680, 220],
+      "credentials": { "supabaseApi": { "id": "REPLACE", "name": "Nisria Supabase" } }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "donations",
+        "dataToSend": "autoMapInputData",
+        "_note": "Map donation fields + donor_id from the upsert output. external_id unique index dedupes retries."
+      },
+      "id": "insertDonation",
+      "name": "Insert Donation (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [900, 220],
+      "credentials": { "supabaseApi": { "id": "REPLACE", "name": "Nisria Supabase" } }
+    },
+    {
+      "parameters": {
+        "_note": "Triggers A2 (receipt + first-gift welcome). Use Send Email / Givebutter email. Gate first-gift detection on donor having one donation."
+      },
+      "id": "receipt",
+      "name": "→ A2 Receipt/Welcome",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1120, 220]
+    }
+  ],
+  "connections": {
+    "Givebutter Webhook": { "main": [[{ "node": "Map Payload", "type": "main", "index": 0 }]] },
+    "Map Payload": { "main": [[{ "node": "Upsert Donor (Supabase)", "type": "main", "index": 0 }]] },
+    "Upsert Donor (Supabase)": { "main": [[{ "node": "Insert Donation (Supabase)", "type": "main", "index": 0 }]] },
+    "Insert Donation (Supabase)": { "main": [[{ "node": "→ A2 Receipt/Welcome", "type": "main", "index": 0 }]] }
+  },
+  "settings": {},
+  "tags": ["nisria", "P0", "fundraising"]
+}
