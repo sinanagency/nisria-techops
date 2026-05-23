@@ -1,0 +1,63 @@
+{
+  "name": "A3 · Weekly fundraising report → Nur (cron + Claude)",
+  "_doc": "Importable n8n scaffold showing the cron+LLM digest pattern. Every Monday: query Supabase for the week's fundraising metrics, have Claude format a tight report, email/WhatsApp Nur. Internal-only, no human gate. Configure Supabase + Anthropic + email credentials in n8n's credential store.",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1" }] } },
+      "id": "cron",
+      "name": "Every Monday 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select\n  (select coalesce(sum(amount),0) from donations where status='succeeded' and donated_at >= now() - interval '7 days') as raised_week,\n  (select coalesce(sum(amount),0) from donations where status='succeeded' and date_trunc('month',donated_at)=date_trunc('month',now())) as raised_mtd,\n  (select count(*) from donors where first_gift_at >= now() - interval '7 days') as new_donors_week,\n  (select count(distinct donor_id) from donations where is_recurring) as recurring_donors,\n  (select count(*) from donors where status='lapsed') as lapsed,\n  (select name from campaigns where status='live' order by raised_amount desc limit 1) as top_campaign;"
+      },
+      "id": "metrics",
+      "name": "Query Supabase Metrics",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [470, 300],
+      "credentials": { "postgres": { "id": "REPLACE", "name": "Nisria Supabase (Postgres)" } }
+    },
+    {
+      "parameters": {
+        "modelId": "claude-sonnet-4-6",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You write a tight weekly fundraising digest for Nur (founder). Plain, scannable, no fluff. Lead with the one number that matters, then bullets, then one suggested action. Under 150 words." },
+            { "role": "user", "content": "=Metrics for the week: {{ JSON.stringify($json) }}. Write the digest." }
+          ]
+        }
+      },
+      "id": "claude",
+      "name": "Claude: format digest",
+      "type": "n8n-nodes-base.anthropic",
+      "typeVersion": 1,
+      "position": [700, 300],
+      "credentials": { "anthropicApi": { "id": "REPLACE", "name": "Anthropic (rinq key)" } }
+    },
+    {
+      "parameters": {
+        "_note": "Send via email (info@sinan.agency / tech@nisria.co) or a WhatsApp node. Subject: 'Nisria — weekly fundraising digest'.",
+        "subject": "Nisria — weekly fundraising digest",
+        "toRecipients": "nur@... ⚑"
+      },
+      "id": "send",
+      "name": "Email Nur",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [930, 300],
+      "credentials": { "smtp": { "id": "REPLACE", "name": "Nisria SMTP" } }
+    }
+  ],
+  "connections": {
+    "Every Monday 08:00": { "main": [[{ "node": "Query Supabase Metrics", "type": "main", "index": 0 }]] },
+    "Query Supabase Metrics": { "main": [[{ "node": "Claude: format digest", "type": "main", "index": 0 }]] },
+    "Claude: format digest": { "main": [[{ "node": "Email Nur", "type": "main", "index": 0 }]] }
+  },
+  "settings": {},
+  "tags": ["nisria", "P0", "reporting"]
+}
