@@ -1,0 +1,62 @@
+{
+  "name": "A4 · Beneficiary intake → Supabase record + Drive folder",
+  "_doc": "Importable scaffold. Trigger: Google Form (intake) submission. Creates a private beneficiaries row (consent_public=false) and a Drive case folder named by ref_code. Public profile fields are filled later by a human only if consent was given. Templates/fields: ../../data/beneficiary-intake.md.",
+  "nodes": [
+    {
+      "parameters": { "pollTimes": { "item": [{ "mode": "everyMinute" }] }, "_note": "Use the Google Forms / Sheets trigger on the intake form's responses sheet." },
+      "id": "formTrigger",
+      "name": "Intake Form Submission",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE", "name": "Nisria Google" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build ref_code + map private fields. Default consent_public=false.\nconst r = $json;\nconst year = new Date().getFullYear();\nconst seq = String(($json.row_number||0)).padStart(3,'0');\nconst ref = `NIS-${year}-${seq}`;\nreturn [{ json: {\n  ref_code: ref,\n  full_name: r['Full name'],\n  location: r['Location'],\n  category: r['Category'],\n  needs: r['Needs'],\n  story_private: r['Case notes'],\n  consent_public: (r['Consent to share'] === 'Yes'),\n  consent_photo: (r['Consent to photo'] === 'Yes'),\n  public_name: r['Preferred display name'] || null\n}}];"
+      },
+      "id": "map",
+      "name": "Map + ref_code",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": { "operation": "create", "tableId": "beneficiaries", "dataToSend": "autoMapInputData" },
+      "id": "insert",
+      "name": "Create beneficiary row",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [680, 240],
+      "credentials": { "supabaseApi": { "id": "REPLACE", "name": "Nisria Supabase" } }
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "name": "={{ $json.ref_code }}",
+        "_note": "Create under Drive 01_BENEFICIARIES/Case Files/. Then store the consent form link back on the row."
+      },
+      "id": "folder",
+      "name": "Create Drive case folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [680, 360],
+      "credentials": { "googleDriveOAuth2Api": { "id": "REPLACE", "name": "Nisria Google" } }
+    },
+    {
+      "parameters": { "_note": "Notify web manager IF consent_public to fill public_name/story/photo. Otherwise done (private record only)." },
+      "id": "notify",
+      "name": "→ Notify if consented",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [900, 300]
+    }
+  ],
+  "connections": {
+    "Intake Form Submission": { "main": [[{ "node": "Map + ref_code", "type": "main", "index": 0 }]] },
+    "Map + ref_code": { "main": [[{ "node": "Create beneficiary row", "type": "main", "index": 0 }, { "node": "Create Drive case folder", "type": "main", "index": 0 }]] },
+    "Create beneficiary row": { "main": [[{ "node": "→ Notify if consented", "type": "main", "index": 0 }]] }
+  },
+  "settings": {},
+  "tags": ["nisria", "P0", "data", "safeguarding"]
+}

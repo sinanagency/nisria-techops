@@ -1,0 +1,64 @@
+{
+  "name": "A2 · Donation receipt + first-gift welcome (Supabase trigger → email)",
+  "_doc": "Importable scaffold. Fires when a new donation lands (Supabase insert webhook, or chained from A1). Sends a branded receipt; if it's the donor's first gift, starts the 3-email welcome series (use a Wait node between sends or schedule). Templates: ../../fundraising/email-templates.md.",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "donation-created", "responseMode": "lastNode" },
+      "id": "trigger",
+      "name": "New Donation (Supabase webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Determine first-gift: count this donor's succeeded donations.\n// (In production, query Supabase; here we read a flag passed by the DB function.)\nconst d = $json.body?.record || $json.body || $json;\nreturn [{ json: { donor_id: d.donor_id, email: d.email, amount: d.amount, external_id: d.external_id, first_gift: d.first_gift === true } }];"
+      },
+      "id": "classify",
+      "name": "Classify (first gift?)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "subject": "Thank you — your gift is on its way to Kenya",
+        "_note": "Body = receipt template #1 from email-templates.md, merge {amount},{external_id}. To = donor email.",
+        "toRecipients": "={{ $json.email }}"
+      },
+      "id": "receipt",
+      "name": "Send Receipt",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [680, 220],
+      "credentials": { "smtp": { "id": "REPLACE", "name": "Nisria SMTP" } }
+    },
+    {
+      "parameters": { "conditions": { "boolean": [{ "value1": "={{ $json.first_gift }}", "value2": true }] } },
+      "id": "ifFirst",
+      "name": "First gift?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 380]
+    },
+    {
+      "parameters": {
+        "_note": "Welcome series emails 1-3 (template #2). Use Wait nodes (+1d, +4d, +10d) or enqueue scheduled sends. Keep each as its own emailSend node after a Wait.",
+        "subject": "Welcome to Nisria"
+      },
+      "id": "welcome1",
+      "name": "Welcome Email 1",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [900, 380],
+      "credentials": { "smtp": { "id": "REPLACE", "name": "Nisria SMTP" } }
+    }
+  ],
+  "connections": {
+    "New Donation (Supabase webhook)": { "main": [[{ "node": "Classify (first gift?)", "type": "main", "index": 0 }]] },
+    "Classify (first gift?)": { "main": [[{ "node": "Send Receipt", "type": "main", "index": 0 }, { "node": "First gift?", "type": "main", "index": 0 }]] },
+    "First gift?": { "main": [[{ "node": "Welcome Email 1", "type": "main", "index": 0 }], []] }
+  },
+  "settings": {},
+  "tags": ["nisria", "P0", "fundraising", "lifecycle"]
+}
