@@ -13,7 +13,12 @@ export function admin(): any {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_KEY;
   if (!url || !key) throw new Error("Missing SUPABASE_URL / SUPABASE_SERVICE_KEY");
-  _client = createClient(url, key, { auth: { persistSession: false } });
+  _client = createClient(url, key, {
+    auth: { persistSession: false },
+    // Force fresh reads: stop Next.js from caching supabase-js fetches so the
+    // dashboard always reflects live data (e.g. right after a Givebutter sync).
+    global: { fetch: (input: any, init: any) => fetch(input, { ...init, cache: "no-store" }) },
+  });
   return _client;
 }
 
