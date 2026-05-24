@@ -4,9 +4,11 @@ import { createClient } from "@supabase/supabase-js";
 // Never import this into a client component. The whole app is auth-gated by
 // middleware, and these env vars are NOT NEXT_PUBLIC, so the key never ships
 // to the browser.
-let _client: ReturnType<typeof createClient> | null = null;
+// Loosely typed on purpose: no generated DB types, so we let inserts/updates
+// accept plain objects (avoids supabase-js inferring `never` row shapes).
+let _client: any = null;
 
-export function admin() {
+export function admin(): any {
   if (_client) return _client;
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_KEY;
