@@ -5,40 +5,27 @@ import { usePathname, useRouter } from "next/navigation";
 
 export type Tab = { href: string; title: string; icon: string; brand?: string };
 
-// Known top-level routes → tab metadata. Dynamic/detail routes inherit the
-// closest parent's icon and get their real title from <TabTitle> on the page.
-const ROUTES: Record<string, { title: string; icon: string; pinned?: boolean }> = {
-  "/":              { title: "Mission Control", icon: "home", pinned: true },
-  "/inbox":         { title: "Inbox", icon: "inbox" },
-  "/content":       { title: "Content", icon: "pen" },
-  "/library":       { title: "Library", icon: "folder" },
-  "/tasks":         { title: "Tasks", icon: "check" },
-  "/team":          { title: "Team", icon: "users" },
-  "/newsletter":    { title: "Newsletter", icon: "send" },
-  "/assistant":     { title: "Assistant", icon: "spark" },
-  "/agents":        { title: "Agents", icon: "bot" },
-  "/activity":      { title: "Activity", icon: "activity" },
-  "/donors":        { title: "Donors", icon: "heart" },
-  "/donations":     { title: "Donations", icon: "dollar" },
-  "/campaigns":     { title: "Campaigns", icon: "target" },
-  "/beneficiaries": { title: "Beneficiaries", icon: "life" },
-  "/inventory":     { title: "Inventory", icon: "box" },
-  "/grants":        { title: "Grants", icon: "award" },
-  "/outreach":      { title: "Outreach", icon: "mega" },
+// Top-level sections live in the nav. They are NOT tabbed (no duplication).
+// Tabs only hold things you OPEN: a donor, a contact, a finance entry, etc.
+const NAV_SECTIONS = new Set([
+  "/", "/inbox", "/content", "/library", "/tasks", "/agents", "/smart",
+  "/donors", "/donations", "/campaigns", "/beneficiaries", "/inventory",
+  "/grants", "/outreach", "/team", "/newsletter", "/finance",
+]);
+
+// detail route → icon by parent
+const ICON_BY_PREFIX: Record<string, string> = {
+  "/contacts": "life", "/donors": "heart", "/donations": "dollar",
+  "/campaigns": "target", "/grants": "award", "/inventory": "box", "/finance": "dollar",
 };
 
 function humanize(seg: string) {
   return seg.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
-
 function deriveTab(href: string): Tab {
-  if (ROUTES[href]) return { href, title: ROUTES[href].title, icon: ROUTES[href].icon };
-  // longest parent prefix match for detail routes (e.g. /donors/abc)
-  const parent = Object.keys(ROUTES)
-    .filter((r) => r !== "/" && href.startsWith(r + "/"))
-    .sort((a, b) => b.length - a.length)[0];
+  const prefix = Object.keys(ICON_BY_PREFIX).find((p) => href.startsWith(p + "/"));
   const seg = href.split("/").filter(Boolean).pop() || href;
-  return { href, title: humanize(seg), icon: parent ? ROUTES[parent].icon : "file" };
+  return { href, title: humanize(seg).slice(0, 24), icon: prefix ? ICON_BY_PREFIX[prefix] : "file" };
 }
 
 type Ctx = {
@@ -50,43 +37,28 @@ type Ctx = {
 const TabsCtx = createContext<Ctx>({ tabs: [], active: "/", closeTab: () => {}, setTitle: () => {} });
 export const useTabs = () => useContext(TabsCtx);
 
-const HOME: Tab = { href: "/", title: "Mission Control", icon: "home" };
-const KEY = "nisria.tabs.v1";
+const KEY = "nisria.tabs.v2";
 
 export function TabsProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [tabs, setTabs] = useState<Tab[]>([HOME]);
+  const [tabs, setTabs] = useState<Tab[]>([]);
 
-  // hydrate from localStorage once
   useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(KEY) || "null");
-      if (Array.isArray(saved) && saved.length) {
-        if (!saved.find((t: Tab) => t.href === "/")) saved.unshift(HOME);
-        setTabs(saved);
-      }
-    } catch {}
+    try { const s = JSON.parse(localStorage.getItem(KEY) || "[]"); if (Array.isArray(s)) setTabs(s); } catch {}
   }, []);
-
-  // persist
   useEffect(() => { try { localStorage.setItem(KEY, JSON.stringify(tabs)); } catch {} }, [tabs]);
 
-  // ensure the current route has a tab (auto-open on navigation)
+  // only OPENED records become tabs; nav sections never do
   useEffect(() => {
-    if (!pathname || pathname === "/login") return;
+    if (!pathname || pathname === "/login" || NAV_SECTIONS.has(pathname)) return;
     setTabs((prev) => (prev.find((t) => t.href === pathname) ? prev : [...prev, deriveTab(pathname)]));
   }, [pathname]);
 
   const closeTab = useCallback((href: string) => {
-    if (href === "/") return; // home is pinned
     setTabs((prev) => {
       const next = prev.filter((t) => t.href !== href);
-      if (pathname === href) {
-        const idx = prev.findIndex((t) => t.href === href);
-        const fallback = next[Math.max(0, idx - 1)] || HOME;
-        router.push(fallback.href);
-      }
+      if (pathname === href) router.push("/");
       return next;
     });
   }, [pathname, router]);
@@ -95,14 +67,9 @@ export function TabsProvider({ children }: { children: React.ReactNode }) {
     setTabs((prev) => prev.map((t) => (t.href === href ? { ...t, title, ...(brand ? { brand } : {}) } : t)));
   }, []);
 
-  return (
-    <TabsCtx.Provider value={{ tabs, active: pathname || "/", closeTab, setTitle }}>
-      {children}
-    </TabsCtx.Provider>
-  );
+  return <TabsCtx.Provider value={{ tabs, active: pathname || "/", closeTab, setTitle }}>{children}</TabsCtx.Provider>;
 }
 
-// Pages drop this to set their tab's real title (esp. dynamic record pages).
 export function TabTitle({ title, brand }: { title: string; brand?: string }) {
   const pathname = usePathname();
   const { setTitle } = useTabs();

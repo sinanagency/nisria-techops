@@ -8,7 +8,7 @@ export default async function Donors() {
   const db = admin();
   const { data } = await db.from("donors").select("*").order("lifetime_value", { ascending: false }).limit(500);
   const cols: Col<any>[] = [
-    { key: "full_name", label: "Name", render: (r) => <span className="strong">{r.full_name}</span> },
+    { key: "full_name", label: "Name", render: (r) => <a href={`/donors/${r.id}`} className="strong">{r.full_name}</a> },
     { key: "email", label: "Email", render: (r) => r.email || "—" },
     { key: "type", label: "Type" },
     { key: "status", label: "Status", render: (r) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> },

@@ -1,7 +1,8 @@
 import Shell from "../../components/Shell";
 import { Card, Badge } from "../../components/ui";
 import { admin } from "../../lib/supabase-admin";
-import { addMember, toggleMember } from "./actions";
+import { addMember, toggleMember, activateMember } from "./actions";
+import { Mail, Phone, UserPlus } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -18,17 +19,34 @@ export default async function Team() {
           <div className="card card-pad" key={m.id}>
             <div className="between">
               <strong style={{ fontSize: 15 }}>{m.name}</strong>
-              <Badge tone={m.status === "active" ? "green" : ""}>{m.status}</Badge>
+              <Badge tone={m.activated ? "green" : "gray"}>{m.activated ? "activated" : "not activated"}</Badge>
             </div>
             <div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{m.role || "—"}</div>
-            {m.email && <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{m.email}</div>}
+            {m.email && (
+              <div className="muted flex" style={{ fontSize: 12.5, marginTop: 4, gap: 6, alignItems: "center" }}>
+                <Mail size={13} /> {m.email}
+              </div>
+            )}
+            {m.phone && (
+              <div className="muted flex" style={{ fontSize: 12.5, marginTop: 3, gap: 6, alignItems: "center" }}>
+                <Phone size={13} /> {m.phone}
+              </div>
+            )}
             <div className="between" style={{ marginTop: 12 }}>
               <Badge tone="purple">{load(m.id)} open task{load(m.id) === 1 ? "" : "s"}</Badge>
-              <form action={toggleMember}>
-                <input type="hidden" name="id" value={m.id} />
-                <input type="hidden" name="status" value={m.status === "active" ? "inactive" : "active"} />
-                <button className="pill" type="submit">{m.status === "active" ? "Deactivate" : "Activate"}</button>
-              </form>
+              <div className="flex" style={{ gap: 6 }}>
+                {!m.activated && (
+                  <form action={activateMember}>
+                    <input type="hidden" name="id" value={m.id} />
+                    <button className="pill" type="submit">Activate</button>
+                  </form>
+                )}
+                <form action={toggleMember}>
+                  <input type="hidden" name="id" value={m.id} />
+                  <input type="hidden" name="status" value={m.status === "active" ? "inactive" : "active"} />
+                  <button className="pill" type="submit">{m.status === "active" ? "Deactivate" : "Set active"}</button>
+                </form>
+              </div>
             </div>
           </div>
         ))}
@@ -36,11 +54,14 @@ export default async function Team() {
 
       <div style={{ marginTop: 16, maxWidth: 520 }}>
         <Card title="Add a team member">
-          <form action={addMember} className="card-pad" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <form action={addMember} className="card-pad stack">
             <input name="name" placeholder="Name" required />
             <input name="role" placeholder="Role (e.g. Content Lead, Kenya Field, VA)" />
-            <input name="email" placeholder="Email (optional)" />
-            <button className="btn" type="submit" style={{ alignSelf: "flex-start" }}>Add member</button>
+            <input name="email" placeholder="Email (optional)" type="email" />
+            <input name="phone" placeholder="Phone / WhatsApp (optional)" />
+            <button className="btn" type="submit" style={{ alignSelf: "flex-start" }}>
+              <UserPlus size={15} /> Add member
+            </button>
           </form>
         </Card>
       </div>

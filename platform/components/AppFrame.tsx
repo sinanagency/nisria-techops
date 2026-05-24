@@ -10,7 +10,7 @@ import { TabsProvider, useTabs } from "./tabs-context";
 import {
   Home, Inbox, PenLine, ListChecks, Users, Send, FolderOpen, Bot, Activity,
   HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, File,
-  X, Plus, Search, Bell, Sparkles, ChevronDown,
+  X, Plus, Search, Bell, Sparkles, ChevronDown, Wand2,
 } from "lucide-react";
 
 const ICONS: Record<string, any> = {
@@ -36,6 +36,7 @@ const RECORDS = [
   { href: "/beneficiaries", label: "Beneficiaries", icon: "life" },
   { href: "/inventory", label: "Inventory", icon: "box" },
   { href: "/grants", label: "Grants", icon: "award" },
+  { href: "/finance", label: "Finance", icon: "dollar" },
   { href: "/outreach", label: "Outreach", icon: "mega" },
   { href: "/team", label: "Team", icon: "users" },
   { href: "/newsletter", label: "Newsletter", icon: "send" },
@@ -44,6 +45,7 @@ const RECORDS = [
 function TabBar() {
   const { tabs, active, closeTab } = useTabs();
   const router = useRouter();
+  if (!tabs.length) return null; // bar only exists when records are open
   return (
     <div className="tabbar">
       {tabs.map((t) => (
@@ -51,10 +53,9 @@ function TabBar() {
           onAuxClick={(e) => { if (e.button === 1) closeTab(t.href); }}>
           {t.brand ? <span className="dot" style={{ background: BRAND_DOT[t.brand] || "var(--muted)" }} /> : <span className="ico"><Icon name={t.icon} size={13} /></span>}
           <span className="label">{t.title}</span>
-          {t.href !== "/" && <span className="x" onClick={(e) => { e.stopPropagation(); closeTab(t.href); }}><X size={12} /></span>}
+          <span className="x" onClick={(e) => { e.stopPropagation(); closeTab(t.href); }}><X size={12} /></span>
         </div>
       ))}
-      <div className="tab-add" title="Open (⌘K)" onClick={() => window.dispatchEvent(new Event("open-cmdk"))}><Plus size={15} /></div>
     </div>
   );
 }
@@ -80,7 +81,7 @@ function TopNav() {
   return (
     <div className="topnav">
       <div className="topnav-inner">
-        <Link href="/" className="brand"><span className="mark">N</span> Nisria</Link>
+        <Link href="/" className="brand"><img className="logo" src="/logo.png" alt="Nisria" /></Link>
         <div className="navpills">
           {PILLS.map((p) => (
             <Link key={p.href} href={p.href} className={`navpill ${isActive(p.href) ? "active" : ""}`}>
@@ -103,8 +104,9 @@ function TopNav() {
           </div>
         </div>
         <div className="nav-right">
+          <Link href="/smart" className={`navpill smartbtn ${path === "/smart" ? "active" : ""}`} title="Smart Mode"><Wand2 size={16} /> Smart</Link>
           <button className="iconbtn" title="Search (⌘K)" onClick={() => window.dispatchEvent(new Event("open-cmdk"))}><Search size={17} /></button>
-          <button className="iconbtn" title="Activity"><Bell size={17} /></button>
+          <Link href="/" className="iconbtn" title="What needs you"><Bell size={17} /></Link>
           <button className="iconbtn dark" title="Ask Sasa" onClick={() => window.dispatchEvent(new Event("open-sasa"))}><Sparkles size={17} /></button>
           <div className="dropwrap" ref={avRef}>
             <button className="avatar" title="Nur" onClick={() => setAvOpen((o) => !o)}>N</button>
