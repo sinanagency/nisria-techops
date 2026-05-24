@@ -1,77 +1,79 @@
 "use client";
 
-import { useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { logout } from "../app/login/actions";
+import CommandPalette from "./CommandPalette";
+import {
+  LayoutDashboard, Sparkles, Inbox, PenLine, ListChecks, Users, Send,
+  HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, Command as CmdIcon,
+} from "lucide-react";
 
-const PRIMARY = [
-  { href: "/", label: "Dashboard", ico: "◫" },
-  { href: "/assistant", label: "AI Assistant", ico: "✦" },
-  { href: "/inbox", label: "Inbox", ico: "✉" },
-  { href: "/content", label: "Content", ico: "✎" },
-  { href: "/tasks", label: "Tasks", ico: "✓" },
-  { href: "/team", label: "Team", ico: "◑" },
-  { href: "/newsletter", label: "Newsletter", ico: "❋" },
+const TOP = [{ href: "/", label: "Dashboard", icon: LayoutDashboard }];
+const RUN = [
+  { href: "/assistant", label: "AI Assistant", icon: Sparkles },
+  { href: "/inbox", label: "Inbox", icon: Inbox },
+  { href: "/content", label: "Content", icon: PenLine },
+  { href: "/tasks", label: "Tasks", icon: ListChecks },
+  { href: "/team", label: "Team", icon: Users },
+  { href: "/newsletter", label: "Newsletter", icon: Send },
 ];
 const RECORDS = [
-  { href: "/donors", label: "Donors", ico: "○" },
-  { href: "/donations", label: "Donations", ico: "$" },
-  { href: "/campaigns", label: "Campaigns", ico: "◎" },
-  { href: "/beneficiaries", label: "Beneficiaries", ico: "♥" },
-  { href: "/inventory", label: "Inventory", ico: "▦" },
-  { href: "/grants", label: "Grants", ico: "✧" },
-  { href: "/outreach", label: "Outreach", ico: "→" },
+  { href: "/donors", label: "Donors", icon: HeartHandshake },
+  { href: "/donations", label: "Donations", icon: DollarSign },
+  { href: "/campaigns", label: "Campaigns", icon: Target },
+  { href: "/beneficiaries", label: "Beneficiaries", icon: Heart },
+  { href: "/inventory", label: "Inventory", icon: Package },
+  { href: "/grants", label: "Grants", icon: Award },
+  { href: "/outreach", label: "Outreach", icon: Megaphone },
 ];
+
+function NavLink({ href, label, icon: Icon, active }: any) {
+  return (
+    <Link href={href} className={active ? "active" : ""}>
+      <span className="ico"><Icon size={17} /></span> {label}
+    </Link>
+  );
+}
 
 export default function Shell({ title, sub, action, children }: { title: string; sub?: string; action?: React.ReactNode; children: React.ReactNode }) {
   const path = usePathname();
-  const [open, setOpen] = useState(false);
   const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
-  const recordsActive = RECORDS.some((r) => isActive(r.href));
 
   return (
     <div className="shell">
-      <header className="topnav">
-        <div className="tn-left">
-          <div className="brand"><span className="dot">N</span> Nisria</div>
-          <nav className="tn-nav">
-            {PRIMARY.map((n) => (
-              <Link key={n.href} href={n.href} className={isActive(n.href) ? "active" : ""}>
-                <span className="ico">{n.ico}</span> {n.label}
-              </Link>
-            ))}
-            <div className="tn-dropdown" onMouseLeave={() => setOpen(false)}>
-              <button className={`tn-dd-btn ${recordsActive ? "active" : ""}`} onClick={() => setOpen((o) => !o)}>
-                <span className="ico">▦</span> Records ▾
-              </button>
-              {open && (
-                <div className="tn-menu">
-                  {RECORDS.map((r) => (
-                    <Link key={r.href} href={r.href} className={isActive(r.href) ? "active" : ""} onClick={() => setOpen(false)}>
-                      <span className="ico">{r.ico}</span> {r.label}
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </div>
-          </nav>
+      <CommandPalette />
+      <aside className="rail">
+        <div className="brand"><span className="mark">N</span> Nisria</div>
+        <button className="cmdk-hint" onClick={() => window.dispatchEvent(new Event("open-cmdk"))}>
+          <CmdIcon size={14} /> Search… <kbd>⌘K</kbd>
+        </button>
+        <nav className="nav">
+          {TOP.map((n) => <NavLink key={n.href} {...n} active={isActive(n.href)} />)}
+        </nav>
+        <div className="nav-section">
+          <div className="lbl">Run the org</div>
+          <nav className="nav">{RUN.map((n) => <NavLink key={n.href} {...n} active={isActive(n.href)} />)}</nav>
         </div>
-        <div className="tn-right">
-          <span className="tn-foot">Command Center · v2</span>
-          <form action={logout}><button className="tn-signout" type="submit">Sign out</button></form>
+        <div className="nav-section">
+          <div className="lbl">Records</div>
+          <nav className="nav">{RECORDS.map((n) => <NavLink key={n.href} {...n} active={isActive(n.href)} />)}</nav>
         </div>
-      </header>
+        <div className="foot">
+          <form action={logout}><button type="submit">Sign out</button></form>
+          <div style={{ marginTop: 6 }}>Command Center</div>
+        </div>
+      </aside>
 
       <main className="main">
-        <div className="pagehead">
+        <div className="pagehead rise">
           <div>
             <h1>{title}</h1>
             {sub && <div className="sub">{sub}</div>}
           </div>
           {action}
         </div>
-        <div className="content">{children}</div>
+        <div className="content rise">{children}</div>
       </main>
     </div>
   );

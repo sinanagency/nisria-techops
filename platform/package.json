@@ -10,6 +10,9 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
+    "cmdk": "^1.0.0",
+    "framer-motion": "^11.3.0",
+    "lucide-react": "^0.417.0",
     "next": "14.2.5",
     "nodemailer": "^6.9.14",
     "react": "18.3.1",
