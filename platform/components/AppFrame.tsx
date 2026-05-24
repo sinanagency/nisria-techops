@@ -1,37 +1,33 @@
 "use client";
 
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { logout } from "../app/login/actions";
 import CommandPalette from "./CommandPalette";
 import VoiceDock from "./VoiceDock";
+import { logout } from "../app/login/actions";
 import { TabsProvider, useTabs } from "./tabs-context";
 import {
-  Home, Sparkles, Inbox, PenLine, ListChecks, Users, Send, FolderOpen, Bot, Activity,
-  HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, File, X, Plus,
-  Command as CmdIcon,
+  Home, Inbox, PenLine, ListChecks, Users, Send, FolderOpen, Bot, Activity,
+  HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, File,
+  X, Plus, Search, Bell, Sparkles, ChevronDown,
 } from "lucide-react";
 
 const ICONS: Record<string, any> = {
-  home: Home, spark: Sparkles, inbox: Inbox, pen: PenLine, check: ListChecks, users: Users,
-  send: Send, folder: FolderOpen, bot: Bot, activity: Activity, heart: HeartHandshake,
-  dollar: DollarSign, target: Target, life: Heart, box: Package, award: Award, mega: Megaphone, file: File,
+  home: Home, inbox: Inbox, pen: PenLine, check: ListChecks, users: Users, send: Send,
+  folder: FolderOpen, bot: Bot, activity: Activity, heart: HeartHandshake, dollar: DollarSign,
+  target: Target, life: Heart, box: Package, award: Award, mega: Megaphone, file: File, spark: Sparkles,
 };
-const Icon = ({ name, size = 17 }: { name: string; size?: number }) => {
-  const C = ICONS[name] || File;
-  return <C size={size} />;
-};
-
+const Icon = ({ name, size = 16 }: { name: string; size?: number }) => { const C = ICONS[name] || File; return <C size={size} />; };
 const BRAND_DOT: Record<string, string> = { nisria: "var(--nisria)", maisha: "var(--maisha)", ahadi: "var(--ahadi)" };
 
-const TOP = [{ href: "/", label: "Mission Control", icon: "home" }];
-const RUN = [
+const PILLS = [
+  { href: "/", label: "Mission Control", icon: "home" },
   { href: "/inbox", label: "Inbox", icon: "inbox" },
   { href: "/content", label: "Content", icon: "pen" },
+  { href: "/library", label: "Library", icon: "folder" },
   { href: "/tasks", label: "Tasks", icon: "check" },
-  { href: "/team", label: "Team", icon: "users" },
-  { href: "/newsletter", label: "Newsletter", icon: "send" },
-  { href: "/assistant", label: "Assistant", icon: "spark" },
+  { href: "/agents", label: "Agents", icon: "bot" },
 ];
 const RECORDS = [
   { href: "/donors", label: "Donors", icon: "heart" },
@@ -41,15 +37,9 @@ const RECORDS = [
   { href: "/inventory", label: "Inventory", icon: "box" },
   { href: "/grants", label: "Grants", icon: "award" },
   { href: "/outreach", label: "Outreach", icon: "mega" },
+  { href: "/team", label: "Team", icon: "users" },
+  { href: "/newsletter", label: "Newsletter", icon: "send" },
 ];
-
-function NavLink({ href, label, icon, active }: { href: string; label: string; icon: string; active: boolean }) {
-  return (
-    <Link href={href} className={active ? "active" : ""}>
-      <span className="ico"><Icon name={icon} /></span> {label}
-    </Link>
-  );
-}
 
 function TabBar() {
   const { tabs, active, closeTab } = useTabs();
@@ -57,60 +47,90 @@ function TabBar() {
   return (
     <div className="tabbar">
       {tabs.map((t) => (
-        <div
-          key={t.href}
-          className={`tab ${active === t.href ? "active" : ""}`}
-          onClick={() => router.push(t.href)}
-          onAuxClick={(e) => { if (e.button === 1) closeTab(t.href); }}
-        >
-          {t.brand
-            ? <span className="dot" style={{ background: BRAND_DOT[t.brand] || "var(--muted)" }} />
-            : <span className="ico"><Icon name={t.icon} size={14} /></span>}
+        <div key={t.href} className={`tab ${active === t.href ? "active" : ""}`} onClick={() => router.push(t.href)}
+          onAuxClick={(e) => { if (e.button === 1) closeTab(t.href); }}>
+          {t.brand ? <span className="dot" style={{ background: BRAND_DOT[t.brand] || "var(--muted)" }} /> : <span className="ico"><Icon name={t.icon} size={13} /></span>}
           <span className="label">{t.title}</span>
-          {t.href !== "/" && (
-            <span className="x" onClick={(e) => { e.stopPropagation(); closeTab(t.href); }}><X size={13} /></span>
-          )}
+          {t.href !== "/" && <span className="x" onClick={(e) => { e.stopPropagation(); closeTab(t.href); }}><X size={12} /></span>}
         </div>
       ))}
-      <div className="tab-add" title="Open (⌘K)" onClick={() => window.dispatchEvent(new Event("open-cmdk"))}>
-        <Plus size={16} />
+      <div className="tab-add" title="Open (⌘K)" onClick={() => window.dispatchEvent(new Event("open-cmdk"))}><Plus size={15} /></div>
+    </div>
+  );
+}
+
+function TopNav() {
+  const path = usePathname();
+  const [recOpen, setRecOpen] = useState(false);
+  const [avOpen, setAvOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const avRef = useRef<HTMLDivElement>(null);
+  const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
+  const recActive = RECORDS.some((r) => isActive(r.href));
+
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setRecOpen(false);
+      if (avRef.current && !avRef.current.contains(e.target as Node)) setAvOpen(false);
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, []);
+
+  return (
+    <div className="topnav">
+      <div className="topnav-inner">
+        <Link href="/" className="brand"><span className="mark">N</span> Nisria</Link>
+        <div className="navpills">
+          {PILLS.map((p) => (
+            <Link key={p.href} href={p.href} className={`navpill ${isActive(p.href) ? "active" : ""}`}>
+              <span className="ico"><Icon name={p.icon} /></span> {p.label}
+            </Link>
+          ))}
+          <div className="dropwrap" ref={ref}>
+            <button className={`navpill ${recActive ? "active" : ""}`} onClick={() => setRecOpen((o) => !o)}>
+              More <ChevronDown size={14} className="caret" />
+            </button>
+            {recOpen && (
+              <div className="dropmenu">
+                {RECORDS.map((r) => (
+                  <Link key={r.href} href={r.href} className={isActive(r.href) ? "active" : ""} onClick={() => setRecOpen(false)}>
+                    <span className="ico"><Icon name={r.icon} /></span> {r.label}
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="nav-right">
+          <button className="iconbtn" title="Search (⌘K)" onClick={() => window.dispatchEvent(new Event("open-cmdk"))}><Search size={17} /></button>
+          <button className="iconbtn" title="Activity"><Bell size={17} /></button>
+          <button className="iconbtn dark" title="Ask Sasa" onClick={() => window.dispatchEvent(new Event("open-sasa"))}><Sparkles size={17} /></button>
+          <div className="dropwrap" ref={avRef}>
+            <button className="avatar" title="Nur" onClick={() => setAvOpen((o) => !o)}>N</button>
+            {avOpen && (
+              <div className="dropmenu" style={{ right: 0, left: "auto" }}>
+                <div style={{ padding: "6px 11px 8px", borderBottom: "1px solid var(--line)", marginBottom: 4 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>Nur M'nasria</div>
+                  <div className="faint" style={{ fontSize: 11.5 }}>By Nisria Inc</div>
+                </div>
+                <form action={logout}><button type="submit" style={{ width: "100%", textAlign: "left", background: "none", border: 0, padding: "9px 11px", borderRadius: 11, color: "var(--ink-2)", cursor: "pointer", fontSize: 13.5, fontFamily: "inherit" }}>Sign out</button></form>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
 function Chrome({ children }: { children: React.ReactNode }) {
-  const path = usePathname();
-  const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
   return (
-    <div className="shell">
+    <div className="appshell">
       <CommandPalette />
-      <aside className="rail">
-        <div className="brand"><span className="mark">N</span> Nisria</div>
-        <button className="cmdk-hint" onClick={() => window.dispatchEvent(new Event("open-cmdk"))}>
-          <CmdIcon size={14} /> Search… <kbd>⌘K</kbd>
-        </button>
-        <nav className="nav">
-          {TOP.map((n) => <NavLink key={n.href} {...n} active={isActive(n.href)} />)}
-        </nav>
-        <div className="nav-section">
-          <div className="lbl">Run the org</div>
-          <nav className="nav">{RUN.map((n) => <NavLink key={n.href} {...n} active={isActive(n.href)} />)}</nav>
-        </div>
-        <div className="nav-section">
-          <div className="lbl">Records</div>
-          <nav className="nav">{RECORDS.map((n) => <NavLink key={n.href} {...n} active={isActive(n.href)} />)}</nav>
-        </div>
-        <div className="foot">
-          <form action={logout}><button type="submit">Sign out</button></form>
-          <div style={{ marginTop: 6 }}>Command Center</div>
-        </div>
-      </aside>
-
-      <div className="workspace">
-        <TabBar />
-        <main className="main">{children}</main>
-      </div>
+      <TopNav />
+      <TabBar />
+      <main className="main">{children}</main>
       <VoiceDock />
     </div>
   );
@@ -118,7 +138,6 @@ function Chrome({ children }: { children: React.ReactNode }) {
 
 export default function AppFrame({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  // login renders bare, no chrome / tabs / dock
   if (path === "/login") return <>{children}</>;
   return (
     <TabsProvider>

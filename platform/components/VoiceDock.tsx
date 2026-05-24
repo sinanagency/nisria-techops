@@ -25,6 +25,16 @@ export default function VoiceDock() {
 
   useEffect(() => { logRef.current?.scrollTo({ top: 1e9, behavior: "smooth" }); }, [msgs, open]);
 
+  // open from the nav button + receive preset prompts from hero action chips
+  const sendRef = useRef<(t?: string) => void>(() => {});
+  useEffect(() => {
+    const openSasa = () => setOpen(true);
+    const ask = (e: Event) => { setOpen(true); const t = (e as CustomEvent).detail; if (t) sendRef.current(t); };
+    window.addEventListener("open-sasa", openSasa);
+    window.addEventListener("sasa-ask", ask as EventListener);
+    return () => { window.removeEventListener("open-sasa", openSasa); window.removeEventListener("sasa-ask", ask as EventListener); };
+  }, []);
+
   // hidden on the login screen
   if (pathname === "/login") return null;
 
@@ -81,6 +91,8 @@ export default function VoiceDock() {
     rec.start();
     setListening(true);
   }
+
+  sendRef.current = send; // keep the ref pointed at the latest closure
 
   return (
     <div className="dock">

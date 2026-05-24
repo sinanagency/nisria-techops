@@ -2,7 +2,25 @@
 import { admin } from "../../lib/supabase-admin";
 import { claude } from "../../lib/anthropic";
 import { sendEmail } from "../../lib/email";
+import { emit } from "../../lib/events";
 import { revalidatePath } from "next/cache";
+
+// Manual reply sent by Nur from the reading pane.
+export async function sendReply(fd: FormData) {
+  const to = String(fd.get("to") || "");
+  const subject = String(fd.get("subject") || "Re: your message to Nisria");
+  const body = String(fd.get("body") || "");
+  const contact_id = String(fd.get("contact_id") || "") || null;
+  let status = "replied";
+  if (to && body) {
+    try { await sendEmail(to, subject, body); }
+    catch (e: any) { status = "failed"; }
+  }
+  await admin().from("messages").insert({ contact_id, channel: "email", direction: "out", subject, body, handled_by: "nur", status });
+  if (contact_id) await admin().from("messages").update({ status: "replied" }).eq("contact_id", contact_id).eq("direction", "in").eq("status", "new");
+  await emit({ type: "action.executed", source: "connector:email", actor: "nur", subject_type: "contact", subject_id: contact_id, payload: { action: "send_email", to } });
+  revalidatePath("/inbox");
+}
 
 export async function aiReply(fd: FormData) {
   const id = String(fd.get("id"));

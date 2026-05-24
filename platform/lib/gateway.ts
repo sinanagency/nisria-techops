@@ -125,7 +125,7 @@ export async function rejectApproval(approvalId: string, opts: { decidedBy?: str
 }
 
 function mapProposedToParams(kind: string, proposed: any): Record<string, any> {
-  if (kind === "email_reply") return { to: proposed.to, subject: proposed.subject, text: proposed.body };
+  if (kind === "email_reply" || kind === "donor_thankyou") return { to: proposed.to, subject: proposed.subject, text: proposed.body };
   return proposed;
 }
 
@@ -155,5 +155,17 @@ async function onApproved(ap: any, proposed: any) {
       source_type: "approval",
       source_id: ap.id,
     });
+  }
+  if (ap.kind === "donor_thankyou") {
+    const ctx = ap.context || {};
+    await remember({
+      kind: "approved_reply",
+      title: `Thank-you: ${proposed.subject || ""}`.slice(0, 120),
+      content: `Approved donor thank-you (gift ${ctx.amount || ""}):\n${proposed.body || ""}`,
+      metadata: { donor: ctx.name, edited: ap.status === "edited" },
+      source_type: "approval",
+      source_id: ap.id,
+    });
+    if (ctx.donor_id) await db.from("donors").update({ notes: `Thanked ${new Date().toISOString().slice(0, 10)} by Donor Steward` }).eq("id", ctx.donor_id);
   }
 }

@@ -7,7 +7,9 @@ import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
 import { recall, groundingText } from "../../../../lib/memory";
 import { draftReply } from "../../../../lib/agents/comms";
+import { draftThankYou } from "../../../../lib/agents/steward";
 import { laneFor, createIntent, approveApproval, type Lane } from "../../../../lib/gateway";
+import { money } from "../../../../lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,7 +20,7 @@ const stricter = (a: Lane, b: Lane): Lane => (RANK[a] >= RANK[b] ? a : b);
 
 async function runTick() {
   const db = admin();
-  const out = { processed: 0, drafted: 0, escalated: 0, auto_sent: 0, errors: [] as string[] };
+  const out = { processed: 0, drafted: 0, escalated: 0, auto_sent: 0, thanked: 0, errors: [] as string[] };
 
   const { data: msgs } = await db
     .from("messages")
@@ -93,6 +95,38 @@ async function runTick() {
       await db.from("agent_runs").insert({ agent: "agent:comms", correlation_id: m.id, decision: "error", status: "error", error: e?.message || String(e) });
     }
   }
+
+  // ---- Donor Steward: thank recent NEW gifts (last 3 days), once each ----
+  try {
+    const threeDaysAgo = new Date(Date.now() - 3 * 86400e3).toISOString();
+    const { data: gifts } = await db.from("donations")
+      .select("id,amount,is_recurring,donated_at,donor:donors(id,full_name,email)")
+      .eq("status", "succeeded").gte("donated_at", threeDaysAgo)
+      .order("donated_at", { ascending: false }).limit(2);
+    const tyLane = await laneFor("kind:donor_thankyou");
+    for (const g of (gifts || []) as any[]) {
+      const donor = g.donor || {};
+      if (!donor.email) continue;
+      const { data: existing } = await db.from("action_intents").select("id").eq("idempotency_key", `thankyou:${g.id}`).maybeSingle();
+      if (existing) continue;
+      const mem = await recall(`thank you donor ${donor.full_name}`, { kinds: ["approved_reply", "brand_voice"] });
+      const ty = await draftThankYou({ name: donor.full_name || "friend", amount: money(g.amount), recurring: !!g.is_recurring, grounding: groundingText(mem) });
+      if (!ty) continue;
+      const intent = await createIntent({ connector: "email", action: "send_email", params: { to: donor.email, subject: ty.subject, text: ty.body }, lane: tyLane, requested_by: "agent:steward", correlation_id: g.id, idempotency_key: `thankyou:${g.id}` });
+      const { data: ap } = await db.from("approvals").insert({
+        kind: "donor_thankyou", title: `Thank ${donor.full_name || "donor"}`, summary: ty.body.slice(0, 140), agent: "agent:steward", lane: tyLane,
+        proposed: { to: donor.email, subject: ty.subject, body: ty.body, from: donor.full_name },
+        context: { donation_id: g.id, donor_id: donor.id, name: donor.full_name, amount: money(g.amount) },
+        intent_id: intent?.id || null,
+      }).select().single();
+      await db.from("agent_runs").insert({ agent: "agent:steward", correlation_id: g.id, decision: tyLane === "auto" ? "auto" : "draft", input: { donor: donor.full_name, amount: money(g.amount) }, output: { lane: tyLane }, model: "claude-sonnet-4-5", status: "ok" });
+      await emit({ type: "agent.decided", source: "agent:steward", actor: "agent:steward", subject_type: "donor", subject_id: donor.id, correlation_id: g.id, payload: { kind: "donor_thankyou", lane: tyLane, from: donor.full_name } });
+      await emit({ type: "approval.created", source: "agent:steward", actor: "agent:steward", subject_type: "approval", subject_id: ap?.id, correlation_id: g.id, payload: { kind: "donor_thankyou", title: `Thank ${donor.full_name}`, lane: tyLane } });
+      out.thanked++;
+      if (tyLane === "auto" && ap?.id) await approveApproval(ap.id, { decidedBy: "auto" });
+    }
+  } catch (e: any) { out.errors.push(`steward: ${e?.message || e}`); }
+
   return out;
 }
 

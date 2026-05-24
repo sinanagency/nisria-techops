@@ -2,6 +2,8 @@
 
 import { admin } from "../../lib/supabase-admin";
 import { claudeJSON } from "../../lib/anthropic";
+import { sendEmail } from "../../lib/email";
+import { emit } from "../../lib/events";
 import { revalidatePath } from "next/cache";
 
 type DispatchState = { ok?: string; error?: string };
@@ -10,7 +12,7 @@ export async function dispatchTasks(_prev: DispatchState, formData: FormData): P
   const instruction = String(formData.get("instruction") || "").trim();
   if (!instruction) return { error: "Tell me what you want done." };
   const db = admin();
-  const { data: team } = await db.from("team_members").select("id,name,role").eq("status", "active");
+  const { data: team } = await db.from("team_members").select("id,name,role,email").eq("status", "active");
   const roster = (team || []).map((t: any) => `${t.name} — ${t.role}`).join("; ") || "(no team yet)";
 
   const parsed = await claudeJSON<{ tasks: { title: string; description?: string; assignee_name?: string; priority?: string; due_on?: string | null }[] }>(
@@ -44,10 +46,27 @@ Assign by best-fit role. If unclear, assignee_name null. Split multi-part reques
     };
   });
 
-  const { error } = await db.from("tasks").insert(rows);
+  const { data: created, error } = await db.from("tasks").insert(rows).select("id,title,description,priority,due_on,assignee_id");
   if (error) return { error: error.message };
+
+  // notify each assignee (email now; WhatsApp once the number is live) + log it
+  let notified = 0;
+  for (const t of (created || []) as any[]) {
+    if (!t.assignee_id) continue;
+    const member: any = team2.find((m: any) => m.id === t.assignee_id);
+    if (member?.email) {
+      try {
+        await sendEmail(member.email, `New task: ${t.title}`,
+          `Hi ${member.name},\n\nNur assigned you a task on the Nisria Command Center:\n\n"${t.title}"${t.description ? `\n${t.description}` : ""}\nPriority: ${t.priority}${t.due_on ? ` · due ${t.due_on}` : ""}\n\nWarmly,\nNisria`);
+        notified++;
+      } catch {}
+    }
+    await emit({ type: "task.assigned", source: "tasks", actor: "Nur", subject_type: "task", subject_id: t.id, payload: { title: t.title, assignee: member?.name, notified: !!member?.email } });
+  }
+
   revalidatePath("/tasks");
-  return { ok: `Created ${rows.length} task${rows.length > 1 ? "s" : ""} and assigned ${rows.filter((r) => r.assignee_id).length}.` };
+  revalidatePath("/");
+  return { ok: `Created ${rows.length} task${rows.length > 1 ? "s" : ""}, assigned ${rows.filter((r) => r.assignee_id).length}, notified ${notified}.` };
 }
 
 export async function setTaskStatus(formData: FormData) {
