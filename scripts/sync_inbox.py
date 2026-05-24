@@ -6,7 +6,7 @@ Command Center Inbox shows live mail (not demo data). Uses IMAP (app passwords)
 
 Mailboxes: sasa@nisria.co, maisha@nisria.co  (Gmail IMAP, app passwords in Keychain)
 """
-import imaplib, email, json, subprocess, sys
+import imaplib, email, json, subprocess, sys, re
 from email.header import decode_header
 from email.utils import parseaddr, parsedate_to_datetime
 
@@ -103,13 +103,15 @@ def main():
     cmap={(r["email"] or "").lower():r["id"] for r in (sql("select id,email from contacts where email is not null;") or [])}
 
     # messages: dedupe on external_id (Message-ID)
+    AUTO = re.compile(r'(no-?reply|do-?not-?reply|notify|notification|mailer|accounts@|updates@|automated|support@|team@)', re.I)
     mrows=[]
     for r in all_rows:
         cid=cmap.get(r["addr"])
         if not cid: continue
-        mrows.append(f"({E(cid)},'email','in',{E(r['subject'])},{E(r['body'])},{E(r['msgid'])},'pending','new',{E(r['date'])})")
+        st = 'automated' if (not r['addr'] or AUTO.search(r['addr'])) else 'individual'
+        mrows.append(f"({E(cid)},'email','in',{E(r['subject'])},{E(r['body'])},{E(r['msgid'])},'pending','new',{E(r['date'])},{E(r['to'])},{E(st)})")
     if mrows:
-        sql("insert into messages (contact_id,channel,direction,subject,body,external_id,handled_by,status,created_at) values "
+        sql("insert into messages (contact_id,channel,direction,subject,body,external_id,handled_by,status,created_at,account,sender_type) values "
             + ",".join(mrows) + " on conflict (external_id) where external_id is not null do nothing;")
 
     res = sql("select count(*) msgs,(select count(*) from contacts) contacts from messages;")
