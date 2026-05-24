@@ -7,8 +7,9 @@ export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages } = await req.json();
+    const { messages, context } = await req.json();
     const db = admin();
+    const pageHint = context?.page && context.page !== "/" ? `\n\nNur is currently on the "${context.page}" screen — tailor answers to that context when relevant.` : "";
 
     const [{ data: don }, { data: donors }, { data: camps }, { data: tasks }, { data: team }, { data: msgs }, { data: grants }] =
       await Promise.all([
@@ -43,7 +44,7 @@ Nisria (By Nisria Inc) is a nonprofit helping children/families in Kenya, with s
 You help Nur run the organization: answer questions about fundraising, donors, campaigns, tasks, team, grants, and content; draft messages/posts/emails when asked; and suggest next actions. Be concise, warm, and concrete. Use the live snapshot below. If asked to DO something that writes data (assign a task, schedule a post, send a newsletter), explain it can be done from the relevant page (Tasks, Content, Newsletter) and offer to draft it.
 
 LIVE ORG SNAPSHOT (real-time):
-${JSON.stringify(snapshot, null, 2)}`;
+${JSON.stringify(snapshot, null, 2)}${pageHint}`;
 
     const reply = await askClaude({ system, messages: messages.slice(-12), maxTokens: 900 });
     return NextResponse.json({ reply });

@@ -1,4 +1,5 @@
 import "./globals.css";
+import AppFrame from "../components/AppFrame";
 
 export const metadata = {
   title: "Nisria Command Center",
@@ -8,7 +9,9 @@ export const metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AppFrame>{children}</AppFrame>
+      </body>
     </html>
   );
 }
