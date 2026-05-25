@@ -96,6 +96,8 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 700; lett
 .dropmenu a .ico { color: var(--muted); display: grid; place-items: center; }
 .dropmenu a:hover { background: var(--canvas); color: var(--ink); }
 .dropmenu a.active { background: var(--teal-50); color: var(--teal-700); }
+.dropgroup + .dropgroup { border-top: 1px solid var(--line); margin-top: 5px; padding-top: 3px; }
+.droplbl { font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--faint); padding: 8px 11px 4px; font-weight: 700; }
 
 /* tab bar (open documents) */
 .tabbar { max-width: 1360px; width: 100%; margin: 10px auto 0; padding: 0 22px; display: flex; align-items: center; gap: 5px; overflow-x: auto; scrollbar-width: none; }
@@ -312,11 +314,11 @@ label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
 /* ============================================================
    MAIL CLIENT (3-pane)
    ============================================================ */
-.mail { display: grid; grid-template-columns: 320px 1fr; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); height: calc(100vh - 230px); box-shadow: var(--shadow-sm); }
-.mail-list { border-right: 1px solid var(--line); overflow-y: auto; }
-.mail-row { padding: 14px 17px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background .12s var(--ease); }
+.mail { display: grid; grid-template-columns: 344px 1fr; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); height: calc(100vh - 240px); box-shadow: var(--shadow-sm); }
+.mail-list { border-right: 1px solid var(--line); overflow-y: auto; overflow-x: hidden; }
+.mail-row { display: block; padding: 14px 18px; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; cursor: pointer; transition: background .12s var(--ease); }
 .mail-row:hover { background: var(--surface-2); }
-.mail-row.active { background: var(--teal-50); box-shadow: inset 3px 0 0 var(--teal); }
+.mail-row.active { background: var(--teal-50); border-left-color: var(--teal); }
 .mail-row.unread .mr-from { font-weight: 700; }
 .mail-row .mr-top { display: flex; justify-content: space-between; gap: 8px; }
 .mail-row .mr-from { font-size: 13px; color: var(--ink); }

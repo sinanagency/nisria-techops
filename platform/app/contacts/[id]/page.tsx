@@ -2,7 +2,9 @@ import Shell from "../../../components/Shell";
 import { Badge } from "../../../components/ui";
 import { TabTitle } from "../../../components/tabs-context";
 import { admin, money, date } from "../../../lib/supabase-admin";
-import { Mail, DollarSign, Bot, MessageSquare, Activity as ActIcon } from "lucide-react";
+import { cleanEmail } from "../../../lib/email-render";
+import { emailContact } from "../actions";
+import { Mail, DollarSign, Bot, MessageSquare, Send, Activity as ActIcon } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +15,7 @@ export default async function Contact360({ params }: { params: { id: string } })
   const c: any = contact || {};
 
   const [{ data: msgs }, { data: events }] = await Promise.all([
-    db.from("messages").select("id,direction,subject,body,created_at,handled_by").eq("contact_id", id).order("created_at", { ascending: false }).limit(60),
+    db.from("messages").select("id,channel,direction,subject,body,created_at,handled_by").eq("contact_id", id).order("created_at", { ascending: false }).limit(60),
     db.from("events").select("type,payload,created_at").eq("subject_id", id).order("created_at", { ascending: false }).limit(40),
   ]);
 
@@ -39,6 +41,11 @@ export default async function Contact360({ params }: { params: { id: string } })
   timeline.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
   const name = c.name || (c.email || "Unknown").split("@")[0];
+
+  // conversation thread: oldest first so the newest sits at the bottom by the composer
+  const thread = [...((msgs || []) as any[])].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
 
   return (
     <Shell title={name} sub={c.email || c.phone || "Contact"} action={donor && <Badge tone="teal">Donor</Badge>}>
@@ -98,6 +105,67 @@ export default async function Contact360({ params }: { params: { id: string } })
               </div>
             ))}
           </div>
+        </div>
+
+        {/* conversation thread + inline compose (spans both columns) */}
+        <div className="card" style={{ gridColumn: "1 / -1" }}>
+          <div className="card-h">
+            <span className="flex"><MessageSquare size={15} /> Conversation</span>
+            <Badge tone="gray">{thread.length}</Badge>
+          </div>
+          <div style={{ padding: "16px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
+            {thread.length === 0 && <div className="empty">No messages yet. Start the conversation below.</div>}
+            {thread.map((m: any) => {
+              const out = m.direction === "out";
+              return (
+                <div
+                  key={m.id}
+                  style={{ display: "flex", flexDirection: "column", alignItems: out ? "flex-end" : "flex-start", maxWidth: "100%" }}
+                >
+                  <div
+                    style={{
+                      maxWidth: "78%",
+                      padding: "11px 14px",
+                      borderRadius: 15,
+                      fontSize: 13.5,
+                      lineHeight: 1.55,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      background: out ? "var(--teal)" : "var(--canvas)",
+                      color: out ? "#fff" : "var(--ink)",
+                      border: out ? "0" : "1px solid var(--line)",
+                      borderBottomRightRadius: out ? 5 : 15,
+                      borderBottomLeftRadius: out ? 15 : 5,
+                    }}
+                  >
+                    {m.subject && <div style={{ fontWeight: 600, marginBottom: 4 }}>{m.subject}</div>}
+                    <div>{cleanEmail(m.body || "") || <span className="faint">(no content)</span>}</div>
+                  </div>
+                  <div className="faint" style={{ fontSize: 11, marginTop: 4, padding: "0 4px" }}>
+                    {out ? `${m.handled_by === "ai" ? "Sasa" : "Nur"} · ${m.channel || "email"}` : name} · {date(m.created_at)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {c.email ? (
+            <form action={emailContact} style={{ borderTop: "1px solid var(--line)", padding: "16px 22px", display: "flex", flexDirection: "column", gap: 10 }}>
+              <input type="hidden" name="to" value={c.email} />
+              <input type="hidden" name="contact_id" value={id} />
+              <div className="between" style={{ gap: 10 }}>
+                <span className="muted" style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>Email {name}</span>
+                <span className="faint" style={{ fontSize: 12 }}>{c.email}</span>
+              </div>
+              <input name="subject" placeholder="Subject" defaultValue="A note from Nisria" required />
+              <textarea name="body" placeholder={`Write to ${name}…`} rows={4} required style={{ resize: "vertical" }} />
+              <div className="flex" style={{ justifyContent: "flex-end" }}>
+                <button type="submit" className="btn teal"><Send size={14} /> Send email</button>
+              </div>
+            </form>
+          ) : (
+            <div className="empty" style={{ borderTop: "1px solid var(--line)" }}>No email on file for this contact.</div>
+          )}
         </div>
       </div>
     </Shell>

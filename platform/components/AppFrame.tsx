@@ -10,7 +10,7 @@ import { TabsProvider, useTabs } from "./tabs-context";
 import {
   Home, Inbox, PenLine, ListChecks, Users, Send, FolderOpen, Bot, Activity,
   HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, File,
-  X, Plus, Search, Bell, Sparkles, ChevronDown, Wand2,
+  X, Plus, Search, Bell, Sparkles, ChevronDown, Wand2, Settings,
 } from "lucide-react";
 
 const ICONS: Record<string, any> = {
@@ -29,18 +29,25 @@ const PILLS = [
   { href: "/tasks", label: "Tasks", icon: "check" },
   { href: "/agents", label: "Agents", icon: "bot" },
 ];
-const RECORDS = [
-  { href: "/donors", label: "Donors", icon: "heart" },
-  { href: "/donations", label: "Donations", icon: "dollar" },
-  { href: "/campaigns", label: "Campaigns", icon: "target" },
-  { href: "/beneficiaries", label: "Beneficiaries", icon: "life" },
-  { href: "/inventory", label: "Inventory", icon: "box" },
-  { href: "/grants", label: "Grants", icon: "award" },
-  { href: "/finance", label: "Finance", icon: "dollar" },
-  { href: "/outreach", label: "Outreach", icon: "mega" },
-  { href: "/team", label: "Team", icon: "users" },
-  { href: "/newsletter", label: "Newsletter", icon: "send" },
+const MENU = [
+  { group: "Fundraising", items: [
+    { href: "/donors", label: "Donors", icon: "heart" },
+    { href: "/donations", label: "Donations", icon: "dollar" },
+    { href: "/campaigns", label: "Campaigns", icon: "target" },
+    { href: "/grants", label: "Grants", icon: "award" },
+    { href: "/finance", label: "Finance", icon: "dollar" },
+  ]},
+  { group: "People", items: [
+    { href: "/beneficiaries", label: "Beneficiaries", icon: "life" },
+    { href: "/team", label: "Team", icon: "users" },
+  ]},
+  { group: "Commerce & Outreach", items: [
+    { href: "/inventory", label: "Inventory", icon: "box" },
+    { href: "/outreach", label: "Outreach", icon: "mega" },
+    { href: "/newsletter", label: "Newsletter", icon: "send" },
+  ]},
 ];
+const RECORDS = MENU.flatMap((g) => g.items);
 
 function TabBar() {
   const { tabs, active, closeTab } = useTabs();
@@ -94,10 +101,15 @@ function TopNav() {
             </button>
             {recOpen && (
               <div className="dropmenu">
-                {RECORDS.map((r) => (
-                  <Link key={r.href} href={r.href} className={isActive(r.href) ? "active" : ""} onClick={() => setRecOpen(false)}>
-                    <span className="ico"><Icon name={r.icon} /></span> {r.label}
-                  </Link>
+                {MENU.map((g) => (
+                  <div key={g.group} className="dropgroup">
+                    <div className="droplbl">{g.group}</div>
+                    {g.items.map((r) => (
+                      <Link key={r.href} href={r.href} className={isActive(r.href) ? "active" : ""} onClick={() => setRecOpen(false)}>
+                        <span className="ico"><Icon name={r.icon} /></span> {r.label}
+                      </Link>
+                    ))}
+                  </div>
                 ))}
               </div>
             )}
@@ -116,6 +128,7 @@ function TopNav() {
                   <div style={{ fontWeight: 600, fontSize: 13 }}>Nur M'nasria</div>
                   <div className="faint" style={{ fontSize: 11.5 }}>By Nisria Inc</div>
                 </div>
+                <Link href="/settings" className={isActive("/settings") ? "active" : ""} onClick={() => setAvOpen(false)}><span className="ico"><Settings size={15} /></span> Settings</Link>
                 <form action={logout}><button type="submit" style={{ width: "100%", textAlign: "left", background: "none", border: 0, padding: "9px 11px", borderRadius: 11, color: "var(--ink-2)", cursor: "pointer", fontSize: 13.5, fontFamily: "inherit" }}>Sign out</button></form>
               </div>
             )}

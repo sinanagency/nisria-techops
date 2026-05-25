@@ -56,30 +56,61 @@ async function parseMpesaImage(base64: string, mediaType: string): Promise<Mpesa
   }
 }
 
+// Allowed enum sets — guard against bad form values reaching the DB.
+const CATEGORIES = ["subscription", "salary", "vendor", "kenya", "other"];
+const METHODS = ["mpesa", "bank", "card"];
+const CURRENCIES = ["USD", "KES"];
+const RECURRENCES = ["none", "monthly", "yearly"];
+
+// Roll a YYYY-MM-DD date forward by N months or N years (calendar-safe).
+function rollForward(due: string | null, recurrence: string): string | null {
+  if (!due) return null;
+  const base = new Date(due + "T00:00:00Z");
+  if (isNaN(base.getTime())) return null;
+  if (recurrence === "monthly") base.setUTCMonth(base.getUTCMonth() + 1);
+  else if (recurrence === "yearly") base.setUTCFullYear(base.getUTCFullYear() + 1);
+  else return null;
+  return base.toISOString().slice(0, 10);
+}
+
 // ---------------------------------------------------------------------------
-// Add an upcoming/due payment. This RECORDS an obligation; it never moves money.
+// Add a payment / obligation. RECORDS an upcoming obligation; never moves money.
+// Captures category, currency, recurrence and vendor country so the finance
+// department can populate Nur's recurring bills and remind her when due.
 // ---------------------------------------------------------------------------
 export async function addPayment(fd: FormData) {
   const payee = String(fd.get("payee") || "").trim();
   const purpose = String(fd.get("purpose") || "").trim() || null;
   const amount = Number(String(fd.get("amount") || "").replace(/[^0-9.]/g, "")) || null;
   const due_on = String(fd.get("due_on") || "").trim() || null;
-  const method = String(fd.get("method") || "mpesa");
-  const direction = String(fd.get("direction") || "out");
+
+  let category = String(fd.get("category") || "other");
+  if (!CATEGORIES.includes(category)) category = "other";
+  let method = String(fd.get("method") || "mpesa");
+  if (!METHODS.includes(method)) method = "mpesa";
+  let currency = String(fd.get("currency") || "USD").toUpperCase();
+  if (!CURRENCIES.includes(currency)) currency = "USD";
+  let recurrence = String(fd.get("recurrence") || "none");
+  if (!RECURRENCES.includes(recurrence)) recurrence = "none";
+  const vendor_country = String(fd.get("vendor_country") || "").trim() || null;
+
   if (!payee || !amount) return;
 
   const db = admin();
   const { data: row } = await db
     .from("payments")
     .insert({
-      direction,
+      direction: "out",
       payee,
       purpose,
       amount,
-      currency: "USD",
+      currency,
       method,
       status: "upcoming",
       due_on,
+      category,
+      recurrence,
+      vendor_country,
       created_by: "Nur",
     })
     .select()
@@ -91,13 +122,15 @@ export async function addPayment(fd: FormData) {
     actor: "Nur",
     subject_type: "payment",
     subject_id: row?.id ?? null,
-    payload: { payee, amount, method, due_on },
+    payload: { payee, amount, currency, method, category, recurrence, due_on, vendor_country },
   });
   revalidatePath("/finance");
 }
 
 // ---------------------------------------------------------------------------
 // Mark an existing payment as paid. Explicit click only. Records, doesn't pay.
+// If the payment recurs (monthly|yearly), ALSO schedule the next occurrence so
+// the reminder keeps coming back — same details, due date rolled forward.
 // ---------------------------------------------------------------------------
 export async function markPaid(fd: FormData) {
   const id = String(fd.get("id") || "");
@@ -111,13 +144,49 @@ export async function markPaid(fd: FormData) {
     .select()
     .single();
 
+  let nextDue: string | null = null;
+  if (row && row.recurrence && row.recurrence !== "none") {
+    // base the next due date off the original due date when present, else today
+    const base = row.due_on || new Date().toISOString().slice(0, 10);
+    nextDue = rollForward(base, row.recurrence);
+    if (nextDue) {
+      const { data: next } = await db
+        .from("payments")
+        .insert({
+          direction: row.direction || "out",
+          payee: row.payee,
+          purpose: row.purpose,
+          amount: row.amount,
+          currency: row.currency || "USD",
+          method: row.method,
+          status: "upcoming",
+          due_on: nextDue,
+          category: row.category || "other",
+          recurrence: row.recurrence,
+          vendor_country: row.vendor_country || null,
+          created_by: "Nur",
+        })
+        .select()
+        .single();
+
+      await emit({
+        type: "payment.scheduled",
+        source: "finance",
+        actor: "Nur",
+        subject_type: "payment",
+        subject_id: next?.id ?? null,
+        payload: { payee: row.payee, amount: row.amount, currency: row.currency, recurrence: row.recurrence, due_on: nextDue, rolled_from: id },
+      });
+    }
+  }
+
   await emit({
     type: "payment.verified",
     source: "finance",
     actor: "Nur",
     subject_type: "payment",
     subject_id: id,
-    payload: { payee: row?.payee, amount: row?.amount, method: row?.method },
+    payload: { payee: row?.payee, amount: row?.amount, currency: row?.currency, method: row?.method, recurrence: row?.recurrence, next_due: nextDue },
   });
   revalidatePath("/finance");
 }
@@ -170,11 +239,13 @@ export async function logMpesa(fd: FormData) {
       payee,
       purpose,
       amount,
-      currency: "USD",
+      currency: "KES",
       method: "mpesa",
       status: "paid",
       paid_at,
       ref,
+      category: "kenya",
+      recurrence: "none",
       screenshot_path: path,
       created_by: "Nur",
     })
@@ -187,7 +258,7 @@ export async function logMpesa(fd: FormData) {
     actor: "Nur",
     subject_type: "payment",
     subject_id: row?.id ?? null,
-    payload: { payee, amount, ref, low_confidence: lowConfidence, screenshot_path: path },
+    payload: { payee, amount, ref, currency: "KES", low_confidence: lowConfidence, screenshot_path: path },
   });
   revalidatePath("/finance");
 }

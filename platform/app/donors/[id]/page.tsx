@@ -2,7 +2,9 @@ import Shell from "../../../components/Shell";
 import { Badge } from "../../../components/ui";
 import { TabTitle } from "../../../components/tabs-context";
 import { admin, money, date } from "../../../lib/supabase-admin";
-import { Mail, DollarSign, Bot, MessageSquare, Phone, Activity as ActIcon, Tag } from "lucide-react";
+import { cleanEmail } from "../../../lib/email-render";
+import { emailContact } from "../../contacts/actions";
+import { Mail, DollarSign, Bot, MessageSquare, Phone, Send, Activity as ActIcon, Tag } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -21,15 +23,18 @@ export default async function Donor360({ params }: { params: { id: string } }) {
     .order("donated_at", { ascending: false });
   const gifts: any[] = giftRows || [];
 
-  // matched emails: find contact(s) sharing this donor's email, then their messages
+  // matched emails: find contact(s) sharing this donor's email, then their messages.
+  // We keep the first matched contact id so the inline composer can log against it.
   let msgs: any[] = [];
+  let matchedContactId: string | null = null;
   if (d.email) {
     const { data: contactRows } = await db.from("contacts").select("id").eq("email", d.email);
     const contactIds = (contactRows || []).map((c: any) => c.id).filter(Boolean);
+    matchedContactId = contactIds[0] || null;
     if (contactIds.length) {
       const { data: m } = await db
         .from("messages")
-        .select("id,direction,subject,body,created_at,handled_by")
+        .select("id,channel,direction,subject,body,created_at,handled_by")
         .in("contact_id", contactIds)
         .order("created_at", { ascending: false })
         .limit(60);
@@ -81,6 +86,11 @@ export default async function Donor360({ params }: { params: { id: string } }) {
 
   const donorName = d.full_name || (d.email || "Unknown donor").split("@")[0];
   const tags: string[] = Array.isArray(d.tags) ? d.tags : [];
+
+  // conversation thread: oldest first so the newest sits at the bottom by the composer
+  const thread = [...msgs].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
 
   return (
     <Shell
@@ -200,6 +210,71 @@ export default async function Donor360({ params }: { params: { id: string } }) {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* conversation thread + inline compose (spans both columns) */}
+        <div className="card" style={{ gridColumn: "1 / -1" }}>
+          <div className="card-h">
+            <span className="flex">
+              <MessageSquare size={15} /> Conversation
+            </span>
+            <Badge tone="gray">{thread.length}</Badge>
+          </div>
+          <div style={{ padding: "16px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
+            {thread.length === 0 && <div className="empty">No messages yet. Start the conversation below.</div>}
+            {thread.map((m: any) => {
+              const out = m.direction === "out";
+              return (
+                <div
+                  key={m.id}
+                  style={{ display: "flex", flexDirection: "column", alignItems: out ? "flex-end" : "flex-start", maxWidth: "100%" }}
+                >
+                  <div
+                    style={{
+                      maxWidth: "78%",
+                      padding: "11px 14px",
+                      borderRadius: 15,
+                      fontSize: 13.5,
+                      lineHeight: 1.55,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      background: out ? "var(--teal)" : "var(--canvas)",
+                      color: out ? "#fff" : "var(--ink)",
+                      border: out ? "0" : "1px solid var(--line)",
+                      borderBottomRightRadius: out ? 5 : 15,
+                      borderBottomLeftRadius: out ? 15 : 5,
+                    }}
+                  >
+                    {m.subject && <div style={{ fontWeight: 600, marginBottom: 4 }}>{m.subject}</div>}
+                    <div>{cleanEmail(m.body || "") || <span className="faint">(no content)</span>}</div>
+                  </div>
+                  <div className="faint" style={{ fontSize: 11, marginTop: 4, padding: "0 4px" }}>
+                    {out ? `${m.handled_by === "ai" ? "Sasa" : "Nur"} · ${m.channel || "email"}` : donorName} · {date(m.created_at)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {d.email ? (
+            <form action={emailContact} style={{ borderTop: "1px solid var(--line)", padding: "16px 22px", display: "flex", flexDirection: "column", gap: 10 }}>
+              <input type="hidden" name="to" value={d.email} />
+              <input type="hidden" name="contact_id" value={matchedContactId || ""} />
+              <div className="between" style={{ gap: 10 }}>
+                <span className="muted" style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>Email {donorName}</span>
+                <span className="faint" style={{ fontSize: 12 }}>{d.email}</span>
+              </div>
+              <input name="subject" placeholder="Subject" defaultValue="A note from Nisria" required />
+              <textarea name="body" placeholder={`Write to ${donorName}…`} rows={4} required style={{ resize: "vertical" }} />
+              <div className="flex" style={{ justifyContent: "flex-end" }}>
+                <button type="submit" className="btn teal">
+                  <Send size={14} /> Send email
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="empty" style={{ borderTop: "1px solid var(--line)" }}>No email on file for this donor.</div>
+          )}
         </div>
       </div>
     </Shell>
