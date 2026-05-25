@@ -1,0 +1,33 @@
+# Optional: run the FULL Python grant engine (all 6 sources) on a free GitHub
+# Actions schedule. The daily refresh already runs self-hosted via Supabase
+# pg_cron → /api/grants/refresh (Grants.gov). Use this only if you want the
+# richer multi-source engine refreshing too.
+#
+# To enable:
+#   1) mkdir -p .github/workflows && cp granter/ci-github-actions.yml.example .github/workflows/grant-hunter.yml
+#   2) gh auth refresh -s workflow            # one-time: grants push scope
+#   3) gh secret set SUPABASE_MGMT_TOKEN --body "<bu-supabase-token value>" --repo sinanagency/nisria-techops
+#   4) commit config: granter/config/config.yaml must be present in the repo (it is gitignored by default)
+#   5) git add .github/workflows/grant-hunter.yml && git commit && git push
+
+name: grant-hunter
+on:
+  schedule:
+    - cron: "0 6 * * *"   # daily 06:00 UTC
+  workflow_dispatch:
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install httpx pyyaml python-dotenv
+      - name: Run grant hunter → Supabase
+        working-directory: granter
+        env:
+          SUPABASE_MGMT_TOKEN: ${{ secrets.SUPABASE_MGMT_TOKEN }}
+          CONFIG_PATH: config/config.yaml
+          DB_PATH: db/grants.db
+        run: python sync_to_supabase.py

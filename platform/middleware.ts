@@ -5,8 +5,8 @@ import type { NextRequest } from "next/server";
 // else redirects to /login unless the cookie matches SESSION_TOKEN.
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  // Agent endpoints carry their own secret auth (cron / n8n / webhooks) — bypass the session gate.
-  if (pathname.startsWith("/api/agents")) return NextResponse.next();
+  // Agent/cron endpoints carry their own secret auth — bypass the session gate.
+  if (pathname.startsWith("/api/agents") || pathname.startsWith("/api/grants")) return NextResponse.next();
   const isLogin = pathname === "/login";
   const authed = req.cookies.get("nisria_session")?.value === process.env.SESSION_TOKEN;
 

@@ -19,9 +19,11 @@ from src.sources.iati import IATISource
 from src.sources.usaspending import USASpendingSource
 from src.sources.propublica import ProPublicaSource
 
-REF = "ptvhqudonvvszupzhcfl"
-SB = subprocess.run(["security", "find-generic-password", "-l", "bu-supabase-token", "-w"],
-                    capture_output=True, text=True).stdout.strip()
+REF = os.environ.get("SUPABASE_REF", "ptvhqudonvvszupzhcfl")
+# token from env (CI/Railway) or macOS Keychain (local)
+SB = os.environ.get("SUPABASE_MGMT_TOKEN") or subprocess.run(
+    ["security", "find-generic-password", "-l", "bu-supabase-token", "-w"],
+    capture_output=True, text=True).stdout.strip()
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 E = lambda s: "NULL" if s in (None, "") else "'" + str(s).replace("'", "''") + "'"
 NUM = lambda x: "NULL" if x in (None, "") else str(float(x))
