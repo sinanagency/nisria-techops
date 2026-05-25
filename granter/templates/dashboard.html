@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Nisria Grant Finder{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Dashboard</h2>
+
+<!-- Stats Cards -->
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card text-bg-primary">
+            <div class="card-body">
+                <h6 class="card-title">Total Grants</h6>
+                <h2 class="mb-0">{{ total_grants }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-bg-success">
+            <div class="card-body">
+                <h6 class="card-title">High Relevance</h6>
+                <h2 class="mb-0">{{ tier_counts.get('HIGH', 0) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-bg-warning">
+            <div class="card-body">
+                <h6 class="card-title">Medium Relevance</h6>
+                <h2 class="mb-0">{{ tier_counts.get('MEDIUM', 0) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-bg-info">
+            <div class="card-body">
+                <h6 class="card-title">New This Week</h6>
+                <h2 class="mb-0">{{ recent_count }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Upcoming Deadlines -->
+    <div class="col-lg-7">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-clock"></i> Upcoming Deadlines (30 days)</h5>
+                <a href="/grants?status=posted" class="btn btn-sm btn-outline-primary">View All</a>
+            </div>
+            <div class="card-body p-0">
+                {% if upcoming %}
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Grant</th>
+                                <th>Source</th>
+                                <th>Deadline</th>
+                                <th>Score</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for g in upcoming %}
+                            <tr>
+                                <td><a href="/grants/{{ g.id }}">{{ g.title[:60] }}{% if g.title|length > 60 %}...{% endif %}</a></td>
+                                <td><span class="badge bg-secondary">{{ g.source }}</span></td>
+                                <td>{{ g.close_date }}</td>
+                                <td>
+                                    <span class="badge {% if g.relevance_tier == 'HIGH' %}bg-success{% elif g.relevance_tier == 'MEDIUM' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">
+                                        {{ g.relevance_tier }} ({{ "%.2f"|format(g.relevance_score) }})
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted p-3 mb-0">No upcoming deadlines. Run a refresh to discover grants.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Source Health -->
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-heart-pulse"></i> Source Health</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Source</th>
+                                <th>Status</th>
+                                <th>Grants</th>
+                                <th>Budget</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for s in sources %}
+                            <tr>
+                                <td>
+                                    {{ s.display_name }}
+                                    {% if not s.is_enabled %}<span class="badge bg-secondary">OFF</span>{% endif %}
+                                </td>
+                                <td>
+                                    {% if s.last_error %}
+                                    <span class="text-danger" title="{{ s.last_error }}"><i class="bi bi-exclamation-triangle"></i></span>
+                                    {% elif s.last_refresh_at %}
+                                    <span class="text-success"><i class="bi bi-check-circle"></i></span>
+                                    {% else %}
+                                    <span class="text-muted"><i class="bi bi-dash-circle"></i> Never run</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ s.grants_found or 0 }}</td>
+                                <td>
+                                    {% if s.daily_budget %}
+                                    {{ s.calls_today or 0 }}/{{ s.daily_budget }}
+                                    {% else %}
+                                    &infin;
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pipeline Summary -->
+        <div class="card mt-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-funnel"></i> Application Pipeline</h5>
+                <a href="/tracker" class="btn btn-sm btn-outline-primary">Open Tracker</a>
+            </div>
+            <div class="card-body">
+                {% set stages = ['identified', 'researching', 'writing', 'submitted', 'awarded'] %}
+                {% for stage in stages %}
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-capitalize">{{ stage }}</span>
+                    <span class="badge bg-secondary">{{ pipeline.get(stage, 0) }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

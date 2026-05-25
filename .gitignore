@@ -19,3 +19,10 @@ dist/
 # data exports that may contain PII — keep out of git
 *-export.csv
 data/*.private.*
+
+# grant hunter local runtime
+granter/.venv/
+granter/db/
+granter/config/config.yaml
+*.pyc
+__pycache__/

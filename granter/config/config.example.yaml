@@ -1,0 +1,65 @@
+# Nisria Grant Finder Configuration
+# Copy to config.yaml and customize. NEVER commit config.yaml.
+
+# Organization profile — used for relevance scoring
+org_profile:
+  name: "Nisria Foundation"
+  mission: "Empowering women, youth, and vulnerable communities in Kenya through education, nutrition, vocational training, and sustainable social enterprise."
+  ein: ""
+  search_keywords:
+    - "women empowerment Kenya"
+    - "youth vocational training East Africa"
+    - "nutrition feeding program"
+    - "orphan care rescue home"
+    - "community development Kenya"
+    - "fashion upcycle social enterprise"
+  sectors: [education, health, nutrition, women, empowerment, youth, vocational, community]
+  countries: [KE, US]
+  regions: [East Africa, Sub-Saharan Africa]
+  grant_range_min: 5000
+  grant_range_max: 250000
+  org_type: "Nonprofit"
+  annual_budget: 0
+
+# Data source configuration
+sources:
+  grants_gov:
+    enabled: true
+    cache_ttl_hours: 6       # Refresh every 6 hours
+
+  sam_gov:
+    enabled: true
+    api_key: ""              # Register at sam.gov for free key (1000 req/day)
+    cache_ttl_hours: 48      # Cache aggressively — limited budget
+    daily_budget: 800        # Leave buffer from 1000/day limit
+
+  usaspending:
+    enabled: true
+    cache_ttl_hours: 12
+    daily_budget: 500
+
+  worldbank:
+    enabled: true
+    cache_ttl_hours: 24      # Daily refresh
+
+  propublica:
+    enabled: true
+    cache_ttl_hours: 168     # 7 days — IRS 990 data is annual
+
+  iati:
+    enabled: true
+    cache_ttl_hours: 24
+    daily_budget: 200
+
+# Relevance scoring weights (must sum to 1.0)
+scoring:
+  sector_match: 0.30
+  geographic_match: 0.25
+  amount_fit: 0.20
+  deadline_proximity: 0.15
+  source_reliability: 0.10
+
+# Server settings
+server:
+  host: "0.0.0.0"
+  port: 8000

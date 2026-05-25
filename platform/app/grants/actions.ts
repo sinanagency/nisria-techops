@@ -30,6 +30,25 @@ export async function addGrant(fd: FormData) {
   revalidatePath("/grants");
 }
 
+// Pursue a discovered opportunity (from the grant hunter) → create a pipeline application.
+export async function pursueOpportunity(fd: FormData) {
+  const id = String(fd.get("id"));
+  if (!id) return;
+  const db = admin();
+  const { data: o } = await db.from("grant_opportunities").select("*").eq("id", id).single();
+  if (!o) return;
+  const { data: grant } = await db.from("grant_applications").insert({
+    funder: o.funder || o.title, program: o.title,
+    amount_requested: o.amount_floor || o.amount_ceiling || null,
+    deadline: o.close_date || null, status: "researching",
+    currency: o.currency || "USD", link: o.url || null,
+    notes: o.description ? `Discovered via ${o.source} (relevance ${Math.round((o.relevance_score || 0) * 100)}%).\n${o.description}` : null,
+  }).select().single();
+  await db.from("grant_opportunities").update({ pursued: true }).eq("id", id);
+  await emit({ type: "grant.added", source: "grant-hunter", actor: "Nur", subject_type: "grant", subject_id: grant?.id, payload: { funder: o.funder, source: o.source } });
+  revalidatePath("/grants");
+}
+
 // Draft a grant narrative grounded in Nisria's real org context, following the
 // RUNBOOK playbook: research funder fit → narrative (problem, solution,
 // measurable impact, simple budget, org credibility) → review → submit.

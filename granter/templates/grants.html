@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Search Grants - Nisria Grant Finder{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Search Grants</h2>
+    <a href="/grants/export?q={{ q }}&source={{ source }}&tier={{ tier }}&status={{ status }}"
+       class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-download"></i> Export CSV
+    </a>
+</div>
+
+<!-- Search & Filters -->
+<form method="get" action="/grants" class="row g-2 mb-4">
+    <div class="col-md-4">
+        <div class="input-group">
+            <span class="input-group-text"><i class="bi bi-search"></i></span>
+            <input type="text" name="q" class="form-control" placeholder="Search grants..."
+                   value="{{ q }}" id="grantSearch">
+        </div>
+    </div>
+    <div class="col-md-2">
+        <select name="source" class="form-select">
+            <option value="">All Sources</option>
+            {% for s in all_sources %}
+            <option value="{{ s }}" {% if s == source %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-2">
+        <select name="tier" class="form-select">
+            <option value="">All Tiers</option>
+            {% for t in ['HIGH', 'MEDIUM', 'LOW', 'IRRELEVANT'] %}
+            <option value="{{ t }}" {% if t == tier %}selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-2">
+        <select name="status" class="form-select">
+            <option value="">All Statuses</option>
+            {% for st in ['posted', 'forecasted', 'active', 'closed', 'completed'] %}
+            <option value="{{ st }}" {% if st == status %}selected{% endif %}>{{ st }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-2">
+        <button type="submit" class="btn btn-primary w-100">Filter</button>
+    </div>
+</form>
+
+<p class="text-muted">{{ total_count }} grants found</p>
+
+<!-- Results -->
+<div class="table-responsive">
+    <table class="table table-hover">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Agency</th>
+                <th>Source</th>
+                <th>Amount</th>
+                <th>Deadline</th>
+                <th>Score</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for g in grants %}
+            <tr>
+                <td>
+                    <a href="/grants/{{ g.id }}">{{ g.title[:70] }}{% if g.title|length > 70 %}...{% endif %}</a>
+                </td>
+                <td>{{ g.agency[:30] }}{% if g.agency and g.agency|length > 30 %}...{% endif %}</td>
+                <td><span class="badge bg-secondary">{{ g.source }}</span></td>
+                <td>
+                    {% if g.amount_floor or g.amount_ceiling %}
+                        {% if g.amount_floor and g.amount_ceiling and g.amount_floor != g.amount_ceiling %}
+                            ${{ "{:,.0f}".format(g.amount_floor) }} - ${{ "{:,.0f}".format(g.amount_ceiling) }}
+                        {% elif g.amount_ceiling %}
+                            ${{ "{:,.0f}".format(g.amount_ceiling) }}
+                        {% elif g.amount_floor %}
+                            ${{ "{:,.0f}".format(g.amount_floor) }}
+                        {% endif %}
+                    {% else %}
+                        <span class="text-muted">N/A</span>
+                    {% endif %}
+                </td>
+                <td>{{ g.close_date or 'Open' }}</td>
+                <td>
+                    <span class="badge {% if g.relevance_tier == 'HIGH' %}bg-success{% elif g.relevance_tier == 'MEDIUM' %}bg-warning text-dark{% elif g.relevance_tier == 'LOW' %}bg-info{% else %}bg-secondary{% endif %}">
+                        {{ g.relevance_tier }}
+                    </span>
+                </td>
+                <td>
+                    <form method="post" action="/tracker/add" class="d-inline">
+                        <input type="hidden" name="grant_id" value="{{ g.id }}">
+                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Track">
+                            <i class="bi bi-plus-circle"></i>
+                        </button>
+                    </form>
+                    {% if g.url %}
+                    <a href="{{ g.url }}" target="_blank" class="btn btn-sm btn-outline-secondary" title="Open source">
+                        <i class="bi bi-box-arrow-up-right"></i>
+                    </a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<nav>
+    <ul class="pagination justify-content-center">
+        <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+            <a class="page-link" href="/grants?q={{ q }}&source={{ source }}&tier={{ tier }}&status={{ status }}&page={{ page - 1 }}">Prev</a>
+        </li>
+        {% for p in range(1, total_pages + 1) %}
+            {% if p <= 3 or p > total_pages - 3 or (p >= page - 1 and p <= page + 1) %}
+            <li class="page-item {% if p == page %}active{% endif %}">
+                <a class="page-link" href="/grants?q={{ q }}&source={{ source }}&tier={{ tier }}&status={{ status }}&page={{ p }}">{{ p }}</a>
+            </li>
+            {% elif p == 4 or p == total_pages - 3 %}
+            <li class="page-item disabled"><span class="page-link">...</span></li>
+            {% endif %}
+        {% endfor %}
+        <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+            <a class="page-link" href="/grants?q={{ q }}&source={{ source }}&tier={{ tier }}&status={{ status }}&page={{ page + 1 }}">Next</a>
+        </li>
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}

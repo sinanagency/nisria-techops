@@ -1,0 +1,52 @@
+# Databases
+db/*.db
+db/*.db-wal
+db/*.db-shm
+
+# Config (real config, not example)
+config/config.yaml
+.env
+
+# Claude Code internal tooling
+.claude/
+
+# Session notes
+Saving the work.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+venv/
+.venv/
+env/
+.env/
+pip-wheel-metadata/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+
+# Logs
+*.log
+logs/

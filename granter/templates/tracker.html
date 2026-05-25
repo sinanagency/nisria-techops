@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Application Tracker - Nisria Grant Finder{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-kanban"></i> Application Tracker</h2>
+
+<div class="row g-3" id="pipeline">
+    {% for stage in stages %}
+    <div class="col-lg-2">
+        <div class="card">
+            <div class="card-header text-center">
+                <h6 class="mb-0 text-capitalize">
+                    {{ stage }}
+                    <span class="badge bg-secondary">{{ pipeline[stage]|length }}</span>
+                </h6>
+            </div>
+            <div class="card-body p-2 pipeline-column" data-stage="{{ stage }}" style="min-height: 200px;">
+                {% for app in pipeline[stage] %}
+                <div class="card mb-2 pipeline-card" data-app-id="{{ app.id }}">
+                    <div class="card-body p-2">
+                        <h6 class="card-title small mb-1">
+                            <a href="/grants/{{ app.grant_id }}">
+                                {{ app.grant_title[:40] if app.grant_title else 'Untitled' }}{% if app.grant_title and app.grant_title|length > 40 %}...{% endif %}
+                            </a>
+                        </h6>
+                        <p class="card-text small text-muted mb-1">{{ app.agency or '' }}</p>
+                        {% if app.close_date %}
+                        <p class="card-text small mb-1">
+                            <i class="bi bi-clock"></i> {{ app.close_date }}
+                        </p>
+                        {% endif %}
+                        {% if app.relevance_tier %}
+                        <span class="badge {% if app.relevance_tier == 'HIGH' %}bg-success{% elif app.relevance_tier == 'MEDIUM' %}bg-warning text-dark{% else %}bg-secondary{% endif %} small">
+                            {{ app.relevance_tier }}
+                        </span>
+                        {% endif %}
+
+                        <!-- Quick status change -->
+                        <div class="mt-2">
+                            <form method="post" action="/tracker/update/{{ app.id }}" class="d-inline">
+                                <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+                                    {% for s in stages %}
+                                    <option value="{{ s }}" {% if s == stage %}selected{% endif %}>{{ s }}</option>
+                                    {% endfor %}
+                                </select>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/tracker.js"></script>
+{% endblock %}

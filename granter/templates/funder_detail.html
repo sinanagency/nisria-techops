@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}{{ funder.name if funder else 'Not Found' }} - Nisria Grant Finder{% endblock %}
+
+{% block content %}
+{% if funder %}
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/funders">Funders</a></li>
+        <li class="breadcrumb-item active">{{ funder.name }}</li>
+    </ol>
+</nav>
+
+<div class="row">
+    <div class="col-lg-8">
+        <h2>{{ funder.name }}</h2>
+        <div class="mb-3">
+            <span class="badge bg-secondary">{{ funder.type }}</span>
+            {% if funder.ein %}<span class="text-muted ms-2">EIN: {{ funder.ein }}</span>{% endif %}
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header">Financial Profile</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Total Assets</dt>
+                    <dd class="col-sm-8">
+                        {% if funder.assets %}${{ "{:,.0f}".format(funder.assets) }}{% else %}N/A{% endif %}
+                    </dd>
+
+                    <dt class="col-sm-4">Annual Giving</dt>
+                    <dd class="col-sm-8">
+                        {% if funder.annual_giving %}${{ "{:,.0f}".format(funder.annual_giving) }}{% else %}N/A{% endif %}
+                    </dd>
+
+                    <dt class="col-sm-4">Geographic Focus</dt>
+                    <dd class="col-sm-8">{{ funder.geographic_focus or 'N/A' }}</dd>
+
+                    <dt class="col-sm-4">Sector Focus</dt>
+                    <dd class="col-sm-8">{{ funder.sector_focus or 'N/A' }}</dd>
+
+                    {% if funder.website %}
+                    <dt class="col-sm-4">Website</dt>
+                    <dd class="col-sm-8"><a href="{{ funder.website }}" target="_blank">{{ funder.website }}</a></dd>
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+
+        {% if funder.top_grantees_json %}
+        <div class="card mb-3">
+            <div class="card-header">Recent Grantees</div>
+            <div class="card-body">
+                <pre class="mb-0">{{ funder.top_grantees_json }}</pre>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if funder.notes %}
+        <div class="card mb-3">
+            <div class="card-header">Notes</div>
+            <div class="card-body">{{ funder.notes }}</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card mb-3">
+            <div class="card-header">Actions</div>
+            <div class="card-body">
+                <a href="/letter?funder_id={{ funder.id }}" class="btn btn-primary w-100 mb-2">
+                    <i class="bi bi-envelope"></i> Generate Outreach Letter
+                </a>
+                {% if funder.contact_email %}
+                <a href="mailto:{{ funder.contact_email }}" class="btn btn-outline-secondary w-100">
+                    <i class="bi bi-at"></i> Email Contact
+                </a>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Metadata</div>
+            <div class="card-body small">
+                <p class="mb-1"><strong>Source:</strong> {{ funder.source }}</p>
+                <p class="mb-1"><strong>First Seen:</strong> {{ funder.first_seen_at }}</p>
+                <p class="mb-0"><strong>Last Updated:</strong> {{ funder.last_updated_at }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-warning">Funder not found.</div>
+{% endif %}
+{% endblock %}

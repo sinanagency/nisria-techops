@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Letter Generator - Nisria Grant Finder{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-envelope"></i> Outreach Letter Generator</h2>
+
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">Options</div>
+            <div class="card-body">
+                <form method="get" action="/letter">
+                    <div class="mb-3">
+                        <label class="form-label">Funder</label>
+                        <select name="funder_id" class="form-select">
+                            <option value="">Select a funder...</option>
+                            {% for f in funders %}
+                            <option value="{{ f.id }}" {% if f.id == selected_funder_id %}selected{% endif %}>
+                                {{ f.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tone</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="tone" value="formal"
+                                   id="toneFormal" {% if tone == 'formal' %}checked{% endif %}>
+                            <label class="form-check-label" for="toneFormal">Formal</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="tone" value="warm"
+                                   id="toneWarm" {% if tone == 'warm' %}checked{% endif %}>
+                            <label class="form-check-label" for="toneWarm">Warm</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="tone" value="direct"
+                                   id="toneDirect" {% if tone == 'direct' %}checked{% endif %}>
+                            <label class="form-check-label" for="toneDirect">Direct</label>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Generate Letter</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between">
+                <span>Generated Letter</span>
+                {% if letter %}
+                <button class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText(document.getElementById('letterText').innerText)">
+                    <i class="bi bi-clipboard"></i> Copy
+                </button>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if letter %}
+                <pre id="letterText" class="mb-0" style="white-space: pre-wrap; font-family: inherit;">{{ letter }}</pre>
+                {% else %}
+                <p class="text-muted mb-0">Select a funder and tone to generate a letter.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

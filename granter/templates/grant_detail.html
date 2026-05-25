@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}{{ grant.title if grant else 'Not Found' }} - Nisria Grant Finder{% endblock %}
+
+{% block content %}
+{% if grant %}
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/grants">Grants</a></li>
+        <li class="breadcrumb-item active">{{ grant.title[:50] }}</li>
+    </ol>
+</nav>
+
+<div class="row">
+    <div class="col-lg-8">
+        <h2>{{ grant.title }}</h2>
+        <div class="mb-3">
+            <span class="badge {% if grant.relevance_tier == 'HIGH' %}bg-success{% elif grant.relevance_tier == 'MEDIUM' %}bg-warning text-dark{% elif grant.relevance_tier == 'LOW' %}bg-info{% else %}bg-secondary{% endif %} me-2">
+                {{ grant.relevance_tier }} ({{ "%.2f"|format(grant.relevance_score) }})
+            </span>
+            <span class="badge bg-secondary me-2">{{ grant.source }}</span>
+            <span class="badge bg-dark">{{ grant.status }}</span>
+        </div>
+
+        {% if grant.description %}
+        <div class="card mb-3">
+            <div class="card-header">Description</div>
+            <div class="card-body">
+                <p>{{ grant.description }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="card mb-3">
+            <div class="card-header">Details</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Agency</dt>
+                    <dd class="col-sm-8">{{ grant.agency or 'N/A' }}</dd>
+
+                    <dt class="col-sm-4">Amount Range</dt>
+                    <dd class="col-sm-8">
+                        {% if grant.amount_floor or grant.amount_ceiling %}
+                            {% if grant.amount_floor %}${{ "{:,.0f}".format(grant.amount_floor) }}{% endif %}
+                            {% if grant.amount_floor and grant.amount_ceiling %} - {% endif %}
+                            {% if grant.amount_ceiling %}${{ "{:,.0f}".format(grant.amount_ceiling) }}{% endif %}
+                            {{ grant.currency }}
+                        {% else %}
+                            Not specified
+                        {% endif %}
+                    </dd>
+
+                    <dt class="col-sm-4">Open Date</dt>
+                    <dd class="col-sm-8">{{ grant.open_date or 'N/A' }}</dd>
+
+                    <dt class="col-sm-4">Close Date</dt>
+                    <dd class="col-sm-8">{{ grant.close_date or 'Open/Rolling' }}</dd>
+
+                    <dt class="col-sm-4">Source URL</dt>
+                    <dd class="col-sm-8">
+                        {% if grant.url %}
+                        <a href="{{ grant.url }}" target="_blank">{{ grant.url[:60] }}...</a>
+                        {% else %}N/A{% endif %}
+                    </dd>
+                </dl>
+            </div>
+        </div>
+
+        {% if grant.contact_name or grant.contact_email %}
+        <div class="card mb-3">
+            <div class="card-header">Contact</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    {% if grant.contact_name %}
+                    <dt class="col-sm-4">Name</dt>
+                    <dd class="col-sm-8">{{ grant.contact_name }}</dd>
+                    {% endif %}
+                    {% if grant.contact_email %}
+                    <dt class="col-sm-4">Email</dt>
+                    <dd class="col-sm-8"><a href="mailto:{{ grant.contact_email }}">{{ grant.contact_email }}</a></dd>
+                    {% endif %}
+                    {% if grant.contact_phone %}
+                    <dt class="col-sm-4">Phone</dt>
+                    <dd class="col-sm-8">{{ grant.contact_phone }}</dd>
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if grant.raw_json %}
+        <div class="card mb-3">
+            <div class="card-header">
+                <button class="btn btn-link p-0 text-decoration-none" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#rawJson">
+                    <i class="bi bi-code"></i> Raw API Data
+                </button>
+            </div>
+            <div class="collapse" id="rawJson">
+                <div class="card-body">
+                    <pre class="mb-0" style="max-height: 400px; overflow-y: auto;"><code>{{ grant.raw_json }}</code></pre>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="col-lg-4">
+        <!-- Track Action -->
+        <div class="card mb-3">
+            <div class="card-header">Actions</div>
+            <div class="card-body">
+                {% if application %}
+                <p class="mb-2">
+                    <i class="bi bi-check-circle text-success"></i>
+                    Tracked &mdash; Status: <strong class="text-capitalize">{{ application.status }}</strong>
+                </p>
+                <a href="/tracker" class="btn btn-outline-primary w-100">Open in Tracker</a>
+                {% else %}
+                <form method="post" action="/tracker/add">
+                    <input type="hidden" name="grant_id" value="{{ grant.id }}">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-plus-circle"></i> Add to Tracker
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Metadata -->
+        <div class="card">
+            <div class="card-header">Metadata</div>
+            <div class="card-body small">
+                <p class="mb-1"><strong>Source ID:</strong> {{ grant.source_id }}</p>
+                <p class="mb-1"><strong>First Seen:</strong> {{ grant.first_seen_at }}</p>
+                <p class="mb-0"><strong>Last Updated:</strong> {{ grant.last_updated_at }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-warning">Grant not found.</div>
+{% endif %}
+{% endblock %}

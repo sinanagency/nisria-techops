@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Settings - Nisria Grant Finder{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-gear"></i> Settings</h2>
+
+<div class="row g-4">
+    <!-- Org Profile -->
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Organization Profile</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/settings/org">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Organization Name</label>
+                            <input type="text" name="name" class="form-control"
+                                   value="{{ org.get('name', '') }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">EIN</label>
+                            <input type="text" name="ein" class="form-control"
+                                   value="{{ org.get('ein', '') }}">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">Mission Statement</label>
+                            <textarea name="mission" class="form-control" rows="3">{{ org.get('mission', '') }}</textarea>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Sectors (comma-separated)</label>
+                            <input type="text" name="sectors" class="form-control"
+                                   value="{{ org.get('sectors_json', '[]') | replace('[', '') | replace(']', '') | replace('\"', '') }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Countries (ISO codes, comma-separated)</label>
+                            <input type="text" name="countries" class="form-control"
+                                   value="{{ org.get('countries_json', '[]') | replace('[', '') | replace(']', '') | replace('\"', '') }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Annual Budget ($)</label>
+                            <input type="number" name="annual_budget" class="form-control"
+                                   value="{{ org.get('annual_budget', 0) }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Min Grant ($)</label>
+                            <input type="number" name="grant_range_min" class="form-control"
+                                   value="{{ org.get('grant_range_min', 5000) }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Max Grant ($)</label>
+                            <input type="number" name="grant_range_max" class="form-control"
+                                   value="{{ org.get('grant_range_max', 250000) }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Organization Type</label>
+                            <select name="org_type" class="form-select">
+                                {% for t in ['Nonprofit', '501c3', 'NGO', 'CBO', 'Foundation'] %}
+                                <option value="{{ t }}" {% if org.get('org_type') == t %}selected{% endif %}>{{ t }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary mt-3">Save Profile</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Source Config -->
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Data Sources</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="list-group list-group-flush">
+                    {% for s in sources %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>{{ s.display_name }}</strong>
+                            <br>
+                            <small class="text-muted">
+                                {% if s.daily_budget %}Budget: {{ s.calls_today or 0 }}/{{ s.daily_budget }}{% else %}No limit{% endif %}
+                            </small>
+                        </div>
+                        <form method="post" action="/settings/sources/{{ s.source }}/toggle">
+                            <button type="submit" class="btn btn-sm {% if s.is_enabled %}btn-success{% else %}btn-outline-secondary{% endif %}">
+                                {{ 'ON' if s.is_enabled else 'OFF' }}
+                            </button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5 class="mb-0">Manual Refresh</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small">Trigger an immediate refresh from any source.</p>
+                {% for s in sources %}
+                {% if s.is_enabled %}
+                <form method="post" action="/api/v1/refresh/{{ s.source }}" class="mb-2">
+                    <button type="submit" class="btn btn-outline-primary btn-sm w-100">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh {{ s.display_name }}
+                    </button>
+                </form>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
