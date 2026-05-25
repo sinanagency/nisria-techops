@@ -159,7 +159,7 @@ export default async function Donor360({ params }: { params: { id: string } }) {
             <div className="ficon" style={{ background: "var(--teal)", color: "#fff" }}>
               <DollarSign size={20} />
             </div>
-            <div className="ftitle">{money(lifetime)}</div>
+            <div className="ftitle money">{money(lifetime)}</div>
             <div className="fmeta">lifetime giving · {gifts.length} gifts</div>
           </div>
 
@@ -177,7 +177,7 @@ export default async function Donor360({ params }: { params: { id: string } }) {
                       {date(g.donated_at)}
                       {g.campaign?.name ? <span className="muted"> · {g.campaign.name}</span> : null}
                     </span>
-                    <span className="strong">{money(g.amount)}</span>
+                    <span className="strong money">{money(g.amount)}</span>
                   </div>
                 ))}
               </div>

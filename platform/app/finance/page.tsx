@@ -1,7 +1,7 @@
 import Shell from "../../components/Shell";
 import { Card, Badge } from "../../components/ui";
 import { admin, money, date } from "../../lib/supabase-admin";
-import { addPayment, markPaid, logMpesa } from "./actions";
+import { addPayment, markPaid, logMpesa, logPayout } from "./actions";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -17,11 +17,15 @@ import {
   Building2,
   CircleDot,
   CheckCircle2,
+  Landmark,
+  ArrowRight,
+  ShoppingBag,
+  Banknote,
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
-const methodLabel: Record<string, string> = { mpesa: "M-Pesa", bank: "Bank", card: "Card" };
+const methodLabel: Record<string, string> = { mpesa: "M-Pesa", bank: "Bank", card: "Card", givebutter: "Givebutter" };
 
 // Categories → label + icon + badge tone, in display order.
 const CATEGORY_META: Record<string, { label: string; tone: any; icon: any }> = {
@@ -29,24 +33,33 @@ const CATEGORY_META: Record<string, { label: string; tone: any; icon: any }> = {
   salary: { label: "Salaries", tone: "teal", icon: Users },
   kenya: { label: "Kenya", tone: "green", icon: MapPin },
   vendor: { label: "Vendors", tone: "gold", icon: Building2 },
+  payout: { label: "Givebutter payouts", tone: "peri", icon: Landmark },
   other: { label: "Other", tone: "gray", icon: CircleDot },
 };
-const CATEGORY_ORDER = ["subscription", "salary", "kenya", "vendor", "other"];
+const CATEGORY_ORDER = ["subscription", "salary", "kenya", "vendor", "payout", "other"];
 const catSingular: Record<string, string> = {
   subscription: "Subscription",
   salary: "Salary",
   kenya: "Kenya",
   vendor: "Vendor",
+  payout: "Payout",
   other: "Other",
 };
 
 // Currency-aware money. USD → shared money() (clean $); anything else shows the
-// code so KES never gets mislabelled as dollars.
+// code so KES never gets mislabelled as dollars. The returned string is meant
+// to live inside a <span className="money"> so the privacy-blur applies.
 function fmt(amount: any, currency?: string) {
   const cur = (currency || "USD").toUpperCase();
   if (cur === "USD") return money(amount);
   const n = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Number(amount || 0));
   return `${cur} ${n}`;
+}
+
+// Always-blurrable money figure. Wraps the formatted amount so the global
+// .hide-money toggle (see globals.css) can blur every number on the page.
+function Money({ amount, currency, className, style }: { amount: any; currency?: string; className?: string; style?: any }) {
+  return <span className={`money${className ? " " + className : ""}`} style={style}>{fmt(amount, currency)}</span>;
 }
 
 // Map a Badge tone to a valid .aico colour class (subset differs from badges).
@@ -71,21 +84,54 @@ export default async function Finance() {
   const donations = (donRes.data || []) as any[];
   const payments = (payRes.data || []) as any[];
 
-  // ---- top metrics --------------------------------------------------------
+  const isUsd = (p: any) => (p.currency || "USD").toUpperCase() === "USD";
+  const paidThisMonth = (p: any) =>
+    p.status === "paid" && p.paid_at && new Date(p.paid_at).toISOString() >= monthStart;
+
+  // ---- top metrics: a real in/out/net ledger ------------------------------
   // Money in: succeeded donations this month (donations are USD-denominated)
   const moneyIn = donations
     .filter((d: any) => (d.status || "").toLowerCase() === "succeeded")
     .reduce((s: number, d: any) => s + Number(d.amount || 0), 0);
 
-  // Money out: payments marked paid this month (USD obligations only for the headline sum)
+  // Money out: everything paid this month in USD — obligations AND Givebutter
+  // payouts (the payout is genuine cash leaving the Givebutter balance).
   const moneyOut = payments
-    .filter((p: any) => p.status === "paid" && p.paid_at && new Date(p.paid_at).toISOString() >= monthStart && (p.currency || "USD").toUpperCase() === "USD")
+    .filter((p: any) => paidThisMonth(p) && isUsd(p))
     .reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+
+  // Net for the month (USD). Donations in minus USD cash out.
+  const netMonth = moneyIn - moneyOut;
 
   // Outstanding: everything still owed (USD obligations) — upcoming | due | overdue
   const outstandingUsd = payments
-    .filter((p: any) => ["upcoming", "due", "overdue"].includes(p.status) && (p.currency || "USD").toUpperCase() === "USD")
+    .filter((p: any) => ["upcoming", "due", "overdue"].includes(p.status) && isUsd(p))
     .reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+
+  // ---- Givebutter → Kenya reconciliation (all-time) -----------------------
+  // Withdrawn: total Givebutter payouts (cash pulled to the bank). Both the
+  // synced rows (category=payout) and any method=givebutter count.
+  const payoutRows = payments.filter(
+    (p: any) => p.category === "payout" || p.method === "givebutter",
+  );
+  const withdrawnUsd = payoutRows
+    .filter((p: any) => isUsd(p))
+    .reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+  const payoutCount = payoutRows.length;
+
+  // Spent in Kenya: everything tagged category=kenya OR paid via M-Pesa.
+  // These are KES-denominated, so we sum them in KES and keep them separate
+  // from the USD withdrawn figure (no FX assumed — Nur reads both side by side).
+  const kenyaRows = payments.filter(
+    (p: any) => (p.category === "kenya" || p.method === "mpesa") && p.status === "paid",
+  );
+  const kenyaSpentKes = kenyaRows
+    .filter((p: any) => (p.currency || "KES").toUpperCase() === "KES")
+    .reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+  const kenyaSpentUsd = kenyaRows
+    .filter((p: any) => (p.currency || "").toUpperCase() === "USD")
+    .reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+  const kenyaCount = kenyaRows.length;
 
   // ---- reminders: due soon ------------------------------------------------
   const dueRows = payments
@@ -138,26 +184,96 @@ export default async function Finance() {
   return (
     <Shell
       title="Finance"
-      sub="Your obligations in one place. Submit recurring bills, salaries and vendor payments — the system tracks them and reminds you. Logging records a payment; it never moves money."
+      sub="The books, reconciled. Money in (donations) against money out (bills, salaries, Kenya spend and Givebutter payouts), so you always know the net and how much of what you withdrew has reached Kenya. Logging records a payment; it never moves money."
     >
-      {/* top: three feature cards */}
+      {/* top: money in / money out / net for the month */}
       <div className="grid cols-3" style={{ marginBottom: 16 }}>
         <div className="feature teal">
           <div className="ficon"><ArrowDownLeft size={20} /></div>
-          <div className="ftitle">{money(moneyIn)}</div>
+          <div className="ftitle"><Money amount={moneyIn} /></div>
           <div className="fmeta">Money in · succeeded donations this month</div>
         </div>
         <div className="feature peri">
           <div className="ficon"><ArrowUpRight size={20} /></div>
-          <div className="ftitle">{money(moneyOut)}</div>
-          <div className="fmeta">Money out · paid this month</div>
+          <div className="ftitle"><Money amount={moneyOut} /></div>
+          <div className="fmeta">Money out · paid this month (incl. payouts)</div>
         </div>
         <div className="feature dark">
           <div className="ficon"><Wallet size={20} /></div>
-          <div className="ftitle">{money(outstandingUsd)}</div>
-          <div className="fmeta">Outstanding · upcoming, due &amp; overdue</div>
+          <div className="ftitle">
+            {netMonth < 0 ? "−" : ""}<Money amount={Math.abs(netMonth)} />
+          </div>
+          <div className="fmeta">
+            Net this month · in − out{" "}
+            {outstandingUsd > 0 ? (
+              <>· <Money amount={outstandingUsd} /> still owed</>
+            ) : null}
+          </div>
         </div>
       </div>
+
+      {/* GIVEBUTTER → KENYA reconciliation */}
+      <Card
+        title="Givebutter → Kenya reconciliation"
+        action={
+          <span className="flex" style={{ gap: 6 }}>
+            <Badge tone={"peri" as any}>{payoutCount} payouts</Badge>
+            <Badge tone="green">{kenyaCount} Kenya payments</Badge>
+          </span>
+        }
+      >
+        <div className="card-pad">
+          <div
+            className="flex"
+            style={{ gap: 16, alignItems: "stretch", flexWrap: "wrap", justifyContent: "space-between" }}
+          >
+            {/* withdrawn */}
+            <div style={{ flex: "1 1 200px", minWidth: 180 }}>
+              <div className="flex" style={{ gap: 9 }}>
+                <span className="aico peri" style={{ width: 30, height: 30, borderRadius: 9 }}>
+                  <Landmark size={15} />
+                </span>
+                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13.5 }}>Withdrawn from Givebutter</span>
+              </div>
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 26, letterSpacing: "-0.03em", marginTop: 10 }}>
+                <Money amount={withdrawnUsd} />
+              </div>
+              <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>
+                Cash wired to the bank across {payoutCount} payout{payoutCount === 1 ? "" : "s"}
+              </div>
+            </div>
+
+            {/* arrow */}
+            <div className="flex" style={{ flex: "0 0 auto", alignSelf: "center", color: "var(--faint)" }}>
+              <ArrowRight size={22} />
+            </div>
+
+            {/* spent in kenya */}
+            <div style={{ flex: "1 1 200px", minWidth: 180 }}>
+              <div className="flex" style={{ gap: 9 }}>
+                <span className="aico green" style={{ width: 30, height: 30, borderRadius: 9 }}>
+                  <MapPin size={15} />
+                </span>
+                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13.5 }}>Paid out in Kenya</span>
+              </div>
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 26, letterSpacing: "-0.03em", marginTop: 10 }}>
+                <Money amount={kenyaSpentKes} currency="KES" />
+              </div>
+              <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>
+                {kenyaCount} Kenya payment{kenyaCount === 1 ? "" : "s"} (M-Pesa &amp; field spend)
+                {kenyaSpentUsd > 0 ? (
+                  <> · plus <Money amount={kenyaSpentUsd} /> in USD</>
+                ) : null}
+              </div>
+            </div>
+          </div>
+          <div className="faint" style={{ fontSize: 11.5, marginTop: 16, lineHeight: 1.5 }}>
+            Payouts are in USD and Kenya spend is in KES, so they are shown side by side without converting —
+            you read "withdrew this much, paid this much on the ground." Payouts sync automatically from Givebutter;
+            log one manually below if a withdrawal hasn’t synced yet.
+          </div>
+        </div>
+      </Card>
 
       {/* REMINDERS — due soon (first & prominent) */}
       <Card
@@ -205,7 +321,7 @@ export default async function Finance() {
                     </div>
                   </div>
                   <div className="flex" style={{ gap: 12, flexShrink: 0 }}>
-                    <span className="strong" style={{ whiteSpace: "nowrap" }}>{fmt(r.amount, r.currency)}</span>
+                    <Money amount={r.amount} currency={r.currency} className="strong" style={{ whiteSpace: "nowrap" }} />
                     <form action={markPaid} style={{ display: "inline" }}>
                       <input type="hidden" name="id" value={r.id} />
                       <button className="btn teal sm" type="submit">Mark paid</button>
@@ -259,7 +375,7 @@ export default async function Finance() {
                         </div>
                         <div className="flex" style={{ gap: 10, flexShrink: 0 }}>
                           <RecurrenceBadge r={r.recurrence} />
-                          <span className="strong" style={{ whiteSpace: "nowrap" }}>{fmt(r.amount, r.currency)}</span>
+                          <Money amount={r.amount} currency={r.currency} className="strong" style={{ whiteSpace: "nowrap" }} />
                         </div>
                       </div>
                     ))}
@@ -367,6 +483,59 @@ export default async function Finance() {
         </Card>
       </div>
 
+      {/* money-in sources: manual Givebutter payout + Folklore placeholder */}
+      <div className="grid cols-2" style={{ marginTop: 16 }}>
+        {/* manual Givebutter payout */}
+        <Card title="Log a Givebutter payout">
+          <form action={logPayout} className="card-pad stack" style={{ gap: 12 }}>
+            <div className="flex" style={{ gap: 9 }}>
+              <span className="aico peri" style={{ width: 34, height: 34, borderRadius: 11 }}>
+                <Landmark size={16} />
+              </span>
+              <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.45 }}>
+                Payouts normally sync from Givebutter automatically. Use this when a withdrawal hasn’t synced yet —
+                it records the cash that left Givebutter and funds Kenya.
+              </div>
+            </div>
+            <div className="grid cols-2" style={{ gap: 12 }}>
+              <div>
+                <label>Amount (USD)</label>
+                <input name="amount" type="number" min="0" step="0.01" placeholder="0" required style={{ marginTop: 5 }} />
+              </div>
+              <div>
+                <label>Payout date</label>
+                <input name="paid_at" type="date" style={{ marginTop: 5 }} />
+              </div>
+            </div>
+            <button className="btn teal full" type="submit"><Banknote size={15} /> Log payout</button>
+            <div className="faint" style={{ fontSize: 11 }}>
+              Recorded as a paid, money-out Givebutter payout. It shows in the reconciliation above and in paid history.
+            </div>
+          </form>
+        </Card>
+
+        {/* Folklore sales — pending money-in source */}
+        <Card title="Folklore sales" action={<Badge tone="gold">Not connected</Badge>}>
+          <div className="card-pad stack" style={{ gap: 12 }}>
+            <div className="flex" style={{ gap: 9 }}>
+              <span className="aico gold" style={{ width: 34, height: 34, borderRadius: 11 }}>
+                <ShoppingBag size={16} />
+              </span>
+              <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.45 }}>
+                Folklore merchandise sales are a second money-in source alongside donations. There’s no API connection
+                yet, so these aren’t counted in “money in” above.
+              </div>
+            </div>
+            <div className="empty" style={{ padding: 24, fontSize: 12.5 }}>
+              Connect Folklore to pull sales automatically. Until then, log proceeds as a manual income entry.
+            </div>
+            <button className="btn ghost full" type="button" disabled>
+              <Plus size={15} /> Connect Folklore (coming soon)
+            </button>
+          </div>
+        </Card>
+      </div>
+
       {/* paid history */}
       <div style={{ marginTop: 16 }}>
         <Card title="Paid history" action={<Badge tone="gray">{paidHistory.length}</Badge>}>
@@ -393,7 +562,7 @@ export default async function Finance() {
                       {r.ref ? ` · ref ${r.ref}` : ""}
                     </div>
                   </div>
-                  <span className="strong" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{fmt(r.amount, r.currency)}</span>
+                  <Money amount={r.amount} currency={r.currency} className="strong" style={{ whiteSpace: "nowrap", flexShrink: 0 }} />
                 </div>
               ))}
             </div>

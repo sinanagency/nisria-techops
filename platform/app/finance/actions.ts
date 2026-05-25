@@ -192,6 +192,56 @@ export async function markPaid(fd: FormData) {
 }
 
 // ---------------------------------------------------------------------------
+// Log a Givebutter payout — the cash Givebutter wired to the bank, which is
+// what actually funds the Kenya M-Pesa spend. Records a PAID, money-out row
+// (method=givebutter, category=payout). Used when the API sync path is
+// unavailable, or to capture a payout before the next sync runs.
+// ---------------------------------------------------------------------------
+export async function logPayout(fd: FormData) {
+  const amount = Number(String(fd.get("amount") || "").replace(/[^0-9.]/g, "")) || null;
+  const dateStr = String(fd.get("paid_at") || "").trim();
+  if (!amount) return;
+
+  // form date is YYYY-MM-DD (local intent) → anchor at midday UTC so it never
+  // slips to the previous calendar day. Fall back to now if blank/invalid.
+  let paid_at = new Date().toISOString();
+  if (dateStr) {
+    const d = new Date(dateStr + "T12:00:00Z");
+    if (!isNaN(d.getTime())) paid_at = d.toISOString();
+  }
+
+  const db = admin();
+  const { data: row } = await db
+    .from("payments")
+    .insert({
+      direction: "out",
+      payee: "Givebutter",
+      purpose: "Givebutter payout → Kenya operating funds",
+      amount,
+      currency: "USD",
+      method: "givebutter",
+      status: "paid",
+      paid_at,
+      category: "payout",
+      recurrence: "none",
+      ref: `GB-PAYOUT-MANUAL-${Date.now()}`,
+      created_by: "Nur",
+    })
+    .select()
+    .single();
+
+  await emit({
+    type: "payment.verified",
+    source: "finance",
+    actor: "Nur",
+    subject_type: "payment",
+    subject_id: row?.id ?? null,
+    payload: { payee: "Givebutter", amount, currency: "USD", method: "givebutter", category: "payout", paid_at, manual: true },
+  });
+  revalidatePath("/finance");
+}
+
+// ---------------------------------------------------------------------------
 // Log an M-Pesa payment from a confirmation screenshot.
 // file -> Claude vision -> create a paid payment row + store the image.
 // Best-effort: low-confidence parses still record, flagged for review.

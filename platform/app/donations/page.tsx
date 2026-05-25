@@ -1,7 +1,8 @@
 import Shell from "../../components/Shell";
 import { Card, Table, Badge, Col, statusTone } from "../../components/ui";
 import { admin, money, date } from "../../lib/supabase-admin";
-import { Search } from "lucide-react";
+import { Search, Heart, Check, Clock } from "lucide-react";
+import { draftThankYouFor, draftAllThankYous } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -47,44 +48,90 @@ export default async function Donations({
   const db = admin();
   const { data } = await db
     .from("donations")
-    .select("*,donor:donors(full_name),campaign:campaigns(name)")
+    .select("*,donor:donors(full_name,email),campaign:campaigns(name)")
     .order("donated_at", { ascending: false })
     .limit(500);
+
+  // Which gifts already have a thank-you queued/sent? The steward keys every
+  // intent `thankyou:<donation_id>`, so one pull of those keys tells us the
+  // thank-you state for the whole table without an N+1 of per-row lookups.
+  const { data: tyIntents } = await db
+    .from("action_intents")
+    .select("idempotency_key,status")
+    .like("idempotency_key", "thankyou:%")
+    .limit(2000);
+  const thanked = new Map<string, string>(); // donation_id → intent status
+  for (const it of (tyIntents || []) as any[]) {
+    const id = String(it.idempotency_key || "").slice("thankyou:".length);
+    if (id) thanked.set(id, it.status);
+  }
 
   // apply filters in-memory (small dataset, keeps the joined select intact)
   let rows = (data || []) as any[];
   if (q) {
     const needle = q.toLowerCase();
-    rows = rows.filter((r) => (r.donor?.full_name || "Anonymous").toLowerCase().includes(needle));
+    rows = rows.filter((r: any) => (r.donor?.full_name || "Anonymous").toLowerCase().includes(needle));
   }
-  if (recurring === "yes") rows = rows.filter((r) => !!r.is_recurring);
-  if (recurring === "no") rows = rows.filter((r) => !r.is_recurring);
-  if (status) rows = rows.filter((r) => (r.status || "").toLowerCase() === status);
+  if (recurring === "yes") rows = rows.filter((r: any) => !!r.is_recurring);
+  if (recurring === "no") rows = rows.filter((r: any) => !r.is_recurring);
+  if (status) rows = rows.filter((r: any) => (r.status || "").toLowerCase() === status);
   if (range !== "all") {
     const days = Number(range);
     if (!Number.isNaN(days)) {
       const cutoff = Date.now() - days * 86400000;
-      rows = rows.filter((r) => r.donated_at && new Date(r.donated_at).getTime() >= cutoff);
+      rows = rows.filter((r: any) => r.donated_at && new Date(r.donated_at).getTime() >= cutoff);
     }
   }
 
-  const total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
+  const total = rows.reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
   const isFiltered = !!(q || recurring || status || (range && range !== "all"));
 
+  // thank-you state per row: queued/sent vs. a one-click "draft" button.
+  // The button only makes sense for a gift that actually went through and has a
+  // donor email; otherwise we show why it can't be thanked.
+  const tyCell = (r: any) => {
+    const st = thanked.get(r.id);
+    if (st === "done") return <Badge tone="green"><Check size={11} /> Sent</Badge>;
+    if (st) return <Badge tone="gold"><Clock size={11} /> Queued</Badge>;
+    const hasEmail = !!r.donor?.email;
+    const succeeded = (r.status || "").toLowerCase() === "succeeded";
+    if (!succeeded) return <span className="faint">—</span>;
+    if (!hasEmail) return <span className="faint">no email</span>;
+    return (
+      <form action={draftThankYouFor}>
+        <input type="hidden" name="donation_id" value={r.id} />
+        <button type="submit" className="btn ghost sm">
+          <Heart size={13} /> Draft thank-you
+        </button>
+      </form>
+    );
+  };
+
   const cols: Col<any>[] = [
-    { key: "donor", label: "Donor", render: (r) => <span className="strong">{r.donor?.full_name || "Anonymous"}</span> },
-    { key: "campaign", label: "Campaign", render: (r) => r.campaign?.name || "—" },
+    { key: "donor", label: "Donor", render: (r: any) => <span className="strong">{r.donor?.full_name || "Anonymous"}</span> },
+    { key: "campaign", label: "Campaign", render: (r: any) => r.campaign?.name || "—" },
     { key: "channel", label: "Channel" },
-    { key: "is_recurring", label: "Recurring", render: (r) => (r.is_recurring ? <Badge tone="blue">monthly</Badge> : "—") },
-    { key: "status", label: "Status", render: (r) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> },
-    { key: "donated_at", label: "Date", render: (r) => date(r.donated_at) },
-    { key: "amount", label: "Amount", align: "right", render: (r) => <span className="strong">{money(r.amount)}</span> },
+    { key: "is_recurring", label: "Recurring", render: (r: any) => (r.is_recurring ? <Badge tone="blue">monthly</Badge> : "—") },
+    { key: "status", label: "Status", render: (r: any) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> },
+    { key: "thankyou", label: "Thank-you", render: tyCell },
+    { key: "donated_at", label: "Date", render: (r: any) => date(r.donated_at) },
+    { key: "amount", label: "Amount", align: "right", render: (r: any) => <span className="strong money">{money(r.amount)}</span> },
   ];
 
   const sub = `${rows.length} ${rows.length === 1 ? "gift" : "gifts"}${isFiltered ? ` · ${money(total)} matched` : ""}`;
 
   return (
-    <Shell title="Donations" sub={sub}>
+    <Shell
+      title="Donations"
+      sub={sub}
+      action={
+        <form action={draftAllThankYous}>
+          <button type="submit" className="btn teal">
+            <Heart size={14} /> Draft thank-yous for all un-thanked recent gifts
+          </button>
+        </form>
+      }
+    >
       {/* filters */}
       <div className="card card-pad" style={{ marginBottom: 16 }}>
         <div className="stack" style={{ gap: 14 }}>

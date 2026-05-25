@@ -43,6 +43,31 @@ def gb_all(path):
         page += 1
     return out
 
+def gb_try(path):
+    """Like gb_all but tolerant: returns [] (and a note) if the endpoint is
+    missing / errors / unauthorised, instead of raising. Used for /payouts,
+    which not every Givebutter account exposes."""
+    out, page = [], 1
+    while True:
+        p = subprocess.run(["curl", "-s", "-H", f"Authorization: Bearer {GB}", "-H", "Accept: application/json",
+                            f"https://api.givebutter.com/v1/{path}?page={page}&per_page=100"], capture_output=True, text=True)
+        try:
+            d = json.loads(p.stdout)
+        except Exception:
+            print(f"NOTE: {path} returned non-JSON ({p.stdout[:120]!r}); skipping.")
+            return []
+        if not isinstance(d, dict) or "data" not in d:
+            # error envelope: {"message": "..."} or unexpected shape
+            msg = (d.get("message") if isinstance(d, dict) else None) or str(d)[:120]
+            print(f"NOTE: {path} unavailable ({msg}); skipping payouts sync.")
+            return []
+        out += d.get("data", [])
+        meta = d.get("meta", {})
+        if page >= meta.get("last_page", 1) or not d.get("data"):
+            break
+        page += 1
+    return out
+
 E = lambda s: "NULL" if s is None or s == "" else "'" + str(s).replace("'", "''") + "'"
 N = lambda x: "NULL" if x in (None, "") else str(float(x))
 
@@ -93,7 +118,40 @@ def main():
         sql("""insert into donations (external_id,donor_id,campaign_id,brand_id,amount,channel,status,is_recurring,donated_at) values """
             + ",".join(drows) + " on conflict (external_id) where external_id is not null do nothing;")
 
-    res = sql("select (select count(*) from donors) donors,(select count(*) from donations) donations,(select coalesce(sum(amount),0) from donations where status='succeeded') raised,(select count(*) from campaigns) campaigns;")
+    # ---- payouts: the cash Givebutter actually wired to the bank -----------
+    # Each becomes a paid `payments` row (direction=out, method=givebutter,
+    # category=payout) so Finance can reconcile "withdrew $X" against the Kenya
+    # M-Pesa spend. The payments table has no unique index on `ref`, so we
+    # dedupe with WHERE NOT EXISTS (same pattern as the campaigns upsert above).
+    payouts = gb_try("payouts")
+    if payouts:
+        print(f"Givebutter payouts: {len(payouts)} found")
+        inserted = 0
+        for po in payouts:
+            pid = po.get("id")
+            if not pid:
+                continue
+            # `payout` is the net wired to the bank; fall back to `amount`.
+            amt = po.get("payout")
+            if amt in (None, ""):
+                amt = po.get("amount")
+            cur = (po.get("currency") or "USD").upper()
+            paid = po.get("paid_at") or po.get("expected_at") or po.get("created_at")
+            ref = f"GB-PAYOUT-{pid}"
+            r = sql(f"""insert into payments
+                (direction,payee,purpose,amount,currency,method,status,paid_at,ref,category,recurrence,created_by)
+                select 'out','Givebutter','Givebutter payout → Kenya operating funds',
+                       {N(amt)},'{cur}','givebutter','paid',{E(paid)},{E(ref)},'payout','none','sync'
+                where not exists (select 1 from payments where ref={E(ref)})
+                returning id;""")
+            if isinstance(r, list) and r:
+                inserted += 1
+        print(f"Payouts: {inserted} new, {len(payouts) - inserted} already present")
+    else:
+        print("NOTE: no Givebutter payouts synced (endpoint empty/unavailable). "
+              "Use the 'Log a Givebutter payout' form in Finance to capture them manually.")
+
+    res = sql("select (select count(*) from donors) donors,(select count(*) from donations) donations,(select coalesce(sum(amount),0) from donations where status='succeeded') raised,(select count(*) from campaigns) campaigns,(select coalesce(sum(amount),0) from payments where category='payout') payouts;")
     print("AFTER SYNC:", res)
 
 if __name__ == "__main__":
