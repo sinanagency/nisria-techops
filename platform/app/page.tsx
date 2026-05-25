@@ -7,7 +7,7 @@ import { admin, money, num } from "../lib/supabase-admin";
 import { getBrief, fallbackPoints } from "../lib/brief";
 import { cleanEmail } from "../lib/email-render";
 import ApprovalCard from "../components/ApprovalCard";
-import { Sparkles, ChevronRight } from "lucide-react";
+import { Sparkles, ChevronRight, Bot } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 const MONTHLY_GOAL = 5000;
@@ -15,7 +15,7 @@ const MONTHLY_GOAL = 5000;
 export default async function MissionControl() {
   const db = admin();
   const [
-    { data: don }, { data: donors }, { data: approvals }, { data: tasks }, { count: newMsgs }, cached,
+    { data: don }, { data: donors }, { data: approvals }, { data: tasks }, { count: newMsgs }, cached, { data: events },
   ] = await Promise.all([
     db.from("donations").select("amount,status,is_recurring,donated_at"),
     db.from("donors").select("id,full_name"),
@@ -23,7 +23,10 @@ export default async function MissionControl() {
     db.from("tasks").select("title,status,priority,assignee:team_members(name)").neq("status", "done").limit(7),
     db.from("messages").select("id", { count: "exact", head: true }).eq("direction", "in").eq("status", "new").eq("sender_type", "individual"),
     getBrief(),
+    db.from("events").select("type,payload,created_at").order("created_at", { ascending: false }).limit(7),
   ]);
+  const evAgo = (iso: string) => { const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000); return s < 60 ? "now" : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`; };
+  const evLabel = (e: any) => { const p = e.payload || {}; const m: Record<string, string> = { "agent.decided": `Sasa drafted a reply${p.from ? ` to ${p.from}` : ""}`, "approval.created": `${p.title || "Item"} queued`, "approval.approved": "You approved an action", "action.executed": `Sent${p.to ? ` to ${p.to}` : ""}`, "task.assigned": `Task assigned${p.assignee ? ` to ${p.assignee}` : ""}`, "payment.verified": "Payment logged", "grants.refreshed": `${p.found || ""} grant opportunities refreshed`, "asset.ingested": `Filed "${p.title || "asset"}" to Library` }; return m[e.type] || e.type.replace(/\./g, " "); };
 
   const succ: any[] = (don || []).filter((d: any) => d.status === "succeeded");
   const now = new Date();
@@ -85,15 +88,15 @@ export default async function MissionControl() {
           <Gauge pct={goalPct} value={`${goalPct}%`} label="of goal" />
           <div>
             <div className="muted" style={{ fontSize: 12.5 }}>Raised this month</div>
-            <div style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", marginTop: 4 }}>{money(raisedMtd)}</div>
-            <div className="faint" style={{ fontSize: 12, marginTop: 3 }}>goal {money(MONTHLY_GOAL)}</div>
+            <div className="money" style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", marginTop: 4 }}>{money(raisedMtd)}</div>
+            <div className="faint" style={{ fontSize: 12, marginTop: 3 }}>goal <span className="money">{money(MONTHLY_GOAL)}</span></div>
           </div>
         </div>
       </div>
 
       {/* KPIs — clickable */}
       <div className="grid cols-4" style={{ marginBottom: 16 }}>
-        <a className="card card-pad stat hover" href="/donations"><div className="label">Raised all-time</div><div className="value">{money(raisedAll)}</div><div className="delta">{recurring} recurring gifts</div></a>
+        <a className="card card-pad stat hover" href="/donations"><div className="label">Raised all-time</div><div className="value money">{money(raisedAll)}</div><div className="delta">{recurring} recurring gifts</div></a>
         <a className="card card-pad stat hover" href="/donors"><div className="label">Donors</div><div className="value">{num(donors?.length || 0)}</div><div style={{ marginTop: 8 }}><AvatarStack names={donorNames} /></div></a>
         <a className="card card-pad stat hover" href="/inbox"><div className="label">Inbox</div><div className="value">{num(newMsgs || 0)}</div><div className="delta">need a reply</div></a>
         <a className="card card-pad stat hover" href="/tasks"><div className="label">Open tasks</div><div className="value">{num((tasks || []).length)}</div><div className="delta">across the team</div></a>
@@ -125,9 +128,16 @@ export default async function MissionControl() {
           </div>
         </div>
         <div className="card">
-          <div className="card-h"><a href="/agents" style={{ textDecoration: "none" }} className="flex">What the agents did <ChevronRight size={15} /></a></div>
-          <div className="card-pad" style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6 }}>
-            Sasa and the Donor Steward are running in the background. See the full activity stream and tune what they can do on their own in <a href="/agents" style={{ color: "var(--teal-700)", fontWeight: 600 }}>Agents</a>.
+          <div className="card-h"><a href="/agents" style={{ textDecoration: "none" }} className="flex">Recent activity <ChevronRight size={15} /></a></div>
+          <div style={{ padding: "6px 16px" }}>
+            {(events || []).length === 0 && <div className="empty">Quiet so far today.</div>}
+            {(events || []).map((e: any, i: number) => (
+              <div key={i} className="actrow">
+                <span className="aico teal"><Bot size={14} /></span>
+                <div className="abody"><div className="atitle">{evLabel(e)}</div></div>
+                <span className="aright">{evAgo(e.created_at)}</span>
+              </div>
+            ))}
           </div>
         </div>
       </div>

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import CommandPalette from "./CommandPalette";
 import VoiceDock from "./VoiceDock";
+import MoneyToggle from "./MoneyToggle";
 import { logout } from "../app/login/actions";
 import { TabsProvider, useTabs } from "./tabs-context";
 import {
@@ -118,6 +119,7 @@ function TopNav() {
             <Search size={15} /> <span>Search anything…</span> <kbd>⌘K</kbd>
           </button>
           <Link href="/smart" className={`navpill smartbtn ${path === "/smart" ? "active" : ""}`} title="Smart Mode"><Wand2 size={16} /> Smart</Link>
+          <MoneyToggle />
           <Link href="/" className="iconbtn" title="What needs you"><Bell size={17} /></Link>
           <button className="iconbtn dark" title="Ask Sasa" onClick={() => window.dispatchEvent(new Event("open-sasa"))}><Sparkles size={17} /></button>
           <div className="dropwrap" ref={avRef}>

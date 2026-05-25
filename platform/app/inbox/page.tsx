@@ -47,7 +47,7 @@ export default async function Inbox({ searchParams }: { searchParams: { c?: stri
     if (!byContact.has(cid)) byContact.set(cid, { cid, contact: m.contact, last: m, count: 0, unread: 0, account: m.account, channel: m.channel });
     const conv = byContact.get(cid);
     conv.count++;
-    if (m.direction === "in" && (m.status === "new" || m.status === "drafted")) conv.unread++;
+    if (m.direction === "in" && (m.status === "new" || m.status === "drafted") && m.sender_type === "individual") conv.unread++;
   }
   let convs = [...byContact.values()].sort((a, b) => new Date(b.last.created_at).getTime() - new Date(a.last.created_at).getTime());
   if (f === "needs") convs = convs.filter((c) => c.unread > 0); // default: only mail that still needs a reply

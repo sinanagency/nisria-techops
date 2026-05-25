@@ -85,8 +85,7 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 700; lett
 .brand .logo { height: 30px; width: auto; border-radius: 8px; display: block; box-shadow: 0 3px 10px rgba(0,196,194,0.30); }
 .brand .mark { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--teal); color: #fff; font-size: 15px; font-weight: 800; }
 
-.navpills { display: flex; align-items: center; gap: 2px; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
-.navpills::-webkit-scrollbar { display: none; }
+.navpills { display: flex; align-items: center; gap: 2px; overflow: visible; }
 .navpill { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px; border-radius: var(--radius-pill); color: var(--ink-2); font-weight: 500; font-size: 13.5px; cursor: pointer; border: 0; background: none; font-family: inherit; transition: all .16s var(--ease); white-space: nowrap; }
 .navpill .ico { display: grid; place-items: center; color: var(--muted); }
 .navpill:hover { background: rgba(255,255,255,0.55); color: var(--ink); }
@@ -286,7 +285,7 @@ label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
    ============================================================ */
 .login-split { min-height: 100vh; display: grid; grid-template-columns: 1.08fr 0.92fr; }
 .login-photo { position: relative; overflow: hidden; }
-.login-photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.login-photo > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .login-photo-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(8,22,22,0.10) 30%, rgba(8,22,22,0.66)); }
 .login-photo-content { position: absolute; left: 0; right: 0; bottom: 0; padding: 52px; color: #fff; }
 .login-photo-content .logo { height: 34px; border-radius: 9px; margin-bottom: 22px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
@@ -375,6 +374,10 @@ label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
 .pill { display:inline-flex; gap:6px; align-items:center; padding:7px 13px; border-radius:999px; font-size:12.5px; font-weight:500; cursor:pointer; background: var(--surface); color: var(--ink-2); border:1px solid var(--line); transition: all .15s var(--ease); }
 .pill:hover{ background: var(--canvas); border-color: var(--line-2); }
 .pill.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* money privacy: blur amounts (hover to peek) */
+.hide-money .money { filter: blur(8px); transition: filter .12s var(--ease); cursor: default; user-select: none; }
+.hide-money .money:hover { filter: none; }
 
 /* peek / full-view popup (browser-tab style, reusable) */
 .peek-overlay { position: fixed; inset: 0; z-index: 120; background: rgba(20,40,40,0.30); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); display: grid; place-items: center; padding: 5vh 20px; animation: fadeUp .18s var(--ease) both; }
