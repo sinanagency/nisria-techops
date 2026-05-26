@@ -1,70 +1,112 @@
 import Shell from "../../components/Shell";
-import { Card, Badge } from "../../components/ui";
+import { Badge } from "../../components/ui";
 import { admin } from "../../lib/supabase-admin";
-import { addMember, toggleMember, activateMember } from "./actions";
-import { Mail, Phone, UserPlus } from "lucide-react";
+import TeamPeek from "../../components/TeamPeek";
+import TeamAdd from "../../components/TeamAdd";
+import { Users } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
-export default async function Team() {
+// Build a querystring for a filter pill while preserving other active params.
+function qs(current: Record<string, string>, patch: Record<string, string | undefined>) {
+  const next: Record<string, string> = { ...current };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined || v === "") delete next[k];
+    else next[k] = v;
+  }
+  const s = new URLSearchParams(next).toString();
+  return s ? `/team?${s}` : "/team";
+}
+
+const TYPE_OPTS: { v: string; label: string }[] = [
+  { v: "staff", label: "Staff" },
+  { v: "tailor", label: "Tailors" },
+  { v: "volunteer", label: "Volunteers" },
+  { v: "contractor", label: "Contractors" },
+];
+const STATUS_OPTS = ["active", "paused", "exited"];
+
+export default async function Team({
+  searchParams,
+}: {
+  searchParams?: { [key: string]: string | string[] | undefined };
+}) {
+  const sp = searchParams || {};
+  const one = (k: string) => (Array.isArray(sp[k]) ? (sp[k] as string[])[0] : (sp[k] as string | undefined)) || "";
+  const type = one("type");
+  const status = one("status");
+
+  const active: Record<string, string> = {};
+  if (type) active.type = type;
+  if (status) active.status = status;
+
   const db = admin();
-  const { data: team } = await db.from("team_members").select("*").order("created_at");
-  const { data: tasks } = await db.from("tasks").select("assignee_id,status");
-  const load = (id: string) => (tasks || []).filter((t: any) => t.assignee_id === id && t.status !== "done").length;
+  const { data: teamRows } = await db.from("team_members").select("*").order("created_at");
+  const all = (teamRows || []) as any[];
+
+  // open-task load per member (status != done), one query.
+  const { data: taskRows } = await db.from("tasks").select("assignee_id,status");
+  const openTasks = (id: string) =>
+    (taskRows || []).filter((t: any) => t.assignee_id === id && t.status !== "done").length;
+
+  // counts for the filter pills (always off the full set, not the filtered view)
+  const countType = (v: string) => all.filter((m) => (m.member_type || "staff") === v).length;
+  const countStatus = (v: string) => all.filter((m) => (m.status || "active") === v).length;
+
+  // apply filters
+  let rows = all;
+  if (type) rows = rows.filter((m) => (m.member_type || "staff") === type);
+  if (status) rows = rows.filter((m) => (m.status || "active") === status);
+
+  const isFiltered = !!(type || status);
+  const sub = `${all.length} ${all.length === 1 ? "person" : "people"} · who does what, what they cost, how long`;
 
   return (
-    <Shell title="Team" sub={`${team?.length || 0} people · who does what`}>
-      <div className="grid cols-3">
-        {(team || []).map((m: any) => (
-          <div className="card card-pad" key={m.id}>
-            <div className="between">
-              <strong style={{ fontSize: 15 }}>{m.name}</strong>
-              <Badge tone={m.activated ? "green" : "gray"}>{m.activated ? "activated" : "not activated"}</Badge>
-            </div>
-            <div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{m.role || "—"}</div>
-            {m.email && (
-              <div className="muted flex" style={{ fontSize: 12.5, marginTop: 4, gap: 6, alignItems: "center" }}>
-                <Mail size={13} /> {m.email}
-              </div>
-            )}
-            {m.phone && (
-              <div className="muted flex" style={{ fontSize: 12.5, marginTop: 3, gap: 6, alignItems: "center" }}>
-                <Phone size={13} /> {m.phone}
-              </div>
-            )}
-            <div className="between" style={{ marginTop: 12 }}>
-              <Badge tone="purple">{load(m.id)} open task{load(m.id) === 1 ? "" : "s"}</Badge>
-              <div className="flex" style={{ gap: 6 }}>
-                {!m.activated && (
-                  <form action={activateMember}>
-                    <input type="hidden" name="id" value={m.id} />
-                    <button className="pill" type="submit">Activate</button>
-                  </form>
-                )}
-                <form action={toggleMember}>
-                  <input type="hidden" name="id" value={m.id} />
-                  <input type="hidden" name="status" value={m.status === "active" ? "inactive" : "active"} />
-                  <button className="pill" type="submit">{m.status === "active" ? "Deactivate" : "Set active"}</button>
-                </form>
-              </div>
-            </div>
+    <Shell title="Team" sub={sub} action={<TeamAdd />}>
+      {/* filters */}
+      <div className="card card-pad" style={{ marginBottom: 16 }}>
+        <div className="stack" style={{ gap: 14 }}>
+          <div className="flex wrap" style={{ gap: 6 }}>
+            <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", minWidth: 64 }}>Type</span>
+            <a className={`pill ${!type ? "on" : ""}`} href={qs(active, { type: undefined })}>All <span className="muted">{all.length}</span></a>
+            {TYPE_OPTS.map((o) => (
+              <a key={o.v} className={`pill ${type === o.v ? "on" : ""}`} href={qs(active, { type: o.v })}>
+                {o.label} <span className="muted">{countType(o.v)}</span>
+              </a>
+            ))}
           </div>
-        ))}
+          <div className="flex wrap" style={{ gap: 6 }}>
+            <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", minWidth: 64 }}>Status</span>
+            <a className={`pill ${!status ? "on" : ""}`} href={qs(active, { status: undefined })}>All</a>
+            {STATUS_OPTS.map((sv) => (
+              <a key={sv} className={`pill ${status === sv ? "on" : ""}`} href={qs(active, { status: sv })}>
+                {sv} <span className="muted">{countStatus(sv)}</span>
+              </a>
+            ))}
+          </div>
+        </div>
       </div>
 
-      <div style={{ marginTop: 16, maxWidth: 520 }}>
-        <Card title="Add a team member">
-          <form action={addMember} className="card-pad stack">
-            <input name="name" placeholder="Name" required />
-            <input name="role" placeholder="Role (e.g. Content Lead, Kenya Field, VA)" />
-            <input name="email" placeholder="Email (optional)" type="email" />
-            <input name="phone" placeholder="Phone / WhatsApp (optional)" />
-            <button className="btn" type="submit" style={{ alignSelf: "flex-start" }}>
-              <UserPlus size={15} /> Add member
-            </button>
-          </form>
-        </Card>
-      </div>
+      {rows.length > 0 ? (
+        <div className="grid cols-3">
+          {rows.map((m) => (
+            <TeamPeek key={m.id} m={m} openTasks={openTasks(m.id)} />
+          ))}
+        </div>
+      ) : (
+        <div className="card">
+          <div className="empty">
+            <div className="flex" style={{ justifyContent: "center", marginBottom: 12 }}>
+              <span className="aico gray" style={{ width: 44, height: 44 }}><Users size={20} /></span>
+            </div>
+            {isFiltered ? (
+              <>No team members match these filters yet.</>
+            ) : (
+              <>No team members yet. Add your first one above. The WhatsApp bot will populate the rest once it is live.</>
+            )}
+          </div>
+        </div>
+      )}
     </Shell>
   );
 }

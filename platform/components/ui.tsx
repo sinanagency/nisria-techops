@@ -18,7 +18,7 @@ export function Meter({ pct }: { pct: number }) {
   );
 }
 
-type Tone = "" | "teal" | "purple" | "yellow" | "green" | "gold" | "red" | "blue" | "gray";
+type Tone = "" | "teal" | "peri" | "purple" | "yellow" | "green" | "gold" | "red" | "blue" | "gray";
 export function Badge({ children, tone = "" }: { children: React.ReactNode; tone?: Tone }) {
   return <span className={`badge ${tone}`}>{children}</span>;
 }
