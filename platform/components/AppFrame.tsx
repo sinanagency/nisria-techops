@@ -7,6 +7,7 @@ import CommandPalette from "./CommandPalette";
 import ContextBar from "./ContextBar";
 import VoiceDock from "./VoiceDock";
 import NotifBell from "./NotifBell";
+import ActivityChip from "./ActivityChip";
 import { logout } from "../app/login/actions";
 import { TabsProvider, useTabs } from "./tabs-context";
 import {
@@ -124,6 +125,7 @@ function TopNav() {
             <Search size={15} /> <span>Search anything…</span> <kbd>⌘K</kbd>
           </button>
           <Link href="/smart" className={`navpill smartbtn ${path === "/smart" ? "active" : ""}`} title="Smart Mode"><Wand2 size={16} /> Smart</Link>
+          <ActivityChip />
           <NotifBell />
           <div className="dropwrap" ref={avRef}>
             <button className="avatar" title="Nur" onClick={() => setAvOpen((o) => !o)}>N</button>

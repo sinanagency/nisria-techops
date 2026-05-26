@@ -4,14 +4,15 @@ import GrantPeek from "../../components/GrantPeek";
 import PrepareAllButton from "../../components/PrepareAllButton";
 import AddGrantButton from "../../components/AddGrantButton";
 import { admin, money, date } from "../../lib/supabase-admin";
-import { prepareGrant, advanceStatus, pursueOpportunity, declineGrant } from "./actions";
-import { Sparkles, ArrowRight, Compass, ExternalLink, Send, X } from "lucide-react";
+import { advanceStatus, declineGrant } from "./actions";
+import { PrepareGrantButton, PursueButton } from "../../components/GrantQuickActions";
+import { ArrowRight, Compass, ExternalLink, Send, X } from "lucide-react";
 
 export const dynamic = "force-dynamic";
-// The "Prepare all ready" server action runs buildApplication (a long-form
-// Claude generation, ~80s each) for a few grants, so this segment asks for the
-// extended budget. The action itself caps the batch (idempotent + skip-prepared).
-export const maxDuration = 300;
+// The slow grant prepare (long-form Claude generation, ~80s each) no longer runs
+// on this route. Clicks enqueue a background job and the worker at
+// /api/grants/prepare does the work on its own request, so this page stays fast
+// and navigation is never blocked. No extended budget needed here anymore.
 
 const COLUMNS: { key: string; label: string }[] = [
   { key: "researching", label: "Researching" },
@@ -82,7 +83,7 @@ export default async function Grants() {
                   {o.close_date && <Badge tone="gold">due {o.close_date}</Badge>}
                 </div>
                 <div className="flex" style={{ marginTop: 12, gap: 8 }}>
-                  <form action={pursueOpportunity}><input type="hidden" name="id" value={o.id} /><button className="btn sm teal" type="submit">Pursue</button></form>
+                  <PursueButton id={o.id} />
                   {o.url && <a className="pill" href={o.url} target="_blank" rel="noreferrer"><ExternalLink size={12} /> View</a>}
                 </div>
               </div>
@@ -134,15 +135,10 @@ export default async function Grants() {
                       </div>
 
                       {/* Researching / drafting still need a package — manual
-                          prepare stays available, but the agent auto-prepares
-                          these into review on its own. */}
+                          prepare stays available (now BACKGROUND, non-blocking),
+                          but the agent auto-prepares these into review on its own. */}
                       {["researching", "drafting"].includes(s) && (
-                        <form action={prepareGrant} style={{ marginTop: 10 }}>
-                          <input type="hidden" name="id" value={g.id} />
-                          <button className="btn teal sm full" type="submit">
-                            <Sparkles size={14} /> {prepared ? "Re-prepare with AI" : "Prepare application"}
-                          </button>
-                        </form>
+                        <PrepareGrantButton id={g.id} prepared={prepared} />
                       )}
 
                       {/* Full prepared package — opens a centered peek modal. */}

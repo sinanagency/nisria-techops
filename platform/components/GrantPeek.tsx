@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Badge } from "./ui";
 import Modal from "./Modal";
 import { advanceStatus, prepareGrant, declineGrant } from "../app/grants/actions";
-import { Maximize2, ExternalLink, Send, Sparkles, X } from "lucide-react";
+import { Maximize2, ExternalLink, Send, Sparkles, X, Loader2 } from "lucide-react";
 
 // Lightweight markdown renderer — enough for the prepared package
 // (## headings, ### subheadings, **bold**, - bullets, --- rules, paragraphs).
@@ -63,11 +64,24 @@ function renderMarkdown(md: string) {
 
 export default function GrantPeek({ g }: { g: any }) {
   const [open, setOpen] = useState(false);
+  const router = useRouter();
+  const [reqPending, startReq] = useTransition();
+  const [requeued, setRequeued] = useState(false);
   const hasPkg = !!(g.notes && String(g.notes).trim());
   const status = (g.status || "").toLowerCase();
   const canSubmit = status !== "submitted" && status !== "won" && status !== "lost";
   // A prepared grant awaiting Nur's call: accept (submit) or decline.
   const inReview = status === "review";
+
+  // Re-prepare is now a BACKGROUND job (non-blocking): enqueue + return, the
+  // worker rebuilds the package on its own request. The click never waits ~80s.
+  function reprepare() {
+    startReq(async () => {
+      await prepareGrant(g.id);
+      setRequeued(true);
+      router.refresh();
+    });
+  }
 
   return (
     <>
@@ -109,10 +123,10 @@ export default function GrantPeek({ g }: { g: any }) {
             {g.link && (
               <a className="pill" href={g.link} target="_blank" rel="noreferrer"><ExternalLink size={12} /> Open funder portal</a>
             )}
-            <form action={prepareGrant}>
-              <input type="hidden" name="id" value={g.id} />
-              <button className="btn sm ghost" type="submit"><Sparkles size={13} /> {hasPkg ? "Re-prepare with AI" : "Prepare with AI"}</button>
-            </form>
+            <button type="button" className="btn sm ghost" onClick={reprepare} disabled={reqPending || requeued}>
+              {reqPending ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
+              {requeued ? "Preparing in background…" : hasPkg ? "Re-prepare with AI" : "Prepare with AI"}
+            </button>
           </>
         }
       >

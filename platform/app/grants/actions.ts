@@ -2,8 +2,7 @@
 import { admin } from "../../lib/supabase-admin";
 import { emit } from "../../lib/events";
 import { revalidatePath } from "next/cache";
-import { buildApplication } from "../../lib/agents/grant";
-import { autoPrepareReadyGrants } from "../../lib/agents/grant-autoprepare";
+import { enqueueJob, triggerWorker, jobCounts } from "../../lib/jobs";
 
 export async function addGrant(fd: FormData) {
   const funder = String(fd.get("funder") || "").trim();
@@ -29,13 +28,15 @@ export async function addGrant(fd: FormData) {
   revalidatePath("/grants");
 }
 
-// Pursue a discovered opportunity (from the grant hunter) → create a pipeline application.
-export async function pursueOpportunity(fd: FormData) {
-  const id = String(fd.get("id"));
-  if (!id) return;
+// Pursue a discovered opportunity (from the grant hunter) → create a pipeline
+// application, then queue the (slow) AI prepare as a BACKGROUND job and return
+// instantly. The click is one cheap insert + one enqueue: never the 15-80s
+// Claude call, so navigation is never trapped behind it.
+export async function pursueOpportunity(id: string): Promise<{ ok: boolean }> {
+  if (!id) return { ok: false };
   const db = admin();
   const { data: o } = await db.from("grant_opportunities").select("*").eq("id", id).single();
-  if (!o) return;
+  if (!o) return { ok: false };
   const { data: grant } = await db.from("grant_applications").insert({
     funder: o.funder || o.title, program: o.title,
     amount_requested: o.amount_floor || o.amount_ceiling || null,
@@ -45,7 +46,10 @@ export async function pursueOpportunity(fd: FormData) {
   }).select().single();
   await db.from("grant_opportunities").update({ pursued: true }).eq("id", id);
   await emit({ type: "grant.added", source: "grant-hunter", actor: "Nur", subject_type: "grant", subject_id: grant?.id, payload: { funder: o.funder, source: o.source } });
+  // Queue the prepare in the background; fire the worker so it starts now.
+  if (grant?.id) { await enqueueJob("grant.prepare", grant.id, { funder: o.funder || o.title }); triggerWorker("/api/grants/prepare"); }
   revalidatePath("/grants");
+  return { ok: true };
 }
 
 // Prepare a COMPLETE, submission-ready application package for a grant.
@@ -56,50 +60,68 @@ export async function pursueOpportunity(fd: FormData) {
 //
 // (Auto-fill / auto-submit to the funder's portal via a browser is the next
 // phase; this v1 prepares 100% of the written package, nothing is submitted.)
-export async function prepareGrant(fd: FormData) {
-  const id = String(fd.get("id"));
-  if (!id) return;
+//
+// NON-BLOCKING: this no longer runs Claude inline. It enqueues a background
+// prepare job and fires the worker, then returns immediately. The actual
+// buildApplication runs on the worker's own request (/api/grants/prepare), so
+// the click is instant and the founder can navigate away mid-prepare.
+export async function prepareGrant(id: string): Promise<{ ok: boolean; queued: boolean }> {
+  if (!id) return { ok: false, queued: false };
   const db = admin();
-  const { data: g } = await db.from("grant_applications").select("*").eq("id", id).single();
-  if (!g) return;
-
-  const pkg = await buildApplication({
-    funder: g.funder,
-    program: g.program,
-    amount_requested: g.amount_requested,
-    currency: g.currency,
-    deadline: g.deadline,
-    link: g.link,
-  });
-
-  await db.from("grant_applications").update({ notes: pkg, status: "review" }).eq("id", id);
-
+  const { data: g } = await db.from("grant_applications").select("id,funder,program").eq("id", id).single();
+  if (!g) return { ok: false, queued: false };
+  await enqueueJob("grant.prepare", g.id, { funder: g.funder, program: g.program });
+  triggerWorker("/api/grants/prepare");
   await emit({
-    type: "grant.prepared",
-    source: "agent:grants",
-    actor: "AI",
-    subject_type: "grant",
-    subject_id: id,
-    payload: { funder: g.funder, program: g.program, funder_page: g.link ? "fetched" : "none" },
+    type: "grant.prepare_queued", source: "grants", actor: "Nur",
+    subject_type: "grant", subject_id: id, payload: { funder: g.funder, program: g.program },
   });
   revalidatePath("/grants");
+  return { ok: true, queued: true };
 }
 
-// Back-compat alias: anything still calling draftGrant now prepares the full
-// package via the Grant agent.
+// "Prepare all ready" — queue background prepare jobs for every un-prepared
+// application (capped), then fire the worker once. Returns INSTANTLY with how
+// many were queued; the worker drains them on its own requests and the daily
+// cron is the backstop. Idempotent: enqueueJob skips grants that already have an
+// open job, so tapping again never piles up duplicates.
+export async function prepareAllReady(): Promise<{ queued: number; alreadyQueued: number; considered: number }> {
+  const db = admin();
+  const { data } = await db
+    .from("grant_applications")
+    .select("id,funder,program,notes,status")
+    .in("status", ["researching", "drafting"])
+    .order("deadline", { ascending: true, nullsFirst: false })
+    .limit(50);
+  const needs = (data || []).filter((g: any) => !(g.notes && String(g.notes).trim()));
+
+  // Cap how many we queue per tap (matches the worker ceiling). Idempotent via
+  // enqueueJob's open-job dedupe, so re-tapping continues the queue safely.
+  const CAP = 5;
+  let queued = 0, alreadyQueued = 0;
+  const counts = await jobCounts("grant.prepare");
+  const open = counts.queued + counts.running;
+  for (const g of needs.slice(0, CAP)) {
+    const before = await jobCounts("grant.prepare");
+    const id = await enqueueJob("grant.prepare", g.id, { funder: g.funder, program: g.program });
+    const after = await jobCounts("grant.prepare");
+    if (id && after.queued + after.running > before.queued + before.running) queued++;
+    else alreadyQueued++;
+  }
+  if (queued > 0 || open > 0) triggerWorker("/api/grants/prepare");
+  revalidatePath("/grants");
+  return { queued, alreadyQueued, considered: needs.length };
+}
+
+// Back-compat alias for any caller still referencing draftGrant.
 export const draftGrant = prepareGrant;
 
-// "Prepare all ready" — the manual trigger for the same batch the daily refresh
-// runs. Auto-pursues the strongest opportunities, then prepares un-prepared
-// applications (HIGH first) into "Prepared · review", capped at MAX_PER_RUN
-// Claude calls. Idempotent: re-running only touches grants that still need a
-// package, so Nur can tap it whenever she wants the pipeline topped up.
-export async function prepareAllReady() {
-  // Prepare a few per tap so the batch reliably finishes inside the server
-  // action time budget; it is idempotent, so tapping again continues the queue.
-  const res = await autoPrepareReadyGrants({ limit: 3 });
-  revalidatePath("/grants");
-  return res;
+// Live status for the quiet "preparing…" chip on the grants page (and the
+// global activity chip). Cheap count query, safe to poll. NEVER drives a
+// navigation-blocking transition: the client polls this and updates a chip only.
+export async function getPrepareStatus(): Promise<{ queued: number; running: number; active: number }> {
+  const { queued, running } = await jobCounts("grant.prepare");
+  return { queued, running, active: queued + running };
 }
 
 // Decline a prepared grant: Nur looked at the prepared package and chose not to
