@@ -208,10 +208,16 @@ Net: of 6 agents shown, 2 real, 1 half, 3 placeholders. One loop, one actuator (
     and fix any that didn't migrate.
 41. **Tab strip shows raw UUIDs** ("Fad65b6d 4ba4 49a6 A…", #149) — show a real title or remove the tab.
 
-42. **Floating nav scroll bleed.** On scroll-up, page content (e.g. the "Document Studio" heading)
-    shows ABOVE/behind the floating pill nav, there's a transparent gap above the nav so content
-    peeks over the top. The nav needs a solid/opaque masked strip above+behind it so scrolled content
-    is cleanly hidden, never bleeding above it. (Fold into the chrome cleanup, R2-3.)
+42. **Floating nav scroll bleed — GLOBAL (every page/function, his emphasis "fix throughout").**
+    On scroll-up, page content shows ABOVE/behind the floating pill nav (transparent gap above the
+    nav). Fix once at the shell/nav level (opaque masked strip above+behind the floating nav, or fix
+    the scroll container offset) so it corrects ALL routes at once. Owned by R2-2 (nav/shell agent).
+
+43. **Studio docs attachable to emails.** Document Studio output must be downloadable/attachable
+    (PDF) so a generated doc can be attached to an outbound email when needed (inbox reply, donor
+    composer, grant submission). Wire Studio output → the email send path. (R2-5 email pass.)
+44. **Branded email signature.** Outbound emails need a custom signature block with the Nisria /
+    Maisha / AHADI logo + org details, auto-appended (per account). (R2-5 email pass.)
 
 ## Instruction
 GO given 2026-05-26 PM. Round 2 building sequentially (R2-1 speed → R2-2 focus-sheet+tabs →
