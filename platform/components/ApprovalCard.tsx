@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Badge } from "./ui";
 import { useTabs, type OpenSheet, type Sibling } from "./tabs-context";
 import { decideApproval } from "../app/approvals/actions";
+import { stripDashes } from "../lib/humanize";
 import AttachPicker from "./AttachPicker";
 import { Send, Sparkles, Maximize2 } from "lucide-react";
 
@@ -25,8 +26,11 @@ function acctChip(account?: string | null): { label: string; cls: string } | nul
 // the "expand" button opens — large, centered, minimizable to the tab strip.
 function ReplyEditor({ a, original }: { a: any; original?: { subject?: string; body?: string; from?: string } | null }) {
   const editable = a.kind === "email_reply" || a.kind === "donor_thankyou";
-  const [subject, setSubject] = useState(a.proposed?.subject || "");
-  const [body, setBody] = useState(a.proposed?.body || "");
+  // Dash-clean on render: a pre-gate draft (queued before the humanize wiring)
+  // can still carry an em-dash. Strip it for display/edit/send while preserving
+  // legitimate brackets in a subject. New drafts are already clean at generation.
+  const [subject, setSubject] = useState(stripDashes(a.proposed?.subject || ""));
+  const [body, setBody] = useState(stripDashes(a.proposed?.body || ""));
   const [busy, setBusy] = useState(false);
   const [attachRefs, setAttachRefs] = useState<string[]>([]);
 
@@ -163,9 +167,9 @@ export default function ApprovalCard({
       {editable ? (
         <>
           <div className="faint" style={{ fontSize: 12, marginBottom: 6 }}>To {a.proposed?.to || "—"}</div>
-          {a.proposed?.subject && <div className="strong" style={{ fontSize: 13, marginBottom: 4 }}>{a.proposed.subject}</div>}
+          {a.proposed?.subject && <div className="strong" style={{ fontSize: 13, marginBottom: 4 }}>{stripDashes(a.proposed.subject)}</div>}
           <div style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.5, marginBottom: 10, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-            {a.proposed?.body || "—"}
+            {stripDashes(a.proposed?.body || "—")}
           </div>
           {/* compact: primary only + open-to-edit. Editing/Improve/Attach/Decline live in the Focus Tab. */}
           <div className="flex wrap">

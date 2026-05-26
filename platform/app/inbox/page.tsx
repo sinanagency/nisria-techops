@@ -164,7 +164,7 @@ export default async function Inbox({ searchParams }: { searchParams: { c?: stri
 
               {!individual && !draft && (
                 <div className="card" style={{ padding: 14, boxShadow: "none", background: "var(--surface-2)" }}>
-                  <span className="muted" style={{ fontSize: 12.5 }}>Automated sender — no reply needed. Sasa extracts anything useful (donations, alerts) automatically.</span>
+                  <span className="muted" style={{ fontSize: 12.5 }}>Automated sender, no reply needed. Sasa extracts anything useful (donations, alerts) automatically.</span>
                 </div>
               )}
             </>

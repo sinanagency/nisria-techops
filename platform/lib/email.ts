@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { admin } from "./supabase-admin";
 import { getLogo, logoImgTag } from "./logos";
+import { stripDashes } from "./humanize";
 
 // Sends from the org Gmail mailbox via SMTP (app password). Server-only env.
 //
@@ -84,6 +85,13 @@ export async function sendEmail(to: string, subject: string, text: string, opts:
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
   if (!user || !pass) throw new Error("SMTP not configured");
+
+  // THE send chokepoint: no email ever leaves with an em/en dash, no matter which
+  // path queued it (a pre-gate draft, a compact-card approve that sends the stored
+  // proposal, or an edited reply). Dash-only so a legitimate bracket like a
+  // funder's "[STP 10th Cohort]" subject tag is preserved.
+  subject = stripDashes(subject);
+  text = stripDashes(text);
 
   const { fromName, signatureHtml } = await signatureFor(opts.account);
 

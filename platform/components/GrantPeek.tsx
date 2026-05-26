@@ -174,13 +174,16 @@ function buildGrantSheet(g: any, closeSheet: (id: string) => void, siblings?: an
     : undefined;
   return {
     id,
-    title: (g.funder || "Grant").slice(0, 28),
+    title: (g.funder || "Grant").slice(0, 40),
     icon: "award",
     group: "grants",
     siblings: sibs,
     titleExtra: (
       <>
-        {g.program && <Badge tone="gray">{g.program}</Badge>}
+        {/* The program/opportunity name can be a full sentence (e.g. the USDA
+            McGovern-Dole title). Show it as muted text that WRAPS, not a giant
+            pill that overflows the header. The status stays a compact badge. */}
+        {g.program && <span className="muted" style={{ fontSize: 12, lineHeight: 1.4, wordBreak: "break-word" }}>{g.program}</span>}
         <Badge tone={inReview ? "green" : "teal"}>{inReview ? "ready" : g.status}</Badge>
       </>
     ),

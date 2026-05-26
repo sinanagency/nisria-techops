@@ -128,7 +128,7 @@ You have READ access to the entire database through tools. ALWAYS use a tool to 
       }
       convo.push({ role: "user", content: results });
     }
-    return NextResponse.json({ reply: "That took too many steps — try narrowing the question." });
+    return NextResponse.json({ reply: "That took too many steps. Try narrowing the question." });
   } catch (e: any) {
     return NextResponse.json({ reply: `⚠️ ${e?.message || "Assistant error"}` }, { status: 200 });
   }

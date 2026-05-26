@@ -13,7 +13,7 @@ export async function dispatchTasks(_prev: DispatchState, formData: FormData): P
   if (!instruction) return { error: "Tell me what you want done." };
   const db = admin();
   const { data: team } = await db.from("team_members").select("id,name,role,email").eq("status", "active");
-  const roster = (team || []).map((t: any) => `${t.name} — ${t.role}`).join("; ") || "(no team yet)";
+  const roster = (team || []).map((t: any) => `${t.name}: ${t.role}`).join("; ") || "(no team yet)";
 
   const parsed = await claudeJSON<{ tasks: { title: string; description?: string; assignee_name?: string; priority?: string; due_on?: string | null }[] }>(
     `You turn a nonprofit founder's instruction into concrete, assigned tasks. Active team: ${roster}.

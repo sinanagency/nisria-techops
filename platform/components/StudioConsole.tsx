@@ -174,7 +174,7 @@ export default function StudioConsole() {
             <div className="flex" style={{ gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
               {/* R4-8: auto width + a min so the longest option ("Nisria
                   letterhead") is never clipped to "Nisria letterhea⌄". */}
-              <select value={brand} onChange={(e) => setBrand(e.target.value)} disabled={busy} style={{ width: "auto", minWidth: 168 }}>
+              <select value={brand} onChange={(e) => setBrand(e.target.value)} disabled={busy} style={{ width: "auto", minWidth: 200 }}>
                 {BRANDS.map((b) => <option key={b.v} value={b.v}>{b.l} letterhead</option>)}
               </select>
               <button type="button" className="btn teal sm" onClick={run} disabled={busy || !prompt.trim()}>

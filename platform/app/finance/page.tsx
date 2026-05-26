@@ -269,8 +269,8 @@ export default async function Finance() {
             </div>
           </div>
           <div className="faint" style={{ fontSize: 11.5, marginTop: 16, lineHeight: 1.5 }}>
-            Payouts are in USD and Kenya spend is in KES, so they are shown side by side without converting —
-            you read "withdrew this much, paid this much on the ground." Payouts sync automatically from Givebutter;
+            Payouts are in USD and Kenya spend is in KES, so they are shown side by side without converting.
+            You read "withdrew this much, paid this much on the ground." Payouts sync automatically from Givebutter;
             log one manually below if a withdrawal hasn’t synced yet.
             {kenyaSpentKes === 0 && kenyaSpentUsd === 0 ? (
               <>

@@ -134,7 +134,7 @@ export async function declineGrant(fd: FormData) {
   if (!id) return;
   const db = admin();
   const { data: g } = await db.from("grant_applications").select("funder,program,notes").eq("id", id).single();
-  const declineNote = `\n\n---\n_Declined by Nur on ${new Date().toISOString().slice(0, 10)} — not pursued._`;
+  const declineNote = `\n\n---\n_Declined by Nur on ${new Date().toISOString().slice(0, 10)}, not pursued._`;
   await db.from("grant_applications").update({
     status: "lost",
     decision_on: new Date().toISOString(),

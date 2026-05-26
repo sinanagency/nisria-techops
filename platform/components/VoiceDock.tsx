@@ -141,7 +141,7 @@ export default function VoiceDock() {
         </div>
       )}
 
-      <button className={`dock-orb ${listening ? "listening" : ""}`} onClick={() => setOpen((o) => !o)} title="Sasa — your AI assistant">
+      <button className={`dock-orb ${listening ? "listening" : ""}`} onClick={() => setOpen((o) => !o)} title="Sasa, your AI assistant">
         {open ? <X size={22} /> : <Sparkles size={22} />}
       </button>
     </div>

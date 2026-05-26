@@ -32,11 +32,19 @@ export default function FocusSheetHost() {
 
   const goSibling = useCallback(
     (s: { build: () => any } | null) => {
-      if (!s) return;
-      // open the neighbour in place (same overlay), keeping the set so arrows persist
-      openSheet(s.build());
+      if (!s || !open) return;
+      const payload = s.build();
+      if (payload.id === open.id) return; // already showing this neighbour
+      // Swap in place (same overlay): DROP the current sibling first so stepping
+      // prev/next never leaves a trail of minimized "Reply to …" tabs across the
+      // strip. The neighbour opens as the single focused sheet, keeping the set
+      // so the arrows persist. Because its id differs, the keyed sheet-body below
+      // remounts — re-initialising any editable state (the reply subject/body) to
+      // THIS sibling, instead of showing the previous one's stale text.
+      closeSheet(open.id);
+      openSheet(payload);
     },
-    [openSheet]
+    [open, closeSheet, openSheet]
   );
 
   useEffect(() => {
@@ -86,24 +94,34 @@ export default function FocusSheetHost() {
         style={{ maxWidth: open.width ? `min(${open.width}px, 92vw)` : "min(920px, 92vw)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sheet-head">
-          <div className="flex" style={{ gap: 10, minWidth: 0 }}>
+        <div className="sheet-head" style={{ alignItems: "flex-start" }}>
+          <div className="flex" style={{ gap: 10, minWidth: 0, alignItems: "flex-start", flex: 1 }}>
             {hasSibs && (
-              <div className="flex sheet-nav" style={{ gap: 2 }}>
+              <div className="flex sheet-nav" style={{ gap: 2, flexShrink: 0, marginTop: 1 }}>
                 <button type="button" className="expandbtn tip-host tip-below" data-tip="Previous" aria-label="Previous item" onClick={() => goSibling(prev)}><ChevronLeft size={18} /></button>
                 <span className="faint sheet-nav-count" aria-hidden="true">{idx + 1}/{sibs.length}</span>
                 <button type="button" className="expandbtn tip-host tip-below" data-tip="Next" aria-label="Next item" onClick={() => goSibling(next)}><ChevronRight size={18} /></button>
               </div>
             )}
-            <h3 style={{ fontSize: 18, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{open.title}</h3>
-            {open.titleExtra}
+            {/* Title + meta STACK vertically: the title gets the full width and
+                wraps (up to 2 lines, break-word) so it is never clipped to
+                "Foreign Agric…", and titleExtra (badges / a long funder program)
+                wraps on its own row below instead of squeezing the title. */}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <h3 style={{ fontSize: 18, lineHeight: 1.25, margin: 0, wordBreak: "break-word", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{open.title}</h3>
+              {open.titleExtra && (
+                <div className="flex wrap" style={{ gap: 6, rowGap: 5, marginTop: 5, alignItems: "center" }}>{open.titleExtra}</div>
+              )}
+            </div>
           </div>
-          <div className="flex" style={{ gap: 4 }}>
+          <div className="flex" style={{ gap: 4, flexShrink: 0 }}>
             <button type="button" className="expandbtn tip-host tip-below" data-tip="Minimize to tabs" aria-label="Minimize to tab strip" onClick={() => minimizeSheet(open.id)}><Minus size={18} /></button>
             <button type="button" className="expandbtn tip-host tip-below" data-tip="Close" aria-label="Close" onClick={() => closeSheet(open.id)}><X size={18} /></button>
           </div>
         </div>
-        <div className="sheet-body">{open.render()}</div>
+        {/* key by the sheet id: stepping to a sibling REMOUNTS the body, so an
+            editable reply re-initialises to the new sibling (no stale subject/body). */}
+        <div className="sheet-body" key={open.id}>{open.render()}</div>
         {open.footer && <div className="sheet-foot">{open.footer}</div>}
       </div>
     </div>

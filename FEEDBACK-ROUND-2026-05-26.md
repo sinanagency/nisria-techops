@@ -320,3 +320,44 @@ GO given 2026-05-26 PM. Round 2 building sequentially (R2-1 speed → R2-2 focus
 R2-3 grants/chrome/dupes/#42 nav-bleed → R2-4 grant-aware onboarding). Ping when Round 2 done, then
 carry on to remaining actionable backlog (true PDF, QA sweep) until exhausted; flag the
 his-input-blocked items (WhatsApp number, Canva/Drive keys) rather than faking them.
+
+---
+
+## Round 5 (2026-05-26, evening screenshots 198-206) — verified live
+
+Founder on a walk, "expect to see all sorted." Each fixed as a shared-primitive
+class so it cannot recur.
+
+- **R5-1 Reply not changing on prev/next (198-201).** Root: `ReplyEditor` keeps
+  subject/body in `useState`; stepping to a sibling reused the same React tree
+  position, so state never re-initialised (the To/incoming updated, the editable
+  fields stayed stale). Confirmed via DB the drafts ARE distinct + correct per
+  recipient (Vrundaa=apparel, Havar=$500 thank-you, Global=STP). Fix CLASS:
+  `FocusSheet` keys `.sheet-body` by `open.id` so any sibling swap REMOUNTS the
+  body. Applies to every sibling set (replies, grants, donors).
+- **R5-2 Tasks composer (202).** Empty-state restructured to a flex column: "No
+  open tasks." centered, the Ask-Sasa entry bar pinned bottom-center.
+- **R5-3 Minimized tabs haunt every page (203).** Two causes: (a) `goSibling`
+  opened a new-id sheet and minimized the old, trailing a "Reply to …" tab per
+  step, now swaps in place (close old, open new); (b) sheets persisted across
+  navigation, now cleared on pathname change in `tabs-context`. Route tabs (route
+  backed) still persist; only in-memory sheet overlays reset.
+- **R5-4 Recent-docs overflow (204).** Real cause was horizontal text overflow
+  (the inner flex lacked `min-width:0`), not z-index. `StudioDocCard`: flex
+  `min-width:0`, button `overflow:hidden`, prompt → 2-line clamp + break-word.
+- **R5-5 Letterhead select clipped (205).** Studio brand select min-width 168→200.
+- **R5-6 Grant/settings tab title clipped (206).** `FocusSheet` header now STACKS
+  title over titleExtra; title wraps (2-line clamp, break-word) at full width.
+  `GrantPeek` renders the long funder program as muted wrapping text, not a giant
+  badge that squeezed the title.
+- **Bonus em-dash recurrence (the founder's #1 rule).** Found em-dashes in: stored
+  pre-gate thank-you subjects, the AI daily brief ("decisions—worth a quick scan"),
+  the dock tooltip, and several static prose strings. Closed the CLASS at every
+  layer: send chokepoint (`sendEmail` strips dashes on every send, brackets
+  preserved), generation (`conductor` brief now humanized), render (`getBrief`,
+  `ReplyEditor`, `ApprovalCard` strip on display), data (re-cleaned 3 pending
+  approval rows, brackets like "[STP 10th Cohort]" preserved), and swept all
+  visible prose em-dashes in source. Live: home HTML em-dash count 0 (was 2).
+- Latent bug fixed in passing: compact-card "Approve & send" sent empty subject/body
+  (overwrote the stored draft with blanks); `decideApproval` now only treats
+  subject/body as edits when the form carried them.

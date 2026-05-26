@@ -122,6 +122,14 @@ export function TabsProvider({ children }: { children: React.ReactNode }) {
     setTabs((prev) => (prev.find((t) => t.href === pathname) ? prev : [...prev, deriveTab(pathname)]));
   }, [pathname]);
 
+  // Focus sheets are in-memory overlays tied to the view you opened them from (a
+  // reply, a grant, a donor). When the founder NAVIGATES to another section, drop
+  // them — otherwise minimized "Reply to …" tabs trail across every page (feedback).
+  // They reopen from their source list in one tap, and opening a sheet does not
+  // change the pathname, so this only fires on real navigation. Route tabs above
+  // are route-backed and intentionally persist; only the sheet overlays reset.
+  useEffect(() => { setSheets([]); }, [pathname]);
+
   const closeTab = useCallback((href: string) => {
     setTabs((prev) => {
       const next = prev.filter((t) => t.href !== href);

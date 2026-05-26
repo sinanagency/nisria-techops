@@ -126,7 +126,16 @@ export default async function MissionControl() {
         <div className="card">
           <div className="card-h"><a href="/tasks" style={{ textDecoration: "none" }} className="flex">Tasks <ChevronRight size={15} /></a></div>
           <div style={{ padding: "6px 16px" }}>
-            {(tasks || []).length === 0 && <div className="empty">No open tasks.<AskSasa prompt="Suggest and assign a task for the team based on what's happening right now." label="Ask Sasa to assign a task…" /></div>}
+            {(tasks || []).length === 0 && (
+              // empty state: message centered in the body, the "ask Sasa" entry
+              // bar pinned to the BOTTOM-center of the card (feedback).
+              <div style={{ display: "flex", flexDirection: "column", minHeight: 220 }}>
+                <div className="empty" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 16px" }}>No open tasks.</div>
+                <div style={{ paddingBottom: 14 }}>
+                  <AskSasa prompt="Suggest and assign a task for the team based on what's happening right now." label="Ask Sasa to assign a task…" />
+                </div>
+              </div>
+            )}
             {(tasks || []).map((t: any, i: number) => (
               <a key={i} href="/tasks" className="between" style={{ padding: "10px 0", borderTop: i ? "1px solid var(--line)" : "none", textDecoration: "none" }}>
                 <span style={{ fontSize: 13 }}>{t.title}</span>

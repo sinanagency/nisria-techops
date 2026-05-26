@@ -51,12 +51,14 @@ export default function StudioDocCard({ doc }: { doc: { id: string; title: strin
   }
 
   return (
-    <button type="button" className="card hover card-pad" style={{ textAlign: "left", cursor: "pointer", border: 0, width: "100%", font: "inherit" }} onClick={open}>
-      <div className="flex" style={{ gap: 10 }}>
+    <button type="button" className="card hover card-pad" style={{ textAlign: "left", cursor: "pointer", border: 0, width: "100%", maxWidth: "100%", overflow: "hidden", font: "inherit" }} onClick={open}>
+      <div className="flex" style={{ gap: 10, minWidth: 0 }}>
         <span className="aico teal" style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0 }}><FileText size={16} /></span>
-        <div style={{ minWidth: 0 }}>
+        {/* clamp + break-word so a long title/prompt can never bleed past the
+            card's right edge, regardless of the grid cell width. */}
+        <div style={{ minWidth: 0, flex: 1 }}>
           <div className="strong" style={{ fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.title}</div>
-          {doc.prompt && <div className="faint" style={{ fontSize: 11.5, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.prompt}</div>}
+          {doc.prompt && <div className="faint" style={{ fontSize: 11.5, marginTop: 2, overflow: "hidden", wordBreak: "break-word", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{doc.prompt}</div>}
         </div>
       </div>
       <div className="flex wrap" style={{ gap: 6, marginTop: 10 }}>

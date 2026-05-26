@@ -339,7 +339,7 @@ export async function confirmBeneficiary(fd: FormData) {
       .from("assets")
       .insert({
         type: "image",
-        title: `Beneficiary photo — ${full_name}`,
+        title: `Beneficiary photo: ${full_name}`,
         storage_path: photo_path,
         source: "beneficiary_intake",
         consent_required: true,
@@ -379,7 +379,7 @@ export async function confirmBeneficiary(fd: FormData) {
   // the public view, this stays in the service-role brain only.
   await remember({
     kind: "org_fact",
-    title: `Beneficiary intake — ${ref_code}`,
+    title: `Beneficiary intake: ${ref_code}`,
     content: `A child entered the ${program} program${gender ? `, ${gender}` : ""}${region ? `, from ${region}` : ""}.${needs ? ` Needs: ${needs}.` : ""}`,
     source_type: "beneficiary",
     source_id: row?.id,

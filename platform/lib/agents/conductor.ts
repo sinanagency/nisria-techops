@@ -2,6 +2,7 @@
 // right specialist. For now it writes the morning/standing brief from the live
 // snapshot + what the mesh did + what's waiting on her.
 import { claude, claudeJSON } from "../anthropic";
+import { humanize, withHumanSystem } from "../humanize";
 
 export type BriefPoint = { text: string; href: string };
 
@@ -11,11 +12,18 @@ export async function buildBriefPoints(ctx: {
   raisedMtd: string; raisedAll: string; donors: number; newMessages: number;
   pendingApprovals: number; openTasks: number; recentAgentActions: string[]; liveCampaigns: string[];
 }): Promise<{ summary: string; points: BriefPoint[] } | null> {
-  const system = `You are Sasa, Nisria's Chief-of-Staff AI. Write Nur a crisp, scannable brief as BULLET POINTS, not prose. 3-5 points, lead with what needs her. Each point is short (max ~12 words) and links to the most relevant screen.
+  const system = withHumanSystem(`You are Sasa, Nisria's Chief-of-Staff AI. Write Nur a crisp, scannable brief as BULLET POINTS, not prose. 3-5 points, lead with what needs her. Each point is short (max ~12 words) and links to the most relevant screen.
 Allowed href values ONLY: "/" (approvals/needs-you), "/inbox", "/donations", "/finance", "/tasks", "/content", "/agents", "/grants".
-Return JSON: {"summary":"one short warm line","points":[{"text":"...","href":"/..."}]}`;
+Return JSON: {"summary":"one short warm line","points":[{"text":"...","href":"/..."}]}`);
   const user = `Live: ${ctx.pendingApprovals} approvals waiting; ${ctx.newMessages} new messages; ${ctx.openTasks} open tasks; raised ${ctx.raisedMtd} this month (${ctx.raisedAll} all-time) from ${ctx.donors} donors; live campaigns: ${ctx.liveCampaigns.join(", ") || "none"}; agents recently: ${ctx.recentAgentActions.join("; ") || "quiet"}.`;
-  return claudeJSON<{ summary: string; points: BriefPoint[] }>(system, user, 500);
+  const r = await claudeJSON<{ summary: string; points: BriefPoint[] }>(system, user, 500);
+  if (!r) return null;
+  // humanize gate: brief points are shown verbatim on the dashboard, so they must
+  // never carry an em-dash or a placeholder (the founder's hard rule).
+  return {
+    summary: humanize(r.summary || ""),
+    points: (r.points || []).map((p) => ({ href: p.href, text: humanize(p.text || "") })),
+  };
 }
 
 export async function buildBrief(ctx: {
@@ -28,7 +36,7 @@ export async function buildBrief(ctx: {
   recentAgentActions: string[];
   liveCampaigns: string[];
 }): Promise<string> {
-  const system = `You are Sasa, Nisria's Chief-of-Staff AI. Write a short, warm "here's where things stand" brief for Nur, the founder. 3-5 sentences max. Lead with what needs her, then what the agents handled, then one useful observation. Concrete, no fluff, no markdown headers. Address her as "you".`;
+  const system = withHumanSystem(`You are Sasa, Nisria's Chief-of-Staff AI. Write a short, warm "here's where things stand" brief for Nur, the founder. 3-5 sentences max. Lead with what needs her, then what the agents handled, then one useful observation. Concrete, no fluff, no markdown headers. Address her as "you".`);
   const user = `Live state:
 - Raised this month: ${ctx.raisedMtd} (all-time ${ctx.raisedAll})
 - Donors: ${ctx.donors}
@@ -40,7 +48,7 @@ export async function buildBrief(ctx: {
 
 Write the brief.`;
   try {
-    return await claude(system, user, 320);
+    return humanize(await claude(system, user, 320));
   } catch {
     // graceful fallback if Claude is unreachable
     const bits = [];

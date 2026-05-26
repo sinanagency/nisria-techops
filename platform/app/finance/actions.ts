@@ -592,7 +592,7 @@ export async function logMpesa(fd: FormData) {
   const payee = parsed?.payee?.trim() || "M-Pesa payment";
   const ref = parsed?.ref?.trim() || null;
   const purpose = lowConfidence
-    ? "M-Pesa receipt — needs review (could not auto-read amount)"
+    ? "M-Pesa receipt, needs review (could not auto-read amount)"
     : "Logged from M-Pesa receipt";
   const paid_at = parsed?.date ? new Date(parsed.date).toISOString() : new Date().toISOString();
 

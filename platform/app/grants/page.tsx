@@ -154,7 +154,7 @@ export default async function Grants() {
       ) : (
         <>
           <div className="faint" style={{ fontSize: 12, marginBottom: 12 }}>
-            The Grant agent auto-prepares every application and parks it in <strong>Prepared · review</strong> — you just accept (Submit) or decline. Nothing to prepare by hand. Scroll the board left and right to see each stage.
+            The Grant agent auto-prepares every application and parks it in <strong>Prepared · review</strong>. You just accept (Submit) or decline. Nothing to prepare by hand. Scroll the board left and right to see each stage.
           </div>
           {/* horizontal kanban: columns side by side, board scrolls left/right (#36) */}
           <div className="gboard">
