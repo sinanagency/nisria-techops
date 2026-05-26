@@ -127,15 +127,24 @@ create table if not exists beneficiaries (
   brand_id        uuid references brands(id),
   ref_code        text unique,                       -- internal code, not PII
   full_name       text not null,                     -- PRIVATE
-  location        text,                              -- e.g. county/region in Kenya
-  category        text,                              -- education|food|health|shelter|livelihood
+  location        text,                              -- e.g. county/region in Kenya (PRIVATE)
+  region          text,                              -- broader area than `location` (PRIVATE)
+  category        text,                              -- legacy: education|food|health|shelter|livelihood
+  program         text                               -- structured program (see schema-beneficiaries-enrich.sql)
+                    check (program is null or program in ('safe_house','education','rescue','nutrition','other')),
+  date_of_birth   date,                              -- PRIVATE (derive age)
+  gender          text,                              -- PRIVATE
+  guardian_status text,                              -- e.g. orphan|single_parent|extended_family (PRIVATE)
   intake_date     date default current_date,
   story_private   text,                              -- full case notes (PRIVATE)
   needs           text,
-  status          text not null default 'active'     -- active|graduated|paused|exited
-                    check (status in ('active','graduated','paused','exited')),
+  tags            text[] default '{}',
+  photo_asset_id  uuid references assets(id) on delete set null, -- private bucket, signed-URL only
+  status          text not null default 'active'     -- active|graduated|transitioned|paused|exited|inactive
+                    check (status in ('active','graduated','transitioned','paused','exited','inactive')),
   -- public/profile layer
   consent_public  boolean not null default false,    -- explicit consent to show donors
+  consent_date    timestamptz,                       -- when consent_public was granted
   public_name     text,                              -- display name or alias for donors
   public_story    text,                              -- sanitized story
   photo_url       text,                              -- only if consent_public
@@ -144,7 +153,8 @@ create table if not exists beneficiaries (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
-create index if not exists idx_beneficiaries_status on beneficiaries (status);
+create index if not exists idx_beneficiaries_status  on beneficiaries (status);
+create index if not exists idx_beneficiaries_program on beneficiaries (program);
 create trigger trg_beneficiaries_updated before update on beneficiaries
   for each row execute function set_updated_at();
 
@@ -236,9 +246,12 @@ alter table outreach           enable row level security;
 alter table grant_applications enable row level security;
 
 -- Public, consent-gated beneficiary profiles for the donor-facing site.
+-- Exposes ONLY non-identifying, consented fields. NEVER full_name, location,
+-- region, guardian_status, date_of_birth or gender. (Extended in
+-- schema-beneficiaries-enrich.sql to add `program`.)
 create or replace view public_beneficiary_profiles as
 select id, brand_id, coalesce(public_name, 'Anonymous') as name,
-       category, public_story, photo_url, goal_amount, funded_amount,
+       program, category, public_story, photo_url, goal_amount, funded_amount,
        round(case when goal_amount > 0
                   then least(funded_amount / goal_amount, 1) * 100 else 0 end) as funded_pct
 from beneficiaries
