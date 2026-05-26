@@ -7,7 +7,7 @@ export default function Shell({
   children,
 }: {
   title: string;
-  sub?: string;
+  sub?: React.ReactNode;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {

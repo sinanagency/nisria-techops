@@ -4,6 +4,7 @@ import { admin, money, date } from "../../lib/supabase-admin";
 import { Search, Heart, Check, Clock } from "lucide-react";
 import { draftThankYouFor, draftAllThankYous } from "./actions";
 import DonationPeek from "../../components/DonationPeek";
+import { Money } from "../../components/Money";
 
 export const dynamic = "force-dynamic";
 
@@ -119,7 +120,14 @@ export default async function Donations({
     { key: "amount", label: "Amount", align: "right", render: (r: any) => <span className="strong money">{money(r.amount)}</span> },
   ];
 
-  const sub = `${rows.length} ${rows.length === 1 ? "gift" : "gifts"}${isFiltered ? ` · ${money(total)} matched` : ""}`;
+  // The matched-total carries .money (via <Money>) so the hide toggle blurs it
+  // like every other amount; the rest stays plain text.
+  const sub = (
+    <>
+      {rows.length} {rows.length === 1 ? "gift" : "gifts"}
+      {isFiltered ? <> · <Money amount={total} /> matched</> : ""}
+    </>
+  );
 
   return (
     <Shell
