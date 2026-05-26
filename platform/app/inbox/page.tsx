@@ -5,6 +5,7 @@ import { needsReplyCount } from "../../lib/counts";
 import { cleanEmail, snippet, isIndividual } from "../../lib/email-render";
 import { sendReply } from "./actions";
 import { decideApproval } from "../approvals/actions";
+import AiComposer from "../../components/AiComposer";
 import { Sparkles, Send, Mail, MessageCircle, Hash } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -146,16 +147,18 @@ export default async function Inbox({ searchParams }: { searchParams: { c?: stri
               )}
 
               {!draft && individual && toAddr && (
-                <form action={sendReply} className="card" style={{ padding: 16, boxShadow: "none" }}>
-                  <input type="hidden" name="contact_id" value={selected} />
-                  <input type="hidden" name="to" value={toAddr} />
-                  <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Reply to {toAddr}</div>
-                  <input name="subject" placeholder="Subject" defaultValue={`Re: ${thread[thread.length - 1]?.subject || ""}`} style={{ marginBottom: 8, fontSize: 13 }} />
-                  <textarea name="body" placeholder="Write a reply…" rows={4} style={{ fontSize: 13 }} />
-                  <div className="flex" style={{ marginTop: 10 }}>
-                    <button className="btn sm" type="submit"><Send size={13} /> Send</button>
-                  </div>
-                </form>
+                <AiComposer
+                  action={sendReply}
+                  className="card"
+                  formStyle={{ padding: 16, boxShadow: "none", display: "flex", flexDirection: "column", gap: 8 }}
+                  hidden={{ contact_id: String(selected), to: toAddr }}
+                  recipientLabel={`Reply to ${toAddr}`}
+                  defaultSubject={`Re: ${thread[thread.length - 1]?.subject || ""}`}
+                  bodyPlaceholder="Write a reply…"
+                  rows={4}
+                  sendLabel="Send"
+                  sendClass="btn sm teal"
+                />
               )}
 
               {!individual && !draft && (

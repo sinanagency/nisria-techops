@@ -4,6 +4,7 @@ import { TabTitle } from "../../../components/tabs-context";
 import { admin, money, date } from "../../../lib/supabase-admin";
 import { cleanEmail, snippet } from "../../../lib/email-render";
 import { emailContact } from "../actions";
+import AiComposer from "../../../components/AiComposer";
 import { Mail, DollarSign, Bot, MessageSquare, Send, Activity as ActIcon } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -151,19 +152,16 @@ export default async function Contact360({ params }: { params: { id: string } })
           </div>
 
           {c.email ? (
-            <form action={emailContact} style={{ borderTop: "1px solid var(--line)", padding: "16px 22px", display: "flex", flexDirection: "column", gap: 10 }}>
-              <input type="hidden" name="to" value={c.email} />
-              <input type="hidden" name="contact_id" value={id} />
-              <div className="between" style={{ gap: 10 }}>
-                <span className="muted" style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>Email {name}</span>
-                <span className="faint" style={{ fontSize: 12 }}>{c.email}</span>
-              </div>
-              <input name="subject" placeholder="Subject" defaultValue="A note from Nisria" required />
-              <textarea name="body" placeholder={`Write to ${name}…`} rows={4} required style={{ resize: "vertical" }} />
-              <div className="flex" style={{ justifyContent: "flex-end" }}>
-                <button type="submit" className="btn teal"><Send size={14} /> Send email</button>
-              </div>
-            </form>
+            <AiComposer
+              action={emailContact}
+              hidden={{ to: c.email, contact_id: id }}
+              recipientLabel={`Email ${name}`}
+              recipientEmail={c.email}
+              defaultSubject="A note from Nisria"
+              bodyPlaceholder={`Write to ${name}…`}
+              subjectRequired
+              bodyRequired
+            />
           ) : (
             <div className="empty" style={{ borderTop: "1px solid var(--line)" }}>No email on file for this contact.</div>
           )}

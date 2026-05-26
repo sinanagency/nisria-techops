@@ -4,6 +4,7 @@ import { TabTitle } from "../../../components/tabs-context";
 import { admin, money, date } from "../../../lib/supabase-admin";
 import { cleanEmail, snippet } from "../../../lib/email-render";
 import { emailContact } from "../../contacts/actions";
+import AiComposer from "../../../components/AiComposer";
 import { Mail, DollarSign, Bot, MessageSquare, Phone, Send, Activity as ActIcon, Tag } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -259,21 +260,17 @@ export default async function Donor360({ params }: { params: { id: string } }) {
           </div>
 
           {d.email ? (
-            <form action={emailContact} style={{ borderTop: "1px solid var(--line)", padding: "16px 22px", display: "flex", flexDirection: "column", gap: 10 }}>
-              <input type="hidden" name="to" value={d.email} />
-              <input type="hidden" name="contact_id" value={matchedContactId || ""} />
-              <div className="between" style={{ gap: 10 }}>
-                <span className="muted" style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>Email {donorName}</span>
-                <span className="faint" style={{ fontSize: 12 }}>{d.email}</span>
-              </div>
-              <input name="subject" placeholder="Subject" defaultValue="A note from Nisria" required />
-              <textarea name="body" placeholder={`Write to ${donorName}…`} rows={4} required style={{ resize: "vertical" }} />
-              <div className="flex" style={{ justifyContent: "flex-end" }}>
-                <button type="submit" className="btn teal">
-                  <Send size={14} /> Send email
-                </button>
-              </div>
-            </form>
+            <AiComposer
+              action={emailContact}
+              hidden={{ to: d.email, contact_id: matchedContactId || "" }}
+              recipientLabel={`Email ${donorName}`}
+              recipientEmail={d.email}
+              defaultSubject="A note from Nisria"
+              bodyPlaceholder={`Write to ${donorName}…`}
+              subjectRequired
+              bodyRequired
+              draftDonorId={id}
+            />
           ) : (
             <div className="empty" style={{ borderTop: "1px solid var(--line)" }}>No email on file for this donor.</div>
           )}

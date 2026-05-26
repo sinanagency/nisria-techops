@@ -2,6 +2,7 @@ import Shell from "../../components/Shell";
 import { Card, Table, Badge, Col, statusTone } from "../../components/ui";
 import { admin, money, date } from "../../lib/supabase-admin";
 import BeneficiaryPeek from "../../components/BeneficiaryPeek";
+import BeneficiaryIntake from "../../components/BeneficiaryIntake";
 import { Search, Lock } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -90,6 +91,11 @@ export default async function Beneficiaries({
 
   return (
     <Shell title="Beneficiaries" sub={sub} action={<Badge tone="gold">{publicCount} public profiles live</Badge>}>
+      {/* AI intake — photos / voice / text -> gated confirm. PII stays private. */}
+      <div style={{ marginBottom: 16 }}>
+        <BeneficiaryIntake />
+      </div>
+
       {/* filters */}
       <div className="card card-pad" style={{ marginBottom: 16 }}>
         <div className="stack" style={{ gap: 14 }}>
