@@ -5,6 +5,9 @@ import { addAccount, getGrantDocStatus } from "./actions";
 import BrainOnboarding from "../../components/BrainOnboarding";
 import GrantReadiness from "../../components/GrantReadiness";
 import SignatureEditor from "../../components/SignatureEditor";
+import MonthlyGoalEditor from "../../components/MonthlyGoalEditor";
+import { getMonthlyGoal } from "../../lib/org-settings";
+import { money } from "../../lib/supabase-admin";
 import { SECTION_KEYS } from "../../lib/brain";
 import { GRANT_DOC_SPECS } from "../../lib/grant-docs";
 import { Building2, Mail, Bot, MessageSquareQuote, ChevronRight, Plus } from "lucide-react";
@@ -13,7 +16,7 @@ export const dynamic = "force-dynamic";
 
 export default async function Settings() {
   const db = admin();
-  const [{ data: accounts }, { data: connectors }, { data: voice }, { data: profile }, { data: grantDocs }, grantStatus] = await Promise.all([
+  const [{ data: accounts }, { data: connectors }, { data: voice }, { data: profile }, { data: grantDocs }, grantStatus, monthlyGoal] = await Promise.all([
     db.from("email_accounts").select("*").order("created_at"),
     db.from("connector_registry").select("key,name,enabled"),
     db.from("agent_memory").select("title,content,brand").eq("kind", "brand_voice"),
@@ -25,6 +28,7 @@ export default async function Settings() {
       .order("created_at", { ascending: false })
       .limit(40),
     getGrantDocStatus(),
+    getMonthlyGoal(db),
   ]);
   const enabled = (connectors || []).filter((c: any) => c.enabled).length;
 
@@ -52,9 +56,12 @@ export default async function Settings() {
             <div className="between"><span className="muted">Org email</span><span>sasa@nisria.co</span></div>
             <div className="between"><span className="muted">Type</span><span>US nonprofit (Florida)</span></div>
             <div className="between"><span className="muted">Brands</span><span className="flex"><span className="chip nisria"><span className="bdot" />Nisria</span><span className="chip maisha"><span className="bdot" />Maisha</span><span className="chip ahadi"><span className="bdot" />AHADI</span></span></div>
-            <div className="between"><span className="muted">Monthly goal</span><span className="strong">$5,000</span></div>
+            <div className="between"><span className="muted">Monthly goal</span><span className="strong">{money(monthlyGoal)}</span></div>
           </div>
         </div>
+
+        {/* configurable monthly fundraising goal — the dashboard gauge target */}
+        <MonthlyGoalEditor goal={monthlyGoal} />
 
         {/* automation */}
         <a className="card hover" href="/agents" style={{ textDecoration: "none" }}>

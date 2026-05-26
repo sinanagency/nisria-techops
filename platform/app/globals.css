@@ -2,9 +2,10 @@
    Nisria Command Center — Design v2
    Leads with "BEST DESIGN STRUCTURE 1": floating pill top-nav,
    welcome hero, rounded soft cards, teal + periwinkle pastels,
-   rounded-bar charts, circular gauge, premium Satoshi headings.
+   rounded-bar charts, circular gauge. Headings + body use the system
+   font stack first, then Inter (loaded via next/font, exposed as the
+   --font-inter CSS var on <html> — no render-blocking @import).
    ============================================================ */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root {
   /* brand */
@@ -49,8 +50,8 @@
   --shadow-md: 0 14px 36px rgba(20,40,40,0.10);
   --shadow-lg: 0 30px 70px rgba(20,40,40,0.18);
   --shadow-nav: 0 10px 30px rgba(20,40,40,0.10);
-  --font-display: -apple-system, "SF Pro Display", system-ui, "Inter", sans-serif;
-  --font-body: -apple-system, system-ui, "SF Pro Text", "Inter", sans-serif;
+  --font-display: -apple-system, "SF Pro Display", system-ui, var(--font-inter), "Inter", sans-serif;
+  --font-body: -apple-system, system-ui, "SF Pro Text", var(--font-inter), "Inter", sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -601,12 +602,20 @@ label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
   .mail-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 320px; }
   .mail-read { padding: 18px 16px; }
 
-  /* wide tables scroll horizontally inside their card (no squash) */
+  /* wide tables scroll horizontally INSIDE their own card only (no squash). We
+     scope the horizontal scroll to cards that actually hold a <table>, so stat
+     cards with absolutely-positioned eye toggles never clip or scroll. The base
+     <table> width keeps columns legible; the card swipes sideways on a phone.
+     The .card-h title stays put (it's full-width); only the table forces scroll. */
+  .card:has(> table) { overflow-x: auto; }
   .card > table, .table-wrap > table { min-width: 560px; }
-  .card { overflow-x: auto; }
   .card-pad { padding: 16px; }
   .card-h { padding: 14px 16px; }
   thead th, tbody td { padding: 10px 12px; }
+  /* reports use their own table class (not the base selector) — let it scroll too.
+     The report table sits inside .card-pad, so scroll the pad that holds one. */
+  .report-table { min-width: 520px; }
+  .card-pad:has(> .report-table) { overflow-x: auto; }
 
   /* Needs You scroller cards a touch narrower so they fit a phone */
   .hscroll > * { flex-basis: 280px; max-width: 280px; }
@@ -616,6 +625,12 @@ label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
 
   /* hero/dashboard chart can breathe a bit shorter on a phone */
   .barchart.tall { height: 190px; }
+
+  /* overlays fit the viewport: tighter padding so panels are never wider than
+     the screen, and the grant board's columns get a little more vertical room. */
+  .modal-overlay, .peek-overlay { padding: 12px; }
+  .peek-panel { max-height: 92vh; }
+  .gcol { max-height: calc(100vh - 200px); flex-basis: 86vw; width: 86vw; max-width: 320px; }
 }
 
 /* ============================ FINANCE: AI EXPENSE INTAKE ===================== */

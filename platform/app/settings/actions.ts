@@ -5,7 +5,26 @@ import { rememberUpsert } from "../../lib/memory";
 import { BRAIN_SECTIONS, type SectionKey } from "../../lib/brain";
 import { enqueueJobByPayload, triggerWorker, studioGenerateOpen } from "../../lib/jobs";
 import { GRANT_DOC_SPECS, grantDocSpec, type GrantDocKind } from "../../lib/grant-docs";
+import { MONTHLY_GOAL_DEFAULT } from "../../lib/org-settings";
 import { revalidatePath } from "next/cache";
+
+// Save the configurable monthly fundraising goal (the dashboard gauge target).
+// Stored as one org_profile row (section = "monthly_goal"), so it is editable
+// here like any other Brain field. Coerces to a positive integer; blanks/garbage
+// fall back to the default so the gauge never divides by zero.
+export async function saveMonthlyGoal(fd: FormData) {
+  const raw = Math.round(Number(String(fd.get("goal") || "").replace(/[^0-9.]/g, "")));
+  const goal = Number.isFinite(raw) && raw > 0 ? raw : MONTHLY_GOAL_DEFAULT;
+  await admin()
+    .from("org_profile")
+    .upsert(
+      { section: "monthly_goal", content: String(goal), data: {}, updated_by: "Nur", updated_at: new Date().toISOString() },
+      { onConflict: "section" }
+    );
+  await emit({ type: "org.goal_updated", source: "settings", actor: "Nur", subject_type: "org_profile", payload: { goal } });
+  revalidatePath("/settings");
+  revalidatePath("/");
+}
 
 // R2-5 (#44): save the editable branded signature for ONE account. The signature
 // is auto-appended to every outbound email from that account (sasa@ -> Nisria,

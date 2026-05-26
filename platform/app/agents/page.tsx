@@ -6,14 +6,20 @@ import { Bot, Mail, HeartHandshake, PenLine, Megaphone, Database, Plug } from "l
 
 export const dynamic = "force-dynamic";
 
+// Each badge reflects what ACTUALLY runs in app/api/agents/tick (the 6am cron)
+// and app/api/grants/prepare (the 6:30am cron):
+//  - live    : runs autonomously today, end to end
+//  - partial : a real engine runs for part of the job; the rest is not built yet
+//  - soon    : not built; on the roadmap, shown so the surface stays honest
 const AGENTS = [
-  { key: "conductor", name: "Sasa · Chief of Staff", icon: Bot, desc: "Routes work, writes your brief, talks to you.", status: "live" },
-  { key: "comms", name: "Comms agent", icon: Mail, desc: "Reads inbound mail, drafts replies, learns your voice.", status: "live" },
-  { key: "steward", name: "Donor Steward", icon: HeartHandshake, desc: "Thanks donors, flags lapsing relationships.", status: "live" },
-  { key: "content", name: "Content agent", icon: PenLine, desc: "Drafts posts + newsletter from activity + assets.", status: "soon" },
-  { key: "fundraising", name: "Fundraising agent", icon: Megaphone, desc: "Drafts grants + campaign pushes.", status: "soon" },
-  { key: "field", name: "Field / Data agent", icon: Database, desc: "Keeps beneficiary + inventory records clean.", status: "soon" },
+  { key: "conductor", name: "Sasa · Chief of Staff", icon: Bot, desc: "Writes your daily brief on the cron and answers you in chat. Routing across the other agents is still growing.", status: "live" },
+  { key: "comms", name: "Comms agent", icon: Mail, desc: "Reads inbound mail, classifies it, drafts replies in your voice, and queues them for approval.", status: "live" },
+  { key: "steward", name: "Donor Steward", icon: HeartHandshake, desc: "Drafts a thank-you for each new gift and queues it for you. Lapsing-donor outreach is next.", status: "live" },
+  { key: "fundraising", name: "Fundraising agent", icon: Megaphone, desc: "Auto-pursues strong grant opportunities and drafts the full application into Review for you. Campaign pushes are not built yet.", status: "partial" },
+  { key: "content", name: "Content agent", icon: PenLine, desc: "Will draft posts and the newsletter from activity and assets. Not built yet.", status: "soon" },
+  { key: "field", name: "Field / Data agent", icon: Database, desc: "Will keep beneficiary and inventory records clean from the WhatsApp feed. Not built yet.", status: "soon" },
 ];
+const STATUS_TONE: any = { live: "green", partial: "gold", soon: "gray" };
 const LANES = ["auto", "approve", "escalate"];
 const laneTone: any = { auto: "green", approve: "gold", escalate: "red" };
 const ago = (iso: string) => { const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000); return s < 60 ? "now" : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`; };
@@ -49,7 +55,7 @@ export default async function Agents() {
             <div className="flex" style={{ marginBottom: 8 }}>
               <span className="aico teal"><a.icon size={16} /></span>
               <span style={{ fontWeight: 600, fontSize: 14 }}>{a.name}</span>
-              <span style={{ marginLeft: "auto" }}><Badge tone={a.status === "live" ? "green" : "gray"}>{a.status === "live" ? "live" : "soon"}</Badge></span>
+              <span style={{ marginLeft: "auto" }}><Badge tone={STATUS_TONE[a.status] || "gray"}>{a.status}</Badge></span>
             </div>
             <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>{a.desc}</div>
           </div>
