@@ -65,6 +65,43 @@ export async function captionImage(base64: string, mediaType: string): Promise<s
   return j?.content?.[0]?.text ?? "";
 }
 
+// Multimodal one-shot: a text prompt plus optional images, returning text. Used
+// by the report/invoice "give the AI the info" intakes so a photo of a receipt
+// or a typed brief can populate a form or a cover note. Reuses the same direct
+// Anthropic call the Studio uses (lib/anthropic stays the single Claude client).
+export async function askClaudeVision(opts: {
+  system: string;
+  text: string;
+  images?: { media: string; data: string }[];
+  maxTokens?: number;
+}): Promise<string> {
+  const content: any[] = [];
+  for (const img of opts.images || []) {
+    content.push({ type: "image", source: { type: "base64", media_type: img.media, data: img.data } });
+  }
+  content.push({ type: "text", text: opts.text });
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "x-api-key": KEY(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({ model: MODEL, max_tokens: opts.maxTokens ?? 1500, system: opts.system, messages: [{ role: "user", content }] }),
+    cache: "no-store",
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j?.error?.message || "Claude vision request failed");
+  return j?.content?.[0]?.text ?? "";
+}
+
+// Like claudeJSON, but multimodal (text + images). Strips fences, parses, null on fail.
+export async function claudeVisionJSON<T = any>(system: string, text: string, images: { media: string; data: string }[] = [], maxTokens = 1500): Promise<T | null> {
+  const raw = await askClaudeVision({ system: system + "\n\nRespond with ONLY valid JSON, no prose, no code fences.", text, images, maxTokens });
+  try {
+    const cleaned = raw.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    return JSON.parse(cleaned) as T;
+  } catch {
+    return null;
+  }
+}
+
 // Ask Claude for JSON; strips code fences and parses. Returns null on failure.
 export async function claudeJSON<T = any>(system: string, user: string, maxTokens = 1500): Promise<T | null> {
   const raw = await claude(system + "\n\nRespond with ONLY valid JSON, no prose, no code fences.", user, maxTokens);

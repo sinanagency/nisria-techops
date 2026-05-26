@@ -173,7 +173,10 @@ ${funderSignals}
 
 Write the full package now. Make the Simple Budget line items sum to the requested amount (or to a sensible illustrative total if the amount is undetermined), and make the Submission Checklist specific to what By Nisria Inc must attach and where it must be filed.`;
 
-  const rawBody = await claude(system, user, 3200);
+  // A full submission-ready package runs long (multiple sections, a budget, a
+  // checklist). 3200 tokens cut it off mid-sentence ("...and at 3"); 8000 lets the
+  // package finish. The model stops on its own well before this when done.
+  const rawBody = await claude(system, user, 8000);
 
   // THE GATE: no em-dashes, no "[Current Date]"/"[Organization maintains...]"
   // stub survives, the real contact line + date are filled. The date is resolved

@@ -109,7 +109,7 @@ export default async function MissionControl() {
       </div>
 
       {/* Needs you — the important part, sideways scroll */}
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card" id="needs-you" style={{ marginBottom: 16 }}>
         <div className="card-h">Needs you <Badge tone="gold">{counts.needsYou}</Badge></div>
         {(approvals || []).length === 0
           ? <div className="empty">Nothing needs you yet. Sasa only surfaces real people who need a reply.</div>

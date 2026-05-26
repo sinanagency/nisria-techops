@@ -5,7 +5,7 @@
 // board cover letter is generated here on demand (button click), grounded in
 // the org's own brain (recall) so it speaks in Nisria's voice and history.
 // Never invents figures: every number it may use is passed in explicitly.
-import { claude } from "../../lib/anthropic";
+import { claude, claudeJSON, claudeVisionJSON, askClaudeVision } from "../../lib/anthropic";
 import { recall, groundingText } from "../../lib/memory";
 import { admin, money } from "../../lib/supabase-admin";
 import { humanize, withHumanSystem } from "../../lib/humanize";
@@ -100,6 +100,8 @@ const VALID_SECTIONS = new Set(REPORT_SECTIONS.map((s) => s.key));
 
 export type GeneratedReport = { ok: boolean; html?: string; title?: string; docId?: string; error?: string };
 
+type ImageInput = { media: string; data: string };
+
 export async function generateReport(cfgIn: {
   type: string;
   brand: string;
@@ -108,11 +110,30 @@ export async function generateReport(cfgIn: {
   sections: string[];
   periodLabel?: string;
   note?: string;
+  context?: string;        // extra context the founder typed to shape the cover note
+  images?: ImageInput[];   // dropped receipts/screenshots, read by AI into the context
 }): Promise<GeneratedReport> {
   try {
     const type = (VALID_TYPES.has(cfgIn.type as ReportTypeKey) ? cfgIn.type : "financial_summary") as ReportTypeKey;
     const sections = (cfgIn.sections || []).filter((s): s is ReportSectionKey => VALID_SECTIONS.has(s as ReportSectionKey));
     if (!sections.length) return { ok: false, error: "Choose at least one section for the report." };
+
+    // Fold any dropped images into the context the narrative is grounded in. The
+    // figures still come ONLY from the books; images add qualitative colour the
+    // founder wants reflected in the cover note (e.g. a field photo, a receipt).
+    let extracted = "";
+    if (cfgIn.images?.length) {
+      try {
+        extracted = await askClaudeVision({
+          system: "You extract the useful facts from attached documents/photos for a nonprofit finance report cover note. List concrete details only (what the document shows, any amounts, dates, names of programs). No preamble. If nothing useful, reply 'none'.",
+          text: "Summarise what these attachments show, for use as context in a finance report cover note.",
+          images: cfgIn.images.slice(0, 4),
+          maxTokens: 600,
+        });
+      } catch { extracted = ""; }
+    }
+    const noteParts = [cfgIn.note?.trim(), cfgIn.context?.trim(), extracted && extracted.toLowerCase() !== "none" ? `Context from attachments: ${extracted.trim()}` : ""].filter(Boolean);
+    const mergedNote = noteParts.join("\n\n") || undefined;
 
     const cfg: ReportConfig = {
       type,
@@ -121,7 +142,7 @@ export async function generateReport(cfgIn: {
       to: cfgIn.to || null,
       sections,
       periodLabel: cfgIn.periodLabel?.trim() || undefined,
-      note: cfgIn.note?.trim() || undefined,
+      note: mergedNote,
     };
 
     const { title, html } = await buildReportHtml(cfg);
@@ -163,4 +184,53 @@ export async function generateReport(cfgIn: {
 // works) + the Library. Returns the html + ids for the FocusTab preview.
 export async function issueInvoice(input: InvoiceInput): Promise<InvoiceResult> {
   return createInvoice(input);
+}
+
+// AI INVOICE INTAKE (img 214: "just give the AI the info and it makes one"). Turns
+// a plain-English description (and any attached quote/photo) into structured
+// invoice fields the builder pre-fills. Never invents amounts: a missing price
+// stays 0 for the founder to fill. Nothing is sent; she reviews then issues.
+export type InvoiceDraft = {
+  billToCompany?: string;
+  billToContact?: string;
+  billToEmail?: string;
+  billToAddress?: string;
+  currency?: string;
+  taxRate?: number;
+  items?: { description: string; qty: number; unitPrice: number }[];
+  notes?: string;
+  terms?: string;
+};
+
+export async function draftInvoiceFromText(input: { text: string; images?: ImageInput[] }): Promise<{ ok: boolean; draft?: InvoiceDraft; error?: string }> {
+  const text = (input.text || "").trim();
+  if (!text && !input.images?.length) return { ok: false, error: "Describe the invoice or attach a document first." };
+  const system = withHumanSystem(`You convert a plain-English description (and any attached document or photo) into a structured invoice that By Nisria Inc will issue TO another company. Extract: the bill-to company (and contact, email, address if present), the line items (each a concise professional description, a quantity, and a unit price in the stated currency), a tax rate if mentioned, the currency (default USD), and short notes or payment terms if implied. NEVER invent an amount that is not given: if a price is not stated, set unitPrice to 0 so the founder fills it. Do not guess a company name.
+Return JSON ONLY in this exact shape: {"billToCompany":"","billToContact":"","billToEmail":"","billToAddress":"","currency":"USD","taxRate":0,"items":[{"description":"","qty":1,"unitPrice":0}],"notes":"","terms":""}`);
+  try {
+    const draft = input.images?.length
+      ? await claudeVisionJSON<InvoiceDraft>(system, text || "Build the invoice from the attached document.", input.images.slice(0, 4), 1200)
+      : await claudeJSON<InvoiceDraft>(system, text, 1200);
+    if (!draft) return { ok: false, error: "Could not read that into an invoice. Add the company and the amounts and try again." };
+    // humanize the free-text fields (no dashes, human voice); keep numbers as-is.
+    const cleanStr = (s?: string) => (s ? humanize(String(s)) : s);
+    const out: InvoiceDraft = {
+      billToCompany: cleanStr(draft.billToCompany),
+      billToContact: cleanStr(draft.billToContact),
+      billToEmail: draft.billToEmail?.trim(),
+      billToAddress: cleanStr(draft.billToAddress),
+      currency: (draft.currency || "USD").toUpperCase().slice(0, 3),
+      taxRate: Number(draft.taxRate) || 0,
+      items: (draft.items || []).filter((i) => i && i.description).map((i) => ({
+        description: cleanStr(i.description) || "",
+        qty: Number(i.qty) || 1,
+        unitPrice: Number(i.unitPrice) || 0,
+      })),
+      notes: cleanStr(draft.notes),
+      terms: cleanStr(draft.terms),
+    };
+    return { ok: true, draft: out };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "Could not draft the invoice." };
+  }
 }

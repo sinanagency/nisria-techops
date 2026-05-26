@@ -5,8 +5,17 @@ import { useRouter } from "next/navigation";
 import { useTabs } from "./tabs-context";
 import { generateReport, type GeneratedReport } from "../app/reports/actions";
 import {
-  Sliders, Sparkles, Loader2, Printer, Download, AlertTriangle, FileBarChart, Calendar,
+  Sliders, Sparkles, Loader2, Printer, Download, AlertTriangle, FileBarChart, Calendar, Paperclip, X,
 } from "lucide-react";
+
+function fileToImage(f: File): Promise<{ media: string; data: string }> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve({ media: f.type, data: String(r.result).split(",")[1] || "" });
+    r.onerror = reject;
+    r.readAsDataURL(f);
+  });
+}
 
 // The interactive report builder (R3-5 / P11, img 170). The founder CHOOSES the
 // report type, the date window, which sections appear, and the brand letterhead.
@@ -72,6 +81,7 @@ export default function ReportBuilder() {
   const [to, setTo] = useState<string>(presetRange("ytd").to || "");
   const [sections, setSections] = useState<string[]>(defaultSections("financial_summary"));
   const [note, setNote] = useState("");
+  const [files, setFiles] = useState<File[]>([]); // pics the AI reads into the cover note
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -111,6 +121,8 @@ export default function ReportBuilder() {
     setBusy(true);
     setError(null);
     try {
+      const images: { media: string; data: string }[] = [];
+      for (const f of files.slice(0, 4)) if (f.type.startsWith("image/")) images.push(await fileToImage(f));
       const res: GeneratedReport = await generateReport({
         type,
         brand,
@@ -119,6 +131,7 @@ export default function ReportBuilder() {
         sections,
         periodLabel,
         note: note.trim() || undefined,
+        images: images.length ? images : undefined,
       });
       if (res.ok && res.html) {
         openResult(res);
@@ -246,9 +259,28 @@ export default function ReportBuilder() {
             </select>
           </label>
           <label className="stack" style={{ gap: 4, flex: 1, minWidth: 220, fontSize: 11.5 }}>
-            <span className="faint">Framing for the cover note (optional)</span>
-            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. frame for the STP funder's interim review" disabled={busy} />
+            <span className="faint">Context for the cover note (optional)</span>
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Anything to emphasise, e.g. 'frame for the STP funder's interim review; mention the new feeding program'." disabled={busy} />
           </label>
+        </div>
+
+        {/* attach pics / receipts the AI reads into the cover note (img 213).
+            Figures still come only from the books; attachments add qualitative colour. */}
+        <div>
+          <div className="report-subhead" style={{ marginBottom: 8 }}>Add pictures or receipts (optional)</div>
+          <div className="flex wrap" style={{ gap: 8, alignItems: "center" }}>
+            <label className="actionchip" style={{ fontSize: 11.5, cursor: busy ? "default" : "pointer" }}>
+              <Paperclip size={12} /> Attach images
+              <input type="file" accept="image/*" multiple style={{ display: "none" }} disabled={busy} onChange={(e) => { setFiles((p) => [...p, ...Array.from(e.target.files || [])].slice(0, 4)); e.target.value = ""; }} />
+            </label>
+            {files.map((f, i) => (
+              <span key={i} className="pill" style={{ gap: 6 }}>
+                {f.name.length > 22 ? f.name.slice(0, 20) + "…" : f.name}
+                <button type="button" onClick={() => setFiles((p) => p.filter((_, idx) => idx !== i))} style={{ background: "none", border: 0, cursor: "pointer", display: "grid", placeItems: "center", color: "var(--muted)" }} aria-label="Remove"><X size={12} /></button>
+              </span>
+            ))}
+            <span className="faint" style={{ fontSize: 11 }}>AI reads images into the cover note; figures still come only from your books.</span>
+          </div>
         </div>
 
         <div className="flex" style={{ gap: 10, alignItems: "center" }}>

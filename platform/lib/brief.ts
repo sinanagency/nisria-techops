@@ -10,13 +10,19 @@ export async function getBrief(): Promise<{ text: string; points: BriefPoint[] }
   const { data } = await admin().from("daily_summaries").select("brief,points").eq("for_date", today).maybeSingle();
   // Clean on render too: a brief cached before the generation gate can still
   // carry an em-dash. Dash-only strip so the dashboard line is always clean.
-  const points = ((data?.points as BriefPoint[]) || []).map((p) => ({ href: p.href, text: stripDashes(p.text || "") }));
+  // Also: a point that links to "/" (the approvals/needs-you items) used to dead-
+  // click on the home page itself. Anchor it to the Needs You section so it
+  // actually scrolls there.
+  const points = ((data?.points as BriefPoint[]) || []).map((p) => ({
+    href: p.href === "/" ? "/#needs-you" : p.href,
+    text: stripDashes(p.text || ""),
+  }));
   return { text: stripDashes(data?.brief || ""), points };
 }
 
 export function fallbackPoints(c: { pending: number; newMsgs: number; tasks: number; raisedMtd: string }): BriefPoint[] {
   const p: BriefPoint[] = [];
-  if (c.pending) p.push({ text: `${c.pending} ${c.pending === 1 ? "item" : "items"} waiting for your approval`, href: "/" });
+  if (c.pending) p.push({ text: `${c.pending} ${c.pending === 1 ? "item" : "items"} waiting for your approval`, href: "/#needs-you" });
   if (c.newMsgs) p.push({ text: `${c.newMsgs} messages to triage`, href: "/inbox" });
   if (c.tasks) p.push({ text: `${c.tasks} open ${c.tasks === 1 ? "task" : "tasks"}`, href: "/tasks" });
   p.push({ text: `${c.raisedMtd} raised this month`, href: "/donations" });

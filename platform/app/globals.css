@@ -344,6 +344,17 @@ td .strong { font-weight: 600; }
 input, textarea, select { width: 100%; padding: 11px 14px; border: 1px solid var(--hairline); border-radius: 14px; font-size: 14px; outline: none; font-family: inherit; background: rgba(255,255,255,0.5); backdrop-filter: blur(8px); color: var(--ink); transition: border-color .15s var(--ease), box-shadow .15s var(--ease); }
 input::placeholder, textarea::placeholder { color: var(--faint); }
 input:focus, textarea:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(0,196,194,0.15); }
+/* Checkboxes and radios must NOT inherit the full-width text-input rule above:
+   that stretched every tick to width:100% with 11px padding, pushing the tick to
+   mid-row and the label to the far edge ("ticks in the wrong place"). One reset
+   fixes every checkbox/radio across the app (reports, onboarding, grants). */
+input[type="checkbox"], input[type="radio"] { -webkit-appearance: auto; appearance: auto; width: 17px; min-width: 17px; height: 17px; padding: 0; margin: 0; border: 0; border-radius: 5px; background: none; backdrop-filter: none; box-shadow: none; accent-color: var(--teal); cursor: pointer; flex: 0 0 auto; }
+input[type="radio"] { border-radius: 50%; }
+input[type="checkbox"]:focus, input[type="radio"]:focus { box-shadow: 0 0 0 3px rgba(0,196,194,0.15); }
+/* Smooth in-page scroll for brief anchors (e.g. "5 items waiting" -> Needs you),
+   with margin so the target clears the fixed top nav. */
+html { scroll-behavior: smooth; }
+#needs-you { scroll-margin-top: 96px; }
 label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
 
 /* ============================================================
@@ -463,7 +474,7 @@ label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
    MODAL — the single overlay primitive (components/Modal.tsx).
    Fixed, centered, near-opaque (no cheap glass bleed), single inner scroll.
    ============================================================ */
-.modal-overlay { position: fixed; inset: 0; z-index: var(--z-modal); background: rgba(20,40,40,0.34); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: grid; place-items: center; padding: 24px; animation: fadeUp .16s var(--ease) both; }
+.modal-overlay { position: fixed; inset: 0; z-index: var(--z-modal); background: rgba(20,40,40,0.40); backdrop-filter: blur(8px) saturate(120%); -webkit-backdrop-filter: blur(8px) saturate(120%); display: grid; place-items: center; padding: 24px; animation: fadeUp .16s var(--ease) both; }
 .modal-panel { width: 100%; max-height: 88vh; display: flex; flex-direction: column; background: var(--surface-elevated); border: 1px solid var(--hairline); border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow: hidden; animation: dropIn .16s var(--ease) both; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 22px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .modal-body { padding: 20px 22px; overflow-y: auto; }   /* the ONE scroll owner */

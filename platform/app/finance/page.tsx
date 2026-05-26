@@ -34,14 +34,20 @@ const methodLabel: Record<string, string> = { mpesa: "M-Pesa", bank: "Bank", car
 
 // Categories → label + icon + badge tone, in display order.
 const CATEGORY_META: Record<string, { label: string; tone: any; icon: any }> = {
-  subscription: { label: "Subscriptions", tone: "blue", icon: CreditCard },
+  payroll: { label: "Payroll", tone: "teal", icon: Users },
   salary: { label: "Salaries", tone: "teal", icon: Users },
+  stipend: { label: "Stipends", tone: "peri", icon: Users },
+  rent: { label: "Rent", tone: "gold", icon: Building2 },
+  utilities: { label: "Utilities", tone: "blue", icon: Wallet },
+  subscription: { label: "Subscriptions", tone: "blue", icon: CreditCard },
+  "petty cash": { label: "Petty cash", tone: "gray", icon: Banknote },
+  upkeep: { label: "Upkeep", tone: "green", icon: ShoppingBag },
   kenya: { label: "Kenya", tone: "green", icon: MapPin },
   vendor: { label: "Vendors", tone: "gold", icon: Building2 },
   payout: { label: "Givebutter payouts", tone: "peri", icon: Landmark },
   other: { label: "Other", tone: "gray", icon: CircleDot },
 };
-const CATEGORY_ORDER = ["subscription", "salary", "kenya", "vendor", "payout", "other"];
+const CATEGORY_ORDER = ["payroll", "salary", "stipend", "rent", "utilities", "subscription", "petty cash", "upkeep", "kenya", "vendor", "payout", "other"];
 const catSingular: Record<string, string> = {
   subscription: "Subscription",
   salary: "Salary",
@@ -360,7 +366,11 @@ export default async function Finance() {
               No recurring obligations yet. Add a subscription, salary or vendor payment below and set it to repeat monthly or yearly — it will refresh itself every cycle.
             </div>
           ) : (
-            <div style={{ padding: "8px 22px 18px" }}>
+            <details style={{ padding: "4px 22px 18px" }}>
+              <summary className="rec-summary" style={{ cursor: "pointer", padding: "12px 2px", fontSize: 13, fontWeight: 600, color: "var(--ink-2)", userSelect: "none" }}>
+                Show {recurring.length} recurring obligations
+              </summary>
+              <div style={{ paddingTop: 4 }}>
               {CATEGORY_ORDER.filter((c) => recurringByCat[c]?.length).map((c) => {
                 const meta = CATEGORY_META[c];
                 const Icon = meta.icon;
@@ -397,7 +407,8 @@ export default async function Finance() {
                   </div>
                 );
               })}
-            </div>
+              </div>
+            </details>
           )}
         </Card>
       </div>

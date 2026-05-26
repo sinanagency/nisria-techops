@@ -88,11 +88,39 @@ export default async function Team({
       </div>
 
       {rows.length > 0 ? (
-        <div className="grid cols-3">
-          {rows.map((m) => (
-            <TeamPeek key={m.id} m={m} openTasks={openTasks(m.id)} />
-          ))}
-        </div>
+        (() => {
+          // Group the roster by department (the first non-marker tag), so the
+          // page reads like the staff directory: Leadership, Operations, etc.
+          const DEPT_ORDER = [
+            "Leadership", "Operations & Programs", "Finance & Admin",
+            "Maisha Training", "Maisha Production", "Kwetu Haven & Field",
+            "Communications & Content", "Logistics",
+          ];
+          const deptOf = (m: any) => ((m.tags || []).find((t: string) => t && t !== "2026 directory")) || "Other";
+          const groups: Record<string, any[]> = {};
+          for (const m of rows) (groups[deptOf(m)] ||= []).push(m);
+          const ordered = [
+            ...DEPT_ORDER.filter((d) => groups[d]),
+            ...Object.keys(groups).filter((d) => !DEPT_ORDER.includes(d)).sort(),
+          ];
+          return (
+            <div className="stack" style={{ gap: 24 }}>
+              {ordered.map((d) => (
+                <div key={d}>
+                  <div className="flex" style={{ gap: 8, margin: "0 2px 12px", alignItems: "center" }}>
+                    <span className="report-subhead">{d}</span>
+                    <Badge tone="gray">{groups[d].length}</Badge>
+                  </div>
+                  <div className="grid cols-3">
+                    {groups[d].map((m) => (
+                      <TeamPeek key={m.id} m={m} openTasks={openTasks(m.id)} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()
       ) : (
         <div className="card">
           <div className="empty">

@@ -4,11 +4,21 @@ import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTabs } from "./tabs-context";
 import { Money } from "./Money";
-import { issueInvoice } from "../app/reports/actions";
+import { issueInvoice, draftInvoiceFromText } from "../app/reports/actions";
 import type { InvoiceResult } from "../lib/invoice";
 import {
-  ReceiptText, Plus, Trash2, Loader2, Sparkles, Printer, Download, AlertTriangle,
+  ReceiptText, Plus, Trash2, Loader2, Sparkles, Printer, Download, AlertTriangle, Paperclip, Wand2,
 } from "lucide-react";
+
+// Read an image File to the {media,data} shape the vision call expects.
+function fileToImage(f: File): Promise<{ media: string; data: string }> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve({ media: f.type, data: String(r.result).split(",")[1] || "" });
+    r.onerror = reject;
+    r.readAsDataURL(f);
+  });
+}
 
 // The invoice builder (R3-5 / P11, img 170). Issues an invoice TO another
 // company: bill-to fields, line items (description / qty / unit price / amount),
@@ -42,6 +52,38 @@ export default function InvoiceBuilder() {
   const [lines, setLines] = useState<Line[]>([blankLine()]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // AI intake (img 214): describe it / attach a quote, AI fills the form below.
+  const [aiText, setAiText] = useState("");
+  const [aiFiles, setAiFiles] = useState<File[]>([]);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiErr, setAiErr] = useState<string | null>(null);
+
+  async function draftAI() {
+    if (aiBusy) return;
+    if (!aiText.trim() && !aiFiles.length) { setAiErr("Describe the invoice or attach a file."); return; }
+    setAiBusy(true); setAiErr(null);
+    try {
+      const images: { media: string; data: string }[] = [];
+      for (const f of aiFiles.slice(0, 4)) if (f.type.startsWith("image/")) images.push(await fileToImage(f));
+      const res = await draftInvoiceFromText({ text: aiText.trim(), images });
+      if (!res.ok || !res.draft) { setAiErr(res.error || "Could not read that into an invoice."); return; }
+      const d = res.draft;
+      if (d.billToCompany) setCompany(d.billToCompany);
+      if (d.billToContact) setContact(d.billToContact);
+      if (d.billToEmail) setEmail(d.billToEmail);
+      if (d.billToAddress) setAddress(d.billToAddress);
+      if (d.currency) setCurrency(d.currency);
+      if (typeof d.taxRate === "number") setTaxRate(String(d.taxRate));
+      if (d.notes) setNotes(d.notes);
+      if (d.terms) setTerms(d.terms);
+      if (d.items?.length) setLines(d.items.map((i) => ({ description: i.description, qty: String(i.qty || 1), unitPrice: i.unitPrice ? String(i.unitPrice) : "" })));
+      setAiFiles([]);
+    } catch (e: any) {
+      setAiErr(e?.message || "Something went wrong.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const router = useRouter();
   const { openSheet, closeSheet } = useTabs();
@@ -144,7 +186,33 @@ export default function InvoiceBuilder() {
       </div>
       <div className="card-pad stack" style={{ gap: 16 }}>
         <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-          Bill another company on your letterhead. The invoice number, issue date, and the from details are filled automatically; you add the bill-to and the line items.
+          Bill another company on your letterhead. The invoice number, issue date, and the from details are filled automatically; you add the bill-to and the line items, or just describe it and let AI fill them.
+        </div>
+
+        {/* AI intake (img 214): describe it in plain English / attach a quote */}
+        <div className="card" style={{ padding: 14, boxShadow: "none", background: "var(--peri-50)", border: "1px solid var(--peri-100)" }}>
+          <div className="flex" style={{ gap: 8, marginBottom: 8 }}>
+            <Wand2 size={15} color="var(--peri-700)" />
+            <span style={{ fontWeight: 600, fontSize: 13, color: "var(--peri-700)" }}>Draft with AI</span>
+          </div>
+          <textarea
+            value={aiText}
+            onChange={(e) => setAiText(e.target.value)}
+            rows={2}
+            placeholder="Describe it in plain English, e.g. 'Invoice Acme Ltd for 20 school uniforms at $12 each plus a $50 delivery fee, due in 14 days.'"
+            disabled={aiBusy}
+          />
+          <div className="flex wrap" style={{ gap: 8, marginTop: 8, alignItems: "center" }}>
+            <label className="actionchip" style={{ fontSize: 11.5, cursor: aiBusy ? "default" : "pointer" }}>
+              <Paperclip size={12} /> {aiFiles.length ? `${aiFiles.length} attached` : "Attach a quote/photo"}
+              <input type="file" accept="image/*" multiple style={{ display: "none" }} disabled={aiBusy} onChange={(e) => { setAiFiles(Array.from(e.target.files || []).slice(0, 4)); e.target.value = ""; }} />
+            </label>
+            <button type="button" className="btn sm teal" onClick={draftAI} disabled={aiBusy || (!aiText.trim() && !aiFiles.length)}>
+              {aiBusy ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} {aiBusy ? "Reading…" : "Draft invoice"}
+            </button>
+            {aiErr && <span style={{ color: "var(--danger)", fontSize: 12 }}>{aiErr}</span>}
+          </div>
+          <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>AI fills the fields below. Review and edit before issuing; any price it cannot find is left at 0.</div>
         </div>
 
         {/* bill-to */}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
 // ONE modal primitive for the whole app. Replaces six hand-rolled .peek-overlay
@@ -30,6 +31,9 @@ export default function Modal({
   footer?: React.ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Mount-gate so the portal only renders client-side (document exists).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -65,9 +69,15 @@ export default function Modal({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  // PORTAL TO BODY. Rendered inline, the overlay's `position:fixed` resolves
+  // against the nearest ancestor that has backdrop-filter/transform/filter (every
+  // .card does) instead of the viewport, so it landed wherever that card sat (the
+  // bottom of a scrolled page). Portaling to <body> escapes that containing block
+  // so EVERY Modal-based peek is truly viewport-centered and blurred, exactly like
+  // the Needs-You FocusTab. One fix, all peeks (team, campaign, donation, etc.).
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div
         ref={panelRef}
@@ -89,6 +99,7 @@ export default function Modal({
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
