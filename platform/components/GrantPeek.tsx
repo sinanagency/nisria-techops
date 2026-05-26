@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { Badge } from "./ui";
 import Modal from "./Modal";
-import { advanceStatus, prepareGrant } from "../app/grants/actions";
-import { Maximize2, ExternalLink, Send, Sparkles } from "lucide-react";
+import { advanceStatus, prepareGrant, declineGrant } from "../app/grants/actions";
+import { Maximize2, ExternalLink, Send, Sparkles, X } from "lucide-react";
 
 // Lightweight markdown renderer — enough for the prepared package
 // (## headings, ### subheadings, **bold**, - bullets, --- rules, paragraphs).
@@ -66,6 +66,8 @@ export default function GrantPeek({ g }: { g: any }) {
   const hasPkg = !!(g.notes && String(g.notes).trim());
   const status = (g.status || "").toLowerCase();
   const canSubmit = status !== "submitted" && status !== "won" && status !== "lost";
+  // A prepared grant awaiting Nur's call: accept (submit) or decline.
+  const inReview = status === "review";
 
   return (
     <>
@@ -75,7 +77,7 @@ export default function GrantPeek({ g }: { g: any }) {
         style={{ marginTop: 10, width: "100%", justifyContent: "center" }}
         onClick={() => setOpen(true)}
       >
-        <Maximize2 size={12} /> Open application
+        <Maximize2 size={12} /> {inReview ? "Review · accept or decline" : "Open application"}
       </button>
 
       <Modal
@@ -95,7 +97,13 @@ export default function GrantPeek({ g }: { g: any }) {
               <form action={advanceStatus}>
                 <input type="hidden" name="id" value={g.id} />
                 <input type="hidden" name="status" value="submitted" />
-                <button className="btn sm teal" type="submit"><Send size={13} /> Mark submitted</button>
+                <button className="btn sm teal" type="submit"><Send size={13} /> {inReview ? "Submit" : "Mark submitted"}</button>
+              </form>
+            )}
+            {inReview && (
+              <form action={declineGrant} onSubmit={() => setTimeout(() => setOpen(false), 50)}>
+                <input type="hidden" name="id" value={g.id} />
+                <button className="btn sm ghost" type="submit"><X size={13} /> Decline</button>
               </form>
             )}
             {g.link && (
@@ -109,7 +117,9 @@ export default function GrantPeek({ g }: { g: any }) {
         }
       >
         <div className="faint" style={{ fontSize: 12, marginBottom: 14 }}>
-          Prepared by the Grant agent. Review below, then submit in one tap. Auto-fill / auto-submit into the funder portal via a browser is the next phase.
+          {inReview
+            ? "Prepared by the Grant agent and waiting for your call. Read it below, then Submit to advance it or Decline to set it aside. Submit only advances status for now; browser auto-submit into the funder portal is the next phase."
+            : "Prepared by the Grant agent. Review below, then submit in one tap. Auto-fill / auto-submit into the funder portal via a browser is the next phase."}
         </div>
 
         {hasPkg ? (

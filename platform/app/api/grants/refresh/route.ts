@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
+import { autoPursueHighOpportunities } from "../../../../lib/agents/grant-autoprepare";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -105,7 +106,23 @@ async function run() {
     await db.from("grant_opportunities").upsert(rows, { onConflict: "source,source_id" });
     await emit({ type: "grants.refreshed", source: "grant-hunter", actor: "system", payload: { grants_gov: bySource("grants_gov"), worldbank: bySource("worldbank"), found: rows.length, high: rows.filter((r) => r.relevance_tier === "HIGH").length } });
   }
-  return { found: rows.length, grants_gov: bySource("grants_gov"), worldbank: bySource("worldbank"), high: rows.filter((r) => r.relevance_tier === "HIGH").length, medium: rows.filter((r) => r.relevance_tier === "MEDIUM").length };
+
+  // After the hunt, AUTO-PURSUE the strongest finds into the pipeline so they
+  // are queued for preparation. This is the cheap half (no Claude). The actual
+  // package PREPARATION runs in its own invocation (the daily cron tick and the
+  // "Prepare all ready" button), because the hunt's many external calls already
+  // consume most of the 60s serverless budget and a full prepare is ~15-25s.
+  // autoPursueHighOpportunities is the cheap half of the shared auto-prepare
+  // helper, exported standalone so refresh runs only the pursue step (no Claude).
+  let pursued = 0;
+  try {
+    const before = await db.from("grant_applications").select("id", { count: "exact", head: true });
+    await autoPursueHighOpportunities();
+    const after = await db.from("grant_applications").select("id", { count: "exact", head: true });
+    pursued = Math.max(0, (after.count || 0) - (before.count || 0));
+  } catch { /* never let pursue failure break the hunt result */ }
+
+  return { found: rows.length, grants_gov: bySource("grants_gov"), worldbank: bySource("worldbank"), high: rows.filter((r) => r.relevance_tier === "HIGH").length, medium: rows.filter((r) => r.relevance_tier === "MEDIUM").length, auto_pursued: pursued };
 }
 
 function authed(req: NextRequest) {

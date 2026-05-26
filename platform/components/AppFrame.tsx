@@ -36,6 +36,7 @@ const MENU = [
     { href: "/reports", label: "Reports", icon: "file" },
   ]},
   { group: "Studio", short: "Studio", items: [
+    { href: "/studio", label: "Document Studio", icon: "spark" },
     { href: "/content", label: "Content", icon: "pen" },
     { href: "/library", label: "Library", icon: "folder" },
     { href: "/newsletter", label: "Newsletter", icon: "send" },

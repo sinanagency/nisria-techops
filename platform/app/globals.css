@@ -476,6 +476,22 @@ label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
 .intake-voice .mic:disabled, .intake-voice .send:disabled { opacity: .5; cursor: default; }
 @keyframes pulseMic { 0%,100% { box-shadow: 0 0 0 0 var(--glow); } 50% { box-shadow: 0 0 0 6px transparent; } }
 
+/* ============================ DOCUMENT STUDIO INTAKE ======================== */
+.studio-intake {
+  position: relative; border-radius: var(--radius); padding: 20px 22px; margin-bottom: 16px;
+  background: var(--surface-elevated); border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm); display: flex; flex-direction: column;
+}
+.studio-intake.drag { outline: 2px dashed var(--teal); outline-offset: -8px; }
+.studio-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 14px; }
+@media (max-width: 760px) { .studio-grid { grid-template-columns: 1fr; } }
+.studio-prompt { display: flex; flex-direction: column; }
+.studio-prompt textarea {
+  resize: vertical; border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px;
+  font: inherit; font-size: 13.5px; background: var(--surface); color: var(--ink); min-height: 76px;
+}
+.studio-prompt textarea:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(0,196,194,0.15); }
+
 /* ============================ COLLAPSIBLE CARD (details) ==================== */
 details.collapse { overflow: hidden; }
 details.collapse > summary { list-style: none; cursor: pointer; }

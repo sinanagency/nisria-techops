@@ -3,6 +3,7 @@ import { admin } from "../../lib/supabase-admin";
 import { emit } from "../../lib/events";
 import { revalidatePath } from "next/cache";
 import { buildApplication } from "../../lib/agents/grant";
+import { autoPrepareReadyGrants } from "../../lib/agents/grant-autoprepare";
 
 export async function addGrant(fd: FormData) {
   const funder = String(fd.get("funder") || "").trim();
@@ -87,6 +88,41 @@ export async function prepareGrant(fd: FormData) {
 // Back-compat alias: anything still calling draftGrant now prepares the full
 // package via the Grant agent.
 export const draftGrant = prepareGrant;
+
+// "Prepare all ready" — the manual trigger for the same batch the daily refresh
+// runs. Auto-pursues the strongest opportunities, then prepares un-prepared
+// applications (HIGH first) into "Prepared · review", capped at MAX_PER_RUN
+// Claude calls. Idempotent: re-running only touches grants that still need a
+// package, so Nur can tap it whenever she wants the pipeline topped up.
+export async function prepareAllReady() {
+  // Prepare a few per tap so the batch reliably finishes inside the server
+  // action time budget; it is idempotent, so tapping again continues the queue.
+  const res = await autoPrepareReadyGrants({ limit: 3 });
+  revalidatePath("/grants");
+  return res;
+}
+
+// Decline a prepared grant: Nur looked at the prepared package and chose not to
+// pursue it. Records the decision (status "lost", a declined-on note) so it
+// leaves the review column and lands in Won/Lost, and is never auto-re-prepared.
+export async function declineGrant(fd: FormData) {
+  const id = String(fd.get("id"));
+  if (!id) return;
+  const db = admin();
+  const { data: g } = await db.from("grant_applications").select("funder,program,notes").eq("id", id).single();
+  const declineNote = `\n\n---\n_Declined by Nur on ${new Date().toISOString().slice(0, 10)} — not pursued._`;
+  await db.from("grant_applications").update({
+    status: "lost",
+    decision_on: new Date().toISOString(),
+    notes: g?.notes ? `${g.notes}${declineNote}` : declineNote.trim(),
+  }).eq("id", id);
+  await emit({
+    type: "grant.declined", source: "grants", actor: "Nur",
+    subject_type: "grant", subject_id: id,
+    payload: { funder: g?.funder, program: g?.program },
+  });
+  revalidatePath("/grants");
+}
 
 // Move a grant along the pipeline: researching → drafting → submitted → won|lost.
 export async function advanceStatus(fd: FormData) {
