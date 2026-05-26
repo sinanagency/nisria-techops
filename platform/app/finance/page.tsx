@@ -6,6 +6,7 @@ import { Money, MoneyHideToggle } from "../../components/Money";
 import { addPayment, markPaid, logMpesa, logPayout } from "./actions";
 import ExpenseIntake from "../../components/ExpenseIntake";
 import KenyaReceiptUpload from "../../components/KenyaReceiptUpload";
+import Countdown from "../../components/Countdown";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -71,13 +72,46 @@ export default async function Finance() {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  const [donRes, payRes] = await Promise.all([
+  const [donRes, payRes, teamRes] = await Promise.all([
     db.from("donations").select("amount,status,donated_at").gte("donated_at", monthStart).limit(2000),
     db.from("payments").select("*").limit(1000),
+    db.from("team_members").select("id,name").limit(500),
   ]);
 
   const donations = (donRes.data || []) as any[];
   const payments = (payRes.data || []) as any[];
+  const teamMembers = (teamRes.data || []) as any[];
+
+  // Resolve a payroll payee to a team member so a salary row links to the 360.
+  // Payee spellings drift from member names in a few rows, so reconcile those.
+  const normName = (s: any) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const NAME_ALIAS: Record<string, string> = {
+    "julia mwaniki": "julia mwanki",
+    "monicah wanjira": "monica wanjira",
+    "elizabeth kariuki": "eliza kariuki",
+    "michell nyambura": "mitchelle nyambura",
+  };
+  const memberByName = new Map(teamMembers.map((m) => [normName(m.name), m.id]));
+  const memberIdFor = (payee: any) => memberByName.get(NAME_ALIAS[normName(payee)] || normName(payee)) || null;
+
+  // ---- salaries this month: the recurring payroll obligations themselves ----
+  // Payroll lives in `payments` (category payroll/salary, monthly). An unpaid
+  // one ticks down to its payday; marking it paid runs through the SAME markPaid
+  // as any obligation (so it counts as money out, lands in paid history, and
+  // re-schedules next month). Unpaid first, then this month's confirmed.
+  const SALARY_CATS = ["payroll", "salary"];
+  const isSalary = (p: any) => SALARY_CATS.includes(p.category);
+  const salaryPeriodLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
+  const dueTimeOf = (p: any) => new Date((p.due_on || "9999-12-31") + "T00:00:00").getTime();
+
+  const salaryUnpaid = payments
+    .filter((p: any) => isSalary(p) && ["scheduled", "upcoming", "due", "overdue"].includes(p.status))
+    .sort((a: any, b: any) => dueTimeOf(a) - dueTimeOf(b));
+  const salaryPaidMonth = payments
+    .filter((p: any) => isSalary(p) && p.status === "paid" && p.paid_at && new Date(p.paid_at).toISOString() >= monthStart)
+    .sort((a: any, b: any) => new Date(b.paid_at).getTime() - new Date(a.paid_at).getTime());
+  const salaryTotal = salaryUnpaid.length + salaryPaidMonth.length;
+  const salaryOverdueCount = salaryUnpaid.filter((p: any) => p.due_on && dueTimeOf(p) < today.getTime()).length;
 
   const isUsd = (p: any) => (p.currency || "USD").toUpperCase() === "USD";
   const paidThisMonth = (p: any) =>
@@ -129,8 +163,11 @@ export default async function Finance() {
   const kenyaCount = kenyaRows.length;
 
   // ---- reminders: due soon ------------------------------------------------
+  // Everything still owed that isn't payroll (salaries get their own card).
+  // "scheduled" recurring bills count too — they were invisible before, which
+  // is why nothing showed even with obligations due in days.
   const dueRows = payments
-    .filter((p: any) => ["upcoming", "due", "overdue"].includes(p.status))
+    .filter((p: any) => !isSalary(p) && ["scheduled", "upcoming", "due", "overdue"].includes(p.status))
     .sort((a: any, b: any) => new Date(a.due_on || "9999-12-31").getTime() - new Date(b.due_on || "9999-12-31").getTime());
 
   // urgency flag per row: overdue (red) / due within 7 days (gold) / scheduled
@@ -296,7 +333,106 @@ export default async function Finance() {
         </div>
       </Card>
 
+      {/* SALARIES — this month: the recurring payroll obligations, ticking to payday */}
+      <div style={{ marginTop: 16 }}>
+        <Card
+          title="Salaries — this month"
+          action={
+            <span className="flex" style={{ gap: 6, alignItems: "center" }}>
+              <Badge tone="gray">{salaryPeriodLabel}</Badge>
+              {salaryOverdueCount > 0 && <Badge tone="red"><AlarmClock size={11} /> {salaryOverdueCount} overdue</Badge>}
+              {salaryTotal > 0 && (
+                <Badge tone={salaryUnpaid.length === 0 ? "green" : "teal"}>
+                  {salaryPaidMonth.length}/{salaryTotal} paid
+                </Badge>
+              )}
+            </span>
+          }
+        >
+          {salaryTotal === 0 ? (
+            <div className="empty">
+              No monthly salaries set up yet. Add a payroll obligation below (category Salary, repeats Monthly) and it
+              shows here every month, counting down to payday.
+            </div>
+          ) : (
+            <div style={{ padding: "4px 0" }}>
+              {/* unpaid — ticking down to payday */}
+              {salaryUnpaid.map((p: any) => {
+                const overdue = !!(p.due_on && dueTimeOf(p) < today.getTime());
+                const soon = !!(p.due_on && !overdue && dueTimeOf(p) - today.getTime() <= 3 * DAY);
+                const accent = overdue ? "var(--danger)" : soon ? "var(--warning)" : "transparent";
+                const mid = memberIdFor(p.payee);
+                return (
+                  <div
+                    key={p.id}
+                    className="between"
+                    style={{
+                      padding: "13px 22px",
+                      borderTop: "1px solid var(--line)",
+                      boxShadow: accent === "transparent" ? "none" : `inset 3px 0 0 ${accent}`,
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div className="flex" style={{ gap: 9, flexWrap: "wrap" }}>
+                        {mid ? (
+                          <Link href={`/team/${mid}`} className="strong linkbtn">{p.payee}</Link>
+                        ) : (
+                          <span className="strong">{p.payee || "—"}</span>
+                        )}
+                        <Badge tone="teal">Salary</Badge>
+                        {overdue && <Badge tone="red">Overdue</Badge>}
+                      </div>
+                      <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>
+                        {p.purpose ? `${p.purpose} · ` : ""}
+                        {salaryPeriodLabel}
+                        {p.due_on ? ` · due ${date(p.due_on)}` : ""}
+                      </div>
+                    </div>
+                    <div className="flex" style={{ gap: 12, flexShrink: 0, alignItems: "center" }}>
+                      {p.due_on && (
+                        <span className="chip">
+                          <Countdown to={`${p.due_on}T23:59:59Z`} fallback={`due ${date(p.due_on)}`} />
+                        </span>
+                      )}
+                      <Money amount={p.amount} currency={p.currency} className="strong" style={{ whiteSpace: "nowrap" }} />
+                      <form action={markPaid} style={{ display: "inline" }}>
+                        <input type="hidden" name="id" value={p.id} />
+                        <button className="btn teal sm" type="submit">Mark paid</button>
+                      </form>
+                    </div>
+                  </div>
+                );
+              })}
+              {/* paid this month — confirmed */}
+              {salaryPaidMonth.map((p: any) => {
+                const mid = memberIdFor(p.payee);
+                return (
+                  <div key={p.id} className="between" style={{ padding: "13px 22px", borderTop: "1px solid var(--line)" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="flex" style={{ gap: 9, flexWrap: "wrap" }}>
+                        {mid ? (
+                          <Link href={`/team/${mid}`} className="strong linkbtn">{p.payee}</Link>
+                        ) : (
+                          <span className="strong">{p.payee || "—"}</span>
+                        )}
+                        <Badge tone="green"><CheckCircle2 size={11} /> Paid</Badge>
+                      </div>
+                      <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>
+                        {p.purpose ? `${p.purpose} · ` : ""}
+                        {salaryPeriodLabel} · Paid {date(p.paid_at)}
+                      </div>
+                    </div>
+                    <Money amount={p.amount} currency={p.currency} className="strong" style={{ whiteSpace: "nowrap", flexShrink: 0 }} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
+
       {/* REMINDERS — due soon (first & prominent) */}
+      <div style={{ marginTop: 16 }} />
       <Card
         title="Reminders — due soon"
         action={
@@ -341,7 +477,12 @@ export default async function Finance() {
                       {` · ${methodLabel[r.method] || r.method}`}
                     </div>
                   </div>
-                  <div className="flex" style={{ gap: 12, flexShrink: 0 }}>
+                  <div className="flex" style={{ gap: 12, flexShrink: 0, alignItems: "center" }}>
+                    {r.due_on && (
+                      <span className="chip">
+                        <Countdown to={`${r.due_on}T23:59:59Z`} fallback={`due ${date(r.due_on)}`} />
+                      </span>
+                    )}
                     <Money amount={r.amount} currency={r.currency} className="strong" style={{ whiteSpace: "nowrap" }} />
                     <form action={markPaid} style={{ display: "inline" }}>
                       <input type="hidden" name="id" value={r.id} />
