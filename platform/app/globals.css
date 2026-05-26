@@ -440,3 +440,82 @@ label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .rise { animation: fadeUp .45s var(--ease) both; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* ============================ FINANCE: AI EXPENSE INTAKE ===================== */
+.expense-intake {
+  position: relative; border-radius: var(--radius); padding: 18px 20px;
+  background: var(--surface-elevated); border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 12px;
+}
+.expense-intake.drag { outline: 2px dashed var(--teal); outline-offset: -8px; }
+.intake-grid { display: grid; grid-template-columns: 1fr 1.35fr; gap: 14px; }
+@media (max-width: 720px) { .intake-grid { grid-template-columns: 1fr; } }
+.intake-drop {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  text-align: center; padding: 20px 14px; cursor: pointer;
+  border: 2px dashed var(--line-2); border-radius: var(--radius-sm); transition: all .15s var(--ease);
+}
+.intake-drop:hover { border-color: var(--teal); background: var(--teal-50); }
+.intake-ico { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 4px; }
+.intake-ico.peri { background: var(--peri-50); color: var(--peri-700); }
+.intake-t { font-weight: 600; font-size: 13.5px; }
+.intake-voice { display: flex; flex-direction: column; justify-content: center; }
+.intake-voice textarea {
+  flex: 1; resize: none; border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px;
+  font: inherit; font-size: 13px; background: var(--surface); color: var(--ink); min-height: 44px;
+}
+.intake-voice textarea:focus { outline: none; border-color: var(--teal); }
+.intake-voice .mic, .intake-voice .send {
+  flex-shrink: 0; width: 40px; height: 40px; border-radius: 12px; border: 0; cursor: pointer;
+  display: grid; place-items: center; background: var(--canvas); color: var(--ink-2); transition: all .15s var(--ease);
+}
+.intake-voice .mic:hover, .intake-voice .send:hover { background: var(--teal-50); color: var(--teal-700); }
+.intake-voice .mic.on { background: var(--teal); color: #fff; animation: pulseMic 1.3s infinite; }
+.intake-voice .send { background: var(--teal); color: #fff; }
+.intake-voice .send:disabled { opacity: .45; cursor: default; }
+.intake-voice .mic:disabled, .intake-voice .send:disabled { opacity: .5; cursor: default; }
+@keyframes pulseMic { 0%,100% { box-shadow: 0 0 0 0 var(--glow); } 50% { box-shadow: 0 0 0 6px transparent; } }
+
+/* ============================ COLLAPSIBLE CARD (details) ==================== */
+details.collapse { overflow: hidden; }
+details.collapse > summary { list-style: none; cursor: pointer; }
+details.collapse > summary::-webkit-details-marker { display: none; }
+.collapse-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 22px; font-family: var(--font-display); font-weight: 600; font-size: 14.5px;
+}
+.collapse-head:hover { background: rgba(255,255,255,0.4); }
+.collapse-chev { display: inline-grid; place-items: center; color: var(--muted); transition: transform .18s var(--ease); }
+details.collapse[open] .collapse-chev { transform: rotate(90deg); }
+details.collapse[open] .collapse-head { border-bottom: 1px solid var(--line); }
+
+/* ================================ REPORTS ================================== */
+.report-section { break-inside: avoid; }
+.report-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.report-table th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; padding: 8px 6px; border-bottom: 1px solid var(--line-2); }
+.report-table td { padding: 9px 6px; border-bottom: 1px solid var(--line); }
+.report-table tr:last-child td { border-bottom: 0; }
+.report-table .report-total td { font-weight: 700; border-top: 2px solid var(--line-2); }
+.report-subhead { font-family: var(--font-display); font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--ink-2); }
+.report-prose p { font-size: 13.5px; line-height: 1.65; color: var(--ink-2); margin: 0 0 11px; }
+.report-prose p:last-child { margin-bottom: 0; }
+.report-letterhead { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 2px solid #111; }
+.print-only { display: none; }
+
+/* ================================ PRINT =================================== */
+@media print {
+  /* hide all app chrome — only the report content survives */
+  .topnav, .tabbar, .dock, .no-print, .pagehead .btn, .briefpt .chev { display: none !important; }
+  .print-only { display: block !important; }
+  html, body { background: #fff !important; color: #000 !important; }
+  .appshell, .main, .pagewrap { background: #fff !important; padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+  .pagehead h1 { font-size: 22px; }
+  .pagehead .sub { font-size: 12px; color: #444; }
+  /* flatten glass + shadows so it reads as a document, and never split a section */
+  .card, .feature, .expense-intake { background: #fff !important; box-shadow: none !important; border: 1px solid #ddd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .feature.dark { background: #f4f4f4 !important; color: #000 !important; }
+  .feature.dark .fmeta, .feature .fmeta { opacity: 1 !important; color: #444 !important; }
+  .report-section, .card, .report-table tr, .feature, .report-prose p { break-inside: avoid; page-break-inside: avoid; }
+  .report-section { margin-bottom: 16px !important; }
+  @page { size: letter; margin: 16mm; }
+}

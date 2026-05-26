@@ -1,8 +1,11 @@
+import Link from "next/link";
 import Shell from "../../components/Shell";
 import { Card, Badge } from "../../components/ui";
 import { admin, date } from "../../lib/supabase-admin";
 import { Money, MoneyHideToggle } from "../../components/Money";
 import { addPayment, markPaid, logMpesa, logPayout } from "./actions";
+import ExpenseIntake from "../../components/ExpenseIntake";
+import KenyaReceiptUpload from "../../components/KenyaReceiptUpload";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -22,6 +25,7 @@ import {
   ArrowRight,
   ShoppingBag,
   Banknote,
+  FileText,
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -170,7 +174,17 @@ export default async function Finance() {
     <Shell
       title="Finance"
       sub="The books, reconciled. Money in (donations) against money out (bills, salaries, Kenya spend and Givebutter payouts), so you always know the net and how much of what you withdrew has reached Kenya. Logging records a payment; it never moves money."
+      action={
+        <Link className="btn ghost sm" href="/reports">
+          <FileText size={14} /> Reports
+        </Link>
+      }
     >
+      {/* AI EXPENSE INTAKE — drop a receipt, talk, or type */}
+      <div style={{ marginBottom: 16 }}>
+        <ExpenseIntake />
+      </div>
+
       {/* top: money in / money out / net for the month */}
       <div className="grid cols-3" style={{ marginBottom: 16 }}>
         <div className="feature teal" style={{ position: "relative" }}>
@@ -202,9 +216,10 @@ export default async function Finance() {
       <Card
         title="Givebutter → Kenya reconciliation"
         action={
-          <span className="flex" style={{ gap: 6 }}>
+          <span className="flex" style={{ gap: 8, alignItems: "center" }}>
             <Badge tone={"peri" as any}>{payoutCount} payouts</Badge>
             <Badge tone="green">{kenyaCount} Kenya payments</Badge>
+            <KenyaReceiptUpload />
           </span>
         }
       >
@@ -257,6 +272,20 @@ export default async function Finance() {
             Payouts are in USD and Kenya spend is in KES, so they are shown side by side without converting —
             you read "withdrew this much, paid this much on the ground." Payouts sync automatically from Givebutter;
             log one manually below if a withdrawal hasn’t synced yet.
+            {kenyaSpentKes === 0 && kenyaSpentUsd === 0 ? (
+              <>
+                {" "}
+                <span style={{ color: "var(--warning)", fontWeight: 600 }}>
+                  The Kenya side reads zero because no ground spend is logged yet.
+                </span>{" "}
+                Older spend may be incomplete or missing — that’s expected. Use “Log a past Kenya receipt” above to
+                capture what you have, and from here forward every receipt you log fills in this side.
+              </>
+            ) : (
+              <>
+                {" "}Older spend may be incomplete; from here forward every Kenya receipt you log is captured here.
+              </>
+            )}
           </div>
         </div>
       </Card>
@@ -522,9 +551,16 @@ export default async function Finance() {
         </Card>
       </div>
 
-      {/* paid history */}
+      {/* paid history — collapsed by default, expand on demand */}
       <div style={{ marginTop: 16 }}>
-        <Card title="Paid history" action={<Badge tone="gray">{paidHistory.length}</Badge>}>
+        <details className="card collapse">
+          <summary className="collapse-head">
+            <span className="flex" style={{ gap: 9 }}>
+              <span className="collapse-chev"><ArrowRight size={14} /></span>
+              Paid history
+            </span>
+            <Badge tone="gray">{paidHistory.length}</Badge>
+          </summary>
           {paidHistory.length === 0 ? (
             <div className="empty">No payments recorded yet. Mark a reminder paid above, or log an M-Pesa receipt.</div>
           ) : (
@@ -553,7 +589,7 @@ export default async function Finance() {
               ))}
             </div>
           )}
-        </Card>
+        </details>
       </div>
     </Shell>
   );

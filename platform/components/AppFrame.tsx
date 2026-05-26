@@ -33,6 +33,7 @@ const MENU = [
     { href: "/campaigns", label: "Campaigns", icon: "target" },
     { href: "/grants", label: "Grants", icon: "award" },
     { href: "/finance", label: "Finance", icon: "dollar" },
+    { href: "/reports", label: "Reports", icon: "file" },
   ]},
   { group: "Studio", short: "Studio", items: [
     { href: "/content", label: "Content", icon: "pen" },
