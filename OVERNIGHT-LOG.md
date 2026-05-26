@@ -47,6 +47,15 @@ UNBLOCKED 2026-05-27:
   ORG_FACTS (88-3508268 -> 92-2509133) + deploy, so generated grant/docs cite the right EIN.
   Flagged to Nur to confirm.
 
+## GOVERNING MANDATE v2 (Nur, 2026-05-27) — native content, scroll + query, NONSTOP
+1. Filing-with-open-file is NOT enough. Extract the CONTENT of every document + expense into
+   NATIVE, navigable, scrollable, queryable data + reports IN the app. The founder should LOG,
+   SCROLL and QUERY without opening an external file. Apply to ALL documents + expenses. (Task #58)
+2. Beneficiaries extracted + profiles like donors (DONE: 93 imported, profiles at /beneficiaries/[id]).
+3. NONSTOP: no questions, no waiting, everything continues; if interrupted, resume until complete.
+   This run keeps going across compactions via this log + task spine. Create any tabs/sections/
+   reports needed, same design principles (FocusTab, cards, Money, no em-dashes).
+
 ## Progress
 
 ### #50 Finance history (in progress)
@@ -91,7 +100,35 @@ The platform must become the organised filing cabinet that mirrors the Drive. So
 - Money records LINK to their source document (this payroll line came from the May sheet;
   this transaction from the I&M statement).
 
-### Resume point
-Next: finish #50 (budget → Budget-vs-Actuals + 202604 STP sheet + per-month finance view),
-then #51 bank statements, #52 grants, #53 beneficiary databases, #54 team contracts, deepen #55.
-All data so far is committed to Supabase; new-section CODE builds will batch-deploy+commit.
+### #57 Filing system + #56 Durable watcher — BUILT, DEPLOYED, VERIFIED (commit 01bfa4c)
+- lib/drive.ts: service-account Drive engine (JWT->token, list/walk/fetch, export google-native
+  to PDF, classify + categorise). Reused by extract + filing proxy + watcher.
+- documents table created. /api/drive/extract walked both Drive roots and FILED 463 documents
+  (idempotent, media skipped). Categories: Finance 15, Team & HR 34, Admin & Compliance 34,
+  Grants & Fundraising 10, Maisha 3, AHADI 4, Programs/school folders, General 321.
+- Filing UI /filing: folder cards -> a card per file -> opens IN-APP in the centered FocusTab via
+  session-gated streaming proxy /api/filing/file/[id] (verified: determination letter streams as
+  PDF 200). Search + type filters. Nav entry under Studio.
+- Durable watcher: daily cron /api/drive/extract (Hobby tier caps crons to daily; this also
+  explains the earlier grant-prepare timeouts). New Drive files auto-file daily.
+- REFINE LATER (polish, not blocker): the "General" bucket has 321 legacy loose/[NS]-folder files;
+  tighten categoryFor so school folders -> Programs/Education, [NS]/[NS] 2026 legacy -> sensible
+  homes, and reduce General. Re-run extract after refining (idempotent).
+
+### Resume point (updated)
+DONE so far: Filing system + watcher (#56/#57) LIVE, 463 docs filed + openable in-app, daily cron.
+Brain seeded with 7 org_facts (identity, team, monthly finances, STP/SANARA, programs, banking,
+2026 budget) + EIN corrected to 92-2509133. Historical finance month totals loaded. WhatsApp
+webhook live. FB verification pack prepared.
+
+NEXT (per-type passes, now powered by lib/drive + the filing index):
+- #50 itemise finance: replace lump month totals with per-line categorised records from each
+  monthly sheet; build Budget-vs-Actuals card from the 2026 budget fact; per-month spend view.
+- #51 bank statements (I&M, Stanbic) -> bank_transactions + a Banking view (read via the filed docs).
+- #52 grants docs (STP contract, concept notes, applications) -> grant_applications + deeper Brain.
+- #53 Kwetu/Microfund/HM Sponsored Students databases -> beneficiaries + Microfund + Sponsored
+  Students sections (PII private).
+- #54 team contracts -> pay_amount on team_members + Brain.
+- #55 deepen Brain from remaining narrative docs (TechOps system doc, exec summary, concept notes).
+- Polish: tighten Filing categoriser (reduce General 321; school folders -> Programs/Education).
+All data is committed to Supabase; new-section CODE builds batch-deploy+commit. Resumable via this log.
