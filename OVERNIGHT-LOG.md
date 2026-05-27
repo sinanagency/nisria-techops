@@ -242,3 +242,17 @@ All data is committed to Supabase; new-section CODE builds batch-deploy+commit. 
 NEXT: Beneficiaries detail module — profiles like donors with IDs, photos, detailed stories;
 past children each with their story. Inspect beneficiaries + public_beneficiary_profiles tables,
 build a gated detail page (PII private, RLS, never client-exposed). Same bounded-eye-verified loop.
+
+### RUN GO 6 — Beneficiaries cohorts + Grants active band (eye-verified)
+- Beneficiaries: cohort band (Rescue 32 / Alumni 15 / Microfund 46 / Everyone 93) clickable to
+  filter; category filter + Cohort column; cohort on each 360 profile. Past children honored as
+  Alumni. Dropped dead-end Program filter. components/(page+[id]). Eye-verified.
+- Grants: seeded SANARA ($23k Maisha vocational) + Smile Together Korea ($20k School Uniforms) as
+  won records; Active grants band at top of /grants ($43k committed) with utilisation note;
+  excluded from Won/Lost column (one home each). Eye-verified.
+- DATA GAPS for Nur to fill (not fabricated): beneficiary photos, IDs, DOBs, detailed stories are
+  empty/stub — fields + privacy gating exist, intake form supports upload. Surface in final ping.
+
+NEXT: Legal & compliance module (IRS determination letter EIN 92-2509133, 501c3 By Nisria Inc,
+bylaws/registration) → a Legal view from the filed docs. Then Reports. Then (own session, bigger):
+navigation chrome behind NEXT_PUBLIC_WORKSPACE, cockpit, comms nervous system, final audit.

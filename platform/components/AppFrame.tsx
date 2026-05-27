@@ -13,13 +13,14 @@ import { TabsProvider, useTabs } from "./tabs-context";
 import {
   Home, Inbox, PenLine, ListChecks, Users, Send, FolderOpen, Bot, Activity,
   HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, File,
-  X, Plus, Search, Sparkles, ChevronDown, ChevronLeft, Wand2, Settings,
+  X, Plus, Search, Sparkles, ChevronDown, ChevronLeft, Wand2, Settings, ShieldCheck,
 } from "lucide-react";
 
 const ICONS: Record<string, any> = {
   home: Home, inbox: Inbox, pen: PenLine, check: ListChecks, users: Users, send: Send,
   folder: FolderOpen, bot: Bot, activity: Activity, heart: HeartHandshake, dollar: DollarSign,
   target: Target, life: Heart, box: Package, award: Award, mega: Megaphone, file: File, spark: Sparkles,
+  shield: ShieldCheck,
 };
 const Icon = ({ name, size = 16 }: { name: string; size?: number }) => { const C = ICONS[name] || File; return <C size={size} />; };
 const BRAND_DOT: Record<string, string> = { nisria: "var(--nisria)", maisha: "var(--maisha)", ahadi: "var(--ahadi)" };
@@ -36,6 +37,7 @@ const MENU = [
     { href: "/grants", label: "Grants", icon: "award" },
     { href: "/finance", label: "Finance", icon: "dollar" },
     { href: "/reports", label: "Reports", icon: "file" },
+    { href: "/legal", label: "Legal & Compliance", icon: "shield" },
   ]},
   { group: "Studio", short: "Studio", items: [
     { href: "/studio", label: "Document Studio", icon: "spark" },
