@@ -160,6 +160,21 @@ These need deploy+commit checkpoints; the run continues them with fresh context 
   Lumps removed. May (202605) already itemised as obligations. extraction_staging holds the audit rows
   (reconciled=true). scripts/seed-finance-itemise.mjs is idempotent + asserts the reconciliation.
 
+### RUN "GO" 3 — Finance copilot data banked
+- finance_insights now holds 5 grounded insights (deterministic figures + narrative): burn rising
+  ~30% (460,620 Nov -> 597,000 May), payroll = 74% of the run, ~$67,100 2026 gap, the gap maps to the
+  100 Champions goal, obligations due the 28th. Ready for the Finance UI to render + Ask Sasa to use.
+- So the FINANCE DATA + COPILOT layer is done: itemised reconciled payments + the gate tables +
+  computed insights. What remains for Finance is the UI (rendering), which is a fresh-context build.
+
+### >>> NEXT BUILD = a FRESH SESSION (do this): open a new conversation, tell me to read
+NISRIA-BUILD-SPEC.md + NISRIA-DESIGN-SYSTEM.md + NISRIA-DATA-MAP.md + design-principles.md +
+design-references.md + RUN-PROTOCOL.md + this log, then "go". I build the FINANCE THREE-PANE UI
+(ledger over the itemised payments, Money Flows, grant utilisation, budget-vs-actuals, render the
+finance_insights) extending /finance, studying Midday + Twenty first, screenshotting every screen with
+scripts/shot.mjs and critiquing before deploy. Then beneficiaries detail, grants, legal, reports,
+nav chrome, cockpit, comms. Final extracted-vs-truth audit at the end.
+
 ### RESUME POINT (next run): Finance UI + rest
 - Build the Finance THREE-PANE: a master ledger over the now-itemised payments (sidebar categories,
   list of transactions, detail), plus Money Flows (sources vs Kenya spend, NOT reconciled, per Nur),
