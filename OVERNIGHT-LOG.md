@@ -141,6 +141,25 @@ These need deploy+commit checkpoints; the run continues them with fresh context 
   expense sheets -> itemised lines); scrollable native reports (monthly spend, by category/program).
 - Still: #50 itemise finance (replace lump months), #51 Banking section.
 
+### RUN "GO" 2026-05-27 — Phase 0 done (standard + eyes installed)
+- THE EYES: scripts/shot.mjs (puppeteer-core + local Chrome, headless, no window) captures live authed
+  pages to PNG so I see + critique my own UI. Proven on /filing; honest critique: too flat/uniform, low
+  density, "General"/"2026" junk buckets equal-weighted with Finance, reads like a generic card grid.
+  Filing is being demoted to Sources anyway, but the see-and-critique loop now works.
+- CANON COMPLETE (8 docs): design-laws.md, design-principles.md (new), design-references.md (new, +
+  pattern map: Mercury/Midday for finance, Twenty for CRM, Plane/Linear cockpit, Arc/Raycast workspace,
+  shadcn/Radix components, Superhuman/Front comms), NISRIA-BUILD-SPEC.md, NISRIA-DESIGN-SYSTEM.md,
+  COMPONENTS.md, NISRIA-DATA-MAP.md (new), OVERNIGHT-LOG.md, RUN-PROTOCOL.md.
+
+### RESUME POINT FOR THE CODE BUILD (phase 1, fresh context)
+Start here next: PHASE 1 extraction pipeline + extraction_staging table + confidence/reconcile + the
+review gate. THEN PHASE 2 Finance MVP (parse bank statements + expense sheets via SheetJS/pdf-parse ->
+staged transactions -> reconcile -> ledger + Money Flows + grant utilisation + finance copilot),
+three-pane, extending existing /finance. Study Midday + Twenty code first. Add parsing libs. Build behind
+NEXT_PUBLIC_WORKSPACE flag, screenshot+critique every screen, commit each green step. Then beneficiaries
+detail, grants, legal, reports, navigation chrome (slider/Launchpad/Workspace/Spotlight/Mission Control),
+cockpit, comms nervous system. Verification = the final extracted-vs-truth audit. All per NISRIA-BUILD-SPEC.md.
+
 ### Resume point (updated)
 DONE so far: Filing system + watcher (#56/#57) LIVE, 463 docs filed + openable in-app, daily cron.
 Brain seeded with 7 org_facts (identity, team, monthly finances, STP/SANARA, programs, banking,
