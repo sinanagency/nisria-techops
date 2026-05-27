@@ -381,3 +381,18 @@ Experience layer now: Launchpad + Spotlight(docs) + swipe-between-spaces + Missi
 existing persistent Workspace tabs. The only deferred refinement is the full 3-panel persistent-pager
 (swiping INTO a distinct Workspace space) behind NEXT_PUBLIC_WORKSPACE — current model navigates via
 tabs + spaces which is coherent and safe.
+
+### RUN GO 14 — Banking view, reconciliation-gated (eye-verified)
+The bank statements are scanned image PDFs (no text layer) -> bank_transactions was empty.
+Built scripts/ocr-bank.mjs: Claude (Opus) extracts transactions from the scan; HARD gate = the
+running BALANCE CHAIN must be unbroken opening->closing (stronger than matching the bank's gross
+counts, which differ by netted reversals). Sonnet misread columns (caught + rejected by the gate);
+Opus parsed clean.
+- NISRIA Absa 2043066008 (UWEZO KES): 129 transactions, chain verified 128/128 steps, opening
+  3,203,234.40 -> closing 447,370.65 EXACT. Committed confidence=high. components/BankingView.tsx
+  (per-account summary opening/in/out/closing + verified badge + scrollable ledger) live on /finance.
+- LHSH account: statement is a 36MB scan -> exceeds Claude direct-PDF limit (base64 ~47MB > 32MB)
+  AND read_file_content truncates files that large, so its closing control totals aren't reliably
+  reachable. Needs a page-split pass (download via SA -> split with pdf-lib -> per-batch Claude ->
+  merge -> chain-reconcile) OR a CSV/text export from the bank. NOT forced in (financial accuracy).
+Banking is live + reconciled for the primary account; LHSH is the one remaining statement.
