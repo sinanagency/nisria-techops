@@ -340,3 +340,16 @@ STILL OPEN after this: (1) cross-doc SEARCH surface over extracted_text (omnibox
 maybe a tsv index) once backfill done. (2) Optionally wire Filing FileCard to the reader too.
 (3) EXPERIENCE LAYER deferred on purpose (navigation chrome behind NEXT_PUBLIC_WORKSPACE, cockpit,
 comms) — getting data truly native took priority over chrome. That is the next session's headline.
+
+### RUN GO 11 — cross-doc search + formatting + dedup (eye-verified)
+- Backfill DONE: 380/447 docs have native extracted_text (rest are image-only PDFs/vector).
+- Cross-document CONTENT search on /filing?q=: queries title + extracted_text across every folder,
+  shows snippet + "in text" badge, each result opens the native reader. Eye-verified ("tracing" -> 11 hits).
+- Formatting: DocReader now renders spreadsheets/CSV as real TABLES (per-sheet), prose as clean
+  paragraphs, with in-doc search highlight. Eye-verified (2025 Microfund Database -> table).
+- Filing list query trimmed to metadata cols (no extracted_text in list) for speed.
+- DEDUP: scripts/dedup-docs.mjs removed 16 byte-identical duplicate rows (same norm title + exact
+  size; safe). Null/zero-size left alone. Display-dedup in Reports Archive + Legal register collapses
+  same-title variants visually. Corpus 463 -> 447.
+- Reports archive sorted by parsed period (sequential). Beneficiary photos (15) + private-tag
+  cleanup from RUN GO 10 live.

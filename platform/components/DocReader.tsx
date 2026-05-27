@@ -24,14 +24,42 @@ function Body({ id }: { id: string }) {
   if (!data) return <div className="card-pad faint">Reading the document…</div>;
 
   const text: string = data.text || "";
-  const paras = text.split(/\n{2,}/).filter((p) => p.trim());
   const needle = q.trim().toLowerCase();
-  const shown = needle ? paras.filter((p) => p.toLowerCase().includes(needle)) : paras;
+  const isSheet = /spreadsheet|csv/.test(data.mime || "") || /^#\s.+\n/.test(text);
 
-  const hl = (p: string, i: number) => {
-    if (!needle) return <p key={i} style={{ margin: "0 0 11px" }}>{p}</p>;
-    const parts = p.split(new RegExp(`(${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "ig"));
-    return <p key={i} style={{ margin: "0 0 11px" }}>{parts.map((s, j) => s.toLowerCase() === needle ? <mark key={j} style={{ background: "var(--teal-100)", padding: "0 1px" }}>{s}</mark> : s)}</p>;
+  const mark = (s: string, key: any) => {
+    if (!needle) return s;
+    const parts = s.split(new RegExp(`(${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "ig"));
+    return parts.map((p, j) => (p.toLowerCase() === needle ? <mark key={`${key}-${j}`} style={{ background: "var(--teal-100)", padding: "0 1px" }}>{p}</mark> : p));
+  };
+  const paras = text.split(/\n{2,}/).filter((p) => p.trim());
+  const shown = needle ? paras.filter((p) => p.toLowerCase().includes(needle)) : paras;
+  const hl = (p: string, i: number) => <p key={i} style={{ margin: "0 0 11px" }}>{mark(p, i)}</p>;
+
+  // spreadsheets: render each "# Sheet" block as a real table, not raw CSV
+  const renderSheets = () => {
+    const blocks = text.split(/\n(?=#\s)/);
+    return blocks.map((block, bi) => {
+      const lines = block.split("\n").filter((l) => l.trim());
+      if (!lines.length) return null;
+      let name = "", rows = lines;
+      if (lines[0].startsWith("# ")) { name = lines[0].slice(2).trim(); rows = lines.slice(1); }
+      const cells = rows.map((r) => r.split(",").map((c) => c.replace(/^"|"$/g, "").trim()));
+      const visible = needle ? cells.filter((row) => row.some((c) => c.toLowerCase().includes(needle))) : cells;
+      if (!visible.length) return null;
+      const head = visible[0], body = visible.slice(1);
+      return (
+        <div key={bi} style={{ marginBottom: 22 }}>
+          {name && <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>{name}</div>}
+          <div style={{ overflowX: "auto", border: "1px solid var(--line)", borderRadius: 10 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead><tr>{head.map((c, ci) => <th key={ci} style={{ textAlign: "left", padding: "7px 10px", borderBottom: "1px solid var(--line)", background: "var(--canvas)", fontWeight: 600, whiteSpace: "nowrap" }}>{c}</th>)}</tr></thead>
+              <tbody>{body.map((row, ri) => <tr key={ri}>{row.map((c, ci) => <td key={ci} style={{ padding: "6px 10px", borderBottom: "1px solid var(--line)", verticalAlign: "top" }}>{mark(c, `${ri}-${ci}`)}</td>)}</tr>)}</tbody>
+            </table>
+          </div>
+        </div>
+      );
+    });
   };
 
   return (
@@ -53,7 +81,7 @@ function Body({ id }: { id: string }) {
         <div className="card-pad faint" style={{ fontSize: 13, lineHeight: 1.6 }}>No readable text could be extracted from this file type. Open the original from the footer.</div>
       ) : (
         <div style={{ padding: "16px 22px", maxHeight: "58vh", overflowY: "auto", fontSize: 13.5, lineHeight: 1.7, color: "var(--ink-2)" }}>
-          {shown.length ? shown.map(hl) : <span className="faint">No lines match “{q}”.</span>}
+          {isSheet ? renderSheets() : (shown.length ? shown.map(hl) : <span className="faint">No lines match “{q}”.</span>)}
         </div>
       )}
     </div>

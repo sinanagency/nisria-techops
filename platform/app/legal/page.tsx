@@ -69,7 +69,11 @@ export default async function Legal() {
     .limit(500);
 
   // keep only governance-relevant docs; drop finance noise that happens to sit in the folder
-  const docs = (data || []).filter((d: any) => !/expense|budget|receipt|invoice|statement|salaries|payroll/i.test(d.title || ""));
+  let docs = (data || []).filter((d: any) => !/expense|budget|receipt|invoice|statement|salaries|payroll/i.test(d.title || ""));
+  // collapse duplicate/redundant copies (same normalized title), keep one
+  const ntitle = (t: string) => (t || "").toLowerCase().replace(/\[ns\]/g, "").replace(/\bcopy of\b/g, "").replace(/\.(pdf|docx?|doc|xlsx?)$/i, "").replace(/[\s_]*\(?\d+\)?\s*$/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const seenL = new Set<string>();
+  docs = docs.filter((d: any) => { const k = ntitle(d.title); if (seenL.has(k)) return false; seenL.add(k); return true; });
   const byGroup: Record<string, any[]> = {};
   for (const d of docs) (byGroup[classify(d)] ||= []).push(d);
   for (const k of Object.keys(byGroup)) byGroup[k].sort((a, b) => (a.title || "").localeCompare(b.title || ""));

@@ -45,8 +45,13 @@ export default async function ReportArchive() {
     .select("id,title,brand,doc_date,drive_url")
     .eq("doc_type", "report")
     .limit(500);
-  const rows = (data || []) as any[];
+  let rows = (data || []) as any[];
   if (!rows.length) return null;
+
+  // collapse duplicate/redundant copies (same normalized title), keep one
+  const ntitle = (t: string) => (t || "").toLowerCase().replace(/\[ns\]/g, "").replace(/\bcopy of\b/g, "").replace(/\.(pdf|docx?|doc|xlsx?)$/i, "").replace(/[\s_]*\(?\d+\)?\s*$/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const seen = new Set<string>();
+  rows = rows.filter((d) => { const k = ntitle(d.title); if (seen.has(k)) return false; seen.add(k); return true; });
 
   const grouped: Record<string, any[]> = {};
   for (const d of rows) {
