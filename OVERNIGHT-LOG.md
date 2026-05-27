@@ -353,3 +353,13 @@ comms) — getting data truly native took priority over chrome. That is the next
   same-title variants visually. Corpus 463 -> 447.
 - Reports archive sorted by parsed period (sequential). Beneficiary photos (15) + private-tag
   cleanup from RUN GO 10 live.
+
+### RUN GO 12 — Launchpad (first experience-layer piece, eye-verified)
+- /launchpad: flat alphabetical searchable grid of all 21 apps (Mac-Launchpad style in the light
+  editorial skin), gradient icon tiles, type-to-filter + Enter-opens-top-hit + Esc-clears.
+  components/Launchpad.tsx + app/launchpad/page.tsx + .lp-* CSS.
+- Grid launcher button added to the top bar (next to Search). Purely ADDITIVE: a new route + a
+  button, no change to existing nav behavior, so live app is untouched. Eye-verified.
+- This is the entry to the Safari nav vision. STILL behind a future flag / fresh session: the
+  swipe slider (Command Center <-> Launchpad <-> Workspace), persistent Workspace tabs, Spotlight,
+  Mission Control — the STRUCTURAL pieces that reshape navigation (must go behind NEXT_PUBLIC_WORKSPACE).

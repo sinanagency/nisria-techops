@@ -13,7 +13,7 @@ import { TabsProvider, useTabs } from "./tabs-context";
 import {
   Home, Inbox, PenLine, ListChecks, Users, Send, FolderOpen, Bot, Activity,
   HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, File,
-  X, Plus, Search, Sparkles, ChevronDown, ChevronLeft, Wand2, Settings, ShieldCheck,
+  X, Plus, Search, Sparkles, ChevronDown, ChevronLeft, Wand2, Settings, ShieldCheck, LayoutGrid,
 } from "lucide-react";
 
 const ICONS: Record<string, any> = {
@@ -144,6 +144,7 @@ function TopNav() {
           })}
         </div>
         <div className="nav-right">
+          <Link href="/launchpad" className={`iconbtn ${path === "/launchpad" ? "active" : ""}`} title="Launchpad — all apps"><LayoutGrid size={17} /></Link>
           <button className="omnibox" title="Search (⌘K)" onClick={() => window.dispatchEvent(new Event("open-cmdk"))}>
             <Search size={15} /> <span>Search anything…</span> <kbd>⌘K</kbd>
           </button>
