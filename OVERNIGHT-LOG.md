@@ -151,6 +151,27 @@ These need deploy+commit checkpoints; the run continues them with fresh context 
   shadcn/Radix components, Superhuman/Front comms), NISRIA-BUILD-SPEC.md, NISRIA-DESIGN-SYSTEM.md,
   COMPONENTS.md, NISRIA-DATA-MAP.md (new), OVERNIGHT-LOG.md, RUN-PROTOCOL.md.
 
+### RUN "GO" 2 — Phase 1 started + Finance data itemised
+- GATE TABLES created: extraction_staging (source_doc_id, domain, raw_json, normalized, confidence,
+  reconciled, status, signature, notes), bank_transactions, finance_insights (copilot writes here).
+- FINANCE DATA ITEMISED (#50 done at the data level): replaced the 3 lump month-totals with per-line
+  categorised payments, EACH RECONCILED to its stated sheet total before commit:
+  Nov 2025 = 28 lines = 460,620 KES, Dec 2025 = 28 lines = 450,120, Jan 2026 = 26 lines = 482,120.
+  Lumps removed. May (202605) already itemised as obligations. extraction_staging holds the audit rows
+  (reconciled=true). scripts/seed-finance-itemise.mjs is idempotent + asserts the reconciliation.
+
+### RESUME POINT (next run): Finance UI + rest
+- Build the Finance THREE-PANE: a master ledger over the now-itemised payments (sidebar categories,
+  list of transactions, detail), plus Money Flows (sources vs Kenya spend, NOT reconciled, per Nur),
+  grant utilisation (STP/SANARA spent vs purpose), budget-vs-actuals (from the 2026 budget Brain fact),
+  monthly spend by category/program, and the finance COPILOT (compute deterministically + Haiku narrate,
+  write to finance_insights, read instantly). EXTEND existing /finance + its salaries subsystem.
+- Then bank statements (if real statements exist in Drive; the bank docs found so far are mandates, not
+  statements, so flag) -> bank_transactions. Then beneficiaries detail (IDs/photos), grants, legal,
+  reports modules. Then navigation chrome (flag NEXT_PUBLIC_WORKSPACE). Then cockpit. Then comms.
+- Study Midday + Twenty code before the Finance + people UI. Screenshot+critique every screen with the
+  eyes (scripts/shot.mjs). Final extracted-vs-truth audit at the end. All per NISRIA-BUILD-SPEC.md.
+
 ### RESUME POINT FOR THE CODE BUILD (phase 1, fresh context)
 Start here next: PHASE 1 extraction pipeline + extraction_staging table + confidence/reconcile + the
 review gate. THEN PHASE 2 Finance MVP (parse bank statements + expense sheets via SheetJS/pdf-parse ->
