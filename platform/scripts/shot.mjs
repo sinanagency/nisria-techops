@@ -10,6 +10,7 @@ const out = process.argv[3] || "/tmp/shot.png";
 const width = Number(process.argv[4] || 1440);
 const height = Number(process.argv[5] || 1200);
 const scrollY = Number(process.argv[6] || 0); // optional: scroll down N px before the shot
+const clickText = process.argv[7] || ""; // optional: click a button/tab whose text matches, before the shot
 
 const env = fs.readFileSync(new URL("../.env.shot", import.meta.url), "utf8");
 const token = (env.match(/^SESSION_TOKEN=(.*)$/m) || [])[1]?.trim().replace(/^"|"$/g, "") || "";
@@ -26,6 +27,15 @@ if (token) {
 }
 await page.goto(`https://command.nisria.co${path}`, { waitUntil: "networkidle2", timeout: 45000 });
 await new Promise((r) => setTimeout(r, 1200)); // let glass/animations settle
+if (clickText) {
+  await page.evaluate((txt) => {
+    const el = [...document.querySelectorAll("button, a, [role=button]")].find(
+      (e) => e.textContent && e.textContent.trim().toLowerCase().includes(txt.toLowerCase()),
+    );
+    if (el) (el).click();
+  }, clickText);
+  await new Promise((r) => setTimeout(r, 700));
+}
 if (scrollY) {
   await page.evaluate((y) => window.scrollTo(0, y), scrollY);
   await new Promise((r) => setTimeout(r, 400));

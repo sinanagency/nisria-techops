@@ -256,3 +256,17 @@ build a gated detail page (PII private, RLS, never client-exposed). Same bounded
 NEXT: Legal & compliance module (IRS determination letter EIN 92-2509133, 501c3 By Nisria Inc,
 bylaws/registration) → a Legal view from the filed docs. Then Reports. Then (own session, bigger):
 navigation chrome behind NEXT_PUBLIC_WORKSPACE, cockpit, comms nervous system, final audit.
+
+### RUN GO 7 — Legal & Compliance module LIVE (eye-verified)
+- New /legal (Money nav group, shield icon). Two entity cards (By Nisria Inc US 501c3 EIN
+  92-2509133 eff 25 Dec 2023 Miami; Nisria Community Programme Kenya CBO GIL/DSS/CBO/105 cert
+  51260 Gilgil reg 13 Jul 2020). Compliance obligations (Form 990 / TCC / CBO returns / land
+  clearance, all annual). Self-populating compliance doc register grouped (US incorp / Kenya
+  reg / governance / tax clearances / property), original demoted to small hidden source link.
+- FIXED stale EIN 88-3508268 -> 92-2509133 in Banking + Legal Brain facts (0 remaining).
+- Added shield icon to AppFrame ICONS + ShieldCheck import.
+
+NATIVE-HOME EXTRACTION SET now: Finance ✓ Grants ✓ Legal ✓ Beneficiaries ✓ Team ✓ — Reports NEXT.
+After Reports, remaining = experience layer (own sessions, bigger/riskier): navigation chrome
+behind NEXT_PUBLIC_WORKSPACE (Launchpad/Workspace/Spotlight/Mission Control), cockpit widgets,
+comms nervous system, then final extracted-vs-truth audit.

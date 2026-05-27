@@ -7,6 +7,7 @@ import ReportNarrative from "../../components/ReportNarrative";
 import ReportBuilder from "../../components/ReportBuilder";
 import InvoiceBuilder from "../../components/InvoiceBuilder";
 import ReportsTabs from "../../components/ReportsTabs";
+import ReportArchive from "../../components/ReportArchive";
 import PrintButton from "../../components/PrintButton";
 import type { NarrativeInput } from "./actions";
 import { listInvoices } from "../../lib/invoice";
@@ -327,6 +328,7 @@ export default async function Reports() {
         build={<ReportBuilder />}
         invoice={invoiceTab}
         figures={figures}
+        archive={<ReportArchive />}
       />
     </Shell>
   );
