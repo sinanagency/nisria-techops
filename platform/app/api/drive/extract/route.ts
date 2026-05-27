@@ -30,16 +30,30 @@ async function run() {
   const rows: any[] = [];
   const seen = new Set<string>();
 
+  // legacy/loose folders (root "[NS]", "[NS] 2026", year folders) resolve to weak
+  // categories; fall back to the document TYPE so nothing dumps into "General".
+  const GENERIC = new Set(["General", "2026", "2025", "2024"]);
+  const BY_TYPE: Record<string, string> = {
+    registration: "Admin & Compliance", policy: "Admin & Compliance",
+    grant: "Grants & Fundraising", budget: "Finance", expenses: "Finance",
+    invoice: "Finance", receipt: "Finance", bank_statement: "Finance",
+    contract: "Team & HR", database: "Programs", report: "Reports",
+  };
+
   const file = (f: DriveFile, ctx: { top: string; parentName: string }) => {
     if (skip(f.mimeType) || seen.has(f.id)) return;
     seen.add(f.id);
-    const category = categoryFor(ctx.top, ctx.parentName);
+    const docType = classifyDoc(f.name, f.mimeType);
+    let category = categoryFor(ctx.top, ctx.parentName);
+    if (GENERIC.has(category) || /^\[?ns\]?$/i.test(category) || category.length < 3) {
+      category = BY_TYPE[docType] || category;
+    }
     rows.push({
       drive_file_id: f.id,
       title: (f.name || "Untitled").slice(0, 300),
       folder: category,
       subfolder: ctx.parentName === ctx.top ? null : ctx.parentName.slice(0, 120),
-      doc_type: classifyDoc(f.name, f.mimeType),
+      doc_type: docType,
       brand: brandFor(f.name, category),
       mime: f.mimeType,
       size_bytes: f.size ? Number(f.size) : null,

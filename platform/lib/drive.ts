@@ -149,13 +149,13 @@ export function categoryFor(top: string, parentName: string): string {
   const t = `${top} ${parentName}`.toLowerCase();
   if (/finance|expense|budget|payroll/.test(t)) return "Finance";
   if (/team|hr|staff|contract/.test(t)) return "Team & HR";
-  if (/fundrais|grant/.test(t)) return "Grants & Fundraising";
+  if (/fundrais|grant|concept note|proposal|fellowship|donor/.test(t)) return "Grants & Fundraising";
   if (/admin|compliance|legal|registration|board|governance|insurance|policy|safeguard/.test(t)) return "Admin & Compliance";
   if (/maisha/.test(t)) return "Maisha";
   if (/ahadi/.test(t)) return "AHADI";
   if (/kepenzi/.test(t)) return "Kepenzi";
   if (/comm|marketing|social|content/.test(t)) return "Communications";
-  if (/program|kwetu|education|health|food/.test(t)) return "Programs";
+  if (/program|kwetu|education|health|food|school|sponsor|student|water|lfw|life from water/.test(t)) return "Programs";
   return top.replace(/^\d+[_\s-]*/, "").replace(/\[.*?\]/g, "").trim() || "General";
 }
 
