@@ -13,15 +13,16 @@ NISRIA-BUILD-SPEC.md (what + order), NISRIA-DESIGN-SYSTEM.md + design-principles
   then the spec phases (extraction gate, Finance MVP, beneficiaries/grants/legal/reports, navigation
   chrome, cockpit, Sasa recall + comms).
 
-## The silence rule (when I DO talk)
-I break silence with a single push notification ONLY for:
-1. DONE: the whole run is complete, deployed behind the flag, each module verified by my own eyes,
-   and the extracted-vs-truth audit report produced. I ping once with the summary + the audit.
-2. HARD BLOCKER: something that halts ALL remaining work and I cannot route around (e.g. a needed
-   credential that's missing). Even then I first exhaust every other task, then ping with exactly what
-   I need. I do not stop the whole run for a blocker on one module; I skip it, log it, keep going.
-3. SAFETY: anything destructive, irreversible, or outside the mandate. I stop and ask. (Rare.)
-Otherwise: total silence. No "finished phase 2" updates. You hear from me when it's done.
+## The silence rule: ONE ping, total silence until then
+- EXACTLY ONE push notification for the whole run, fired when the run reaches its end.
+- Blockers do NOT break silence. If I hit something I can't get past (a missing credential, a key),
+  I LOG it, SKIP that one item, and keep going on everything else. Every blocker is BUNDLED into the
+  single end ping, never reported mid-run.
+- No progress chatter, no "finished phase 2," no "shall I proceed." Nothing until the one ping.
+- The ONLY thing that can break silence early is a genuine SAFETY stop: something destructive,
+  irreversible, or clearly outside the mandate. That is the single exception, and it is rare.
+- The one end ping fires when EITHER the build is fully complete, OR the run reaches the furthest a
+  single continuous autonomous run can push (with a clean resume point). Either way: one ping.
 
 ## How I keep going (the engine)
 - Each unit: build, typecheck green, deploy behind the flag, VERIFY (render + screenshot + judge with
