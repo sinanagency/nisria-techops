@@ -8,6 +8,7 @@ import ExpenseIntake from "../../components/ExpenseIntake";
 import FinancePulse from "../../components/FinancePulse";
 import MoneyFlows from "../../components/MoneyFlows";
 import FinanceLedger from "../../components/FinanceLedger";
+import BankingView from "../../components/BankingView";
 import KenyaReceiptUpload from "../../components/KenyaReceiptUpload";
 import Countdown from "../../components/Countdown";
 import {
@@ -263,6 +264,9 @@ export default async function Finance() {
 
       {/* MONEY FLOWS: 2026 plan — funding streams vs spend, funding gap, donor actual */}
       <MoneyFlows />
+
+      {/* BANKING: real bank account from the reconciled scanned statement */}
+      <BankingView />
 
       {/* LEDGER: every outflow as a scrollable, month-grouped row list over the itemised payments */}
       <FinanceLedger />
