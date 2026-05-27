@@ -115,6 +115,23 @@ The platform must become the organised filing cabinet that mirrors the Drive. So
   tighten categoryFor so school folders -> Programs/Education, [NS]/[NS] 2026 legacy -> sensible
   homes, and reduce General. Re-run extract after refining (idempotent).
 
+### #55 Brain + #52 Grants — DONE
+- Brain (agent_memory org_fact) now holds 13 deep facts: identity, team, monthly finances,
+  STP/SANARA, programs, banking, 2026 budget, PLUS 6 from the Concept Note "Nisria's Bible"
+  (mission/model/differentiators, 10-year impact, programs in depth, Maisha + brands, funding +
+  100 Champions campaign, mission/vision/theory-of-change grant-ready). Ask Sasa / Smart mode is
+  now richly grounded -> the "query the system" directive is live.
+- #53 beneficiaries: 93 imported private + profiles at /beneficiaries/[id] (donor-style). DONE.
+- #54 team pay: 22 members set (KES monthly). DONE.
+
+### REMAINING (code builds, for the continuing run): 
+- #50 itemise finance: replace the 3 lump month totals with per-line categorised payments from
+  each monthly sheet; Budget-vs-Actuals card from the 2026 budget fact; per-month spend view.
+- #51 banking: read I&M/Stanbic statements (now filed) -> bank_transactions + a Banking section.
+- #58 native content layer: per-doc AI summaries + structured native tables + scrollable reports
+  so docs are read by scrolling, not opening. Tighten Filing categoriser (reduce General 321).
+These need deploy+commit checkpoints; the run continues them with fresh context via this log.
+
 ### Resume point (updated)
 DONE so far: Filing system + watcher (#56/#57) LIVE, 463 docs filed + openable in-app, daily cron.
 Brain seeded with 7 org_facts (identity, team, monthly finances, STP/SANARA, programs, banking,
