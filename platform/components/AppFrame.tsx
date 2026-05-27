@@ -4,6 +4,8 @@ import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import CommandPalette from "./CommandPalette";
+import SpaceSwipe from "./SpaceSwipe";
+import MissionControl from "./MissionControl";
 import ContextBar from "./ContextBar";
 import VoiceDock from "./VoiceDock";
 import ActivityChip from "./ActivityChip";
@@ -180,6 +182,8 @@ function Chrome({ children }: { children: React.ReactNode }) {
       <TabBar />
       <main className="main">{children}</main>
       <FocusSheetHost />
+      <SpaceSwipe />
+      <MissionControl />
       <VoiceDock />
     </div>
   );

@@ -363,3 +363,21 @@ comms) — getting data truly native took priority over chrome. That is the next
 - This is the entry to the Safari nav vision. STILL behind a future flag / fresh session: the
   swipe slider (Command Center <-> Launchpad <-> Workspace), persistent Workspace tabs, Spotlight,
   Mission Control — the STRUCTURAL pieces that reshape navigation (must go behind NEXT_PUBLIC_WORKSPACE).
+
+### RUN GO 13 — experience layer (Spotlight + spaces swipe + Mission Control)
+Built the navigation experience as ADDITIVE, safe pieces (no risky AppFrame rewrite, live app untouched):
+- SPOTLIGHT: ⌘K palette now searches DOCUMENT CONTENT (title + extracted_text) across the corpus,
+  not just page names. /api/documents/search returns hits + snippet + "in text" badge; selecting a
+  doc opens it in the native reader (DocReaderBody exported + openSheet). Verified: API returns 8
+  in-text matches for "uniform"/"loving hand". components/CommandPalette.tsx, app/api/documents/search.
+- SPACE SWIPE: two-finger horizontal swipe / Alt+Arrow between Command Center (/) and Launchpad
+  (/launchpad), with a clickable dot indicator (bottom-center pill). Conservative: only on those two
+  pages, ignores horizontally-scrollable elements, 700ms cooldown. components/SpaceSwipe.tsx. Eye-verified (dots render).
+- MISSION CONTROL: Alt+Up (or "open-mission" event) shows a grid of open Workspace tabs + minimized
+  popups; click to jump, X to close. components/MissionControl.tsx.
+- shot.mjs: goto now waits domcontentloaded (app holds a persistent activity connection so
+  networkidle never fires) + added typeText arg.
+Experience layer now: Launchpad + Spotlight(docs) + swipe-between-spaces + Mission Control + the
+existing persistent Workspace tabs. The only deferred refinement is the full 3-panel persistent-pager
+(swiping INTO a distinct Workspace space) behind NEXT_PUBLIC_WORKSPACE — current model navigates via
+tabs + spaces which is coherent and safe.

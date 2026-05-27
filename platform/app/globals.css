@@ -879,3 +879,25 @@ details.collapse[open] .collapse-head { border-bottom: 1px solid var(--line); }
 .lp-ico.green { background: linear-gradient(160deg, #4ade80, var(--green)); color: #fff; }
 .lp-ico.gray { background: linear-gradient(160deg, #9aa6a6, #5f6b6b); color: #fff; }
 .lp-label { font-size: 12.5px; font-weight: 500; color: var(--ink); text-align: center; line-height: 1.25; }
+
+/* ── Space switcher dots (Command Center <-> Launchpad) ─────────────────── */
+.spaces-dots { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); display: flex; gap: 9px; padding: 8px 12px; background: var(--glass-2); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); border: 1px solid var(--edge); border-radius: var(--radius-pill); box-shadow: var(--shadow-nav); z-index: 60; }
+.spaces-dot { width: 8px; height: 8px; border-radius: 999px; border: 0; padding: 0; background: var(--line-2); cursor: pointer; transition: all .15s var(--ease); }
+.spaces-dot:hover { background: var(--ink-2); }
+.spaces-dot.on { background: var(--teal); width: 22px; }
+
+/* ── Mission Control: overview of open Workspace tabs + popups ──────────── */
+.mc-overlay { position: fixed; inset: 0; z-index: 90; background: rgba(20,40,40,0.28); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: grid; place-items: start center; padding-top: 9vh; }
+.mc-panel { width: min(880px, 92vw); background: var(--surface-elevated, #fff); border: 1px solid var(--edge); border-radius: var(--radius-lg, 22px); box-shadow: var(--shadow-lg); overflow: hidden; }
+.mc-head { display: flex; align-items: center; gap: 9px; padding: 16px 22px; border-bottom: 1px solid var(--line); font-family: var(--font-display); font-weight: 600; font-size: 15px; }
+.mc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; padding: 18px 22px; max-height: 64vh; overflow-y: auto; }
+.mc-card { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); cursor: pointer; transition: all .15s var(--ease); }
+.mc-card:hover { border-color: var(--teal); box-shadow: var(--shadow-sm); transform: translateY(-2px); }
+.mc-x { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 7px; border: 0; background: var(--canvas); color: var(--muted); cursor: pointer; display: grid; place-items: center; opacity: 0; transition: all .14s var(--ease); }
+.mc-card:hover .mc-x { opacity: 1; }
+.mc-x:hover { background: var(--line-2); color: var(--ink); }
+.mc-ico { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: var(--teal-50); color: var(--teal-700); margin-bottom: 4px; }
+.mc-ico.peri { background: var(--peri-50); color: var(--peri-700); }
+.mc-title { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-sub { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-foot { padding: 12px 22px; border-top: 1px solid var(--line); font-size: 11.5px; text-align: center; }

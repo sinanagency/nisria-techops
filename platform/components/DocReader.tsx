@@ -7,6 +7,10 @@ import { Search, ExternalLink } from "lucide-react";
 // Reads a document's extracted text and shows it NATIVELY in a focus sheet:
 // summary on top, full text below, scrollable and searchable in place. No leaving
 // the platform. The original Drive file is a fallback link in the footer only.
+export function DocReaderBody({ id }: { id: string }) {
+  return <Body id={id} />;
+}
+
 function Body({ id }: { id: string }) {
   const [data, setData] = useState<any>(null);
   const [q, setQ] = useState("");

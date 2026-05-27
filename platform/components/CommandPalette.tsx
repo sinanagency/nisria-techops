@@ -3,9 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Command } from "cmdk";
 import { useRouter } from "next/navigation";
+import { useTabs } from "./tabs-context";
+import { DocReaderBody } from "./DocReader";
 import {
   LayoutDashboard, Sparkles, Inbox, PenLine, ListChecks, Users, Send,
   HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone,
+  FileText, ShieldCheck, FolderOpen,
 } from "lucide-react";
 
 const DESTS = [
@@ -42,8 +45,28 @@ const ACTIONS = [
 // kept; only the broken Dialog wrapper is dropped.
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [docs, setDocs] = useState<any[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+  const { openSheet } = useTabs();
+
+  // live document search (title + extracted text) as you type — debounced
+  useEffect(() => {
+    if (q.trim().length < 2) { setDocs([]); return; }
+    const t = setTimeout(() => {
+      fetch(`/api/documents/search?q=${encodeURIComponent(q.trim())}`)
+        .then((r) => r.json())
+        .then((d) => setDocs(d.results || []))
+        .catch(() => setDocs([]));
+    }, 180);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const openDoc = (d: any) => {
+    setOpen(false);
+    openSheet({ id: `doc:${d.id}`, title: d.title, icon: "file", width: 760, render: () => <DocReaderBody id={d.id} /> });
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -81,35 +104,58 @@ export default function CommandPalette() {
 
   if (!open) return null;
 
+  const n = q.trim().toLowerCase();
+  const dests = n ? DESTS.filter((d) => d.label.toLowerCase().includes(n)) : DESTS;
+  const actions = n ? ACTIONS.filter((a) => a.label.toLowerCase().includes(n)) : ACTIONS;
+
   return (
     // overlay: fixed, full-screen, grid-centered (same as Modal/FocusTab). Click
     // the scrim to dismiss; the panel stops propagation so inner clicks stay.
-    <div className="cmdk-overlay" onClick={() => setOpen(false)}>
+    <div className="cmdk-overlay" onClick={() => { setOpen(false); setQ(""); }}>
       <Command
         ref={panelRef}
         label="Command palette"
         className="cmdk-panel"
         role="dialog"
         aria-modal="true"
+        shouldFilter={false}
         onClick={(e: React.MouseEvent) => e.stopPropagation()}
       >
-        <Command.Input placeholder="Search or jump to a page…" />
+        <Command.Input value={q} onValueChange={setQ} placeholder="Search documents, pages and actions…" />
         <Command.List>
           <Command.Empty>No results.</Command.Empty>
-          <Command.Group heading="Actions">
-            {ACTIONS.map((a) => (
-              <Command.Item key={a.label} value={a.label} onSelect={() => go(a.href)}>
-                <a.icon size={16} /> {a.label}
-              </Command.Item>
-            ))}
-          </Command.Group>
-          <Command.Group heading="Go to">
-            {DESTS.map((d) => (
-              <Command.Item key={d.href} value={d.label} onSelect={() => go(d.href)}>
-                <d.icon size={16} /> {d.label}
-              </Command.Item>
-            ))}
-          </Command.Group>
+          {docs.length > 0 && (
+            <Command.Group heading="Documents">
+              {docs.map((d) => (
+                <Command.Item key={d.id} value={`doc-${d.id}`} onSelect={() => openDoc(d)}>
+                  {d.folder === "Admin & Compliance" ? <ShieldCheck size={16} /> : <FileText size={16} />}
+                  <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title}</span>
+                    {d.snippet && <span className="faint" style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.snippet}</span>}
+                  </span>
+                  {d.inBody && <span className="badge teal" style={{ marginLeft: "auto", fontSize: 9.5 }}>in text</span>}
+                </Command.Item>
+              ))}
+            </Command.Group>
+          )}
+          {actions.length > 0 && (
+            <Command.Group heading="Actions">
+              {actions.map((a) => (
+                <Command.Item key={a.label} value={`act-${a.label}`} onSelect={() => go(a.href)}>
+                  <a.icon size={16} /> {a.label}
+                </Command.Item>
+              ))}
+            </Command.Group>
+          )}
+          {dests.length > 0 && (
+            <Command.Group heading="Go to">
+              {dests.map((d) => (
+                <Command.Item key={d.href} value={`nav-${d.label}`} onSelect={() => go(d.href)}>
+                  <d.icon size={16} /> {d.label}
+                </Command.Item>
+              ))}
+            </Command.Group>
+          )}
         </Command.List>
       </Command>
     </div>
