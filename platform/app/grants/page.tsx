@@ -8,7 +8,7 @@ import { admin, money, date } from "../../lib/supabase-admin";
 import { now } from "../../lib/now";
 import { advanceStatus, declineGrant } from "./actions";
 import { PursueButton } from "../../components/GrantQuickActions";
-import { Compass, Send, X } from "lucide-react";
+import { Compass, Send, X, Award } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +87,15 @@ export default async function Grants() {
   // feed so nothing expired is offered as actionable; keep the top 12 live ones.
   const opps: any[] = (oppsRaw || []).filter((o: any) => !isExpired(o.close_date, todayIso)).slice(0, 12);
 
+  // Active grants = the real funding we hold right now (status won, with an
+  // awarded amount). These are our live grants, not historical decisions, so
+  // they get a band at the top instead of being buried in the Won/Lost column.
+  const activeGrants = grants
+    .filter((g: any) => (g.status || "").toLowerCase() === "won" && Number(g.amount_awarded || 0) > 0)
+    .sort((a: any, b: any) => Number(b.amount_awarded || 0) - Number(a.amount_awarded || 0));
+  const activeTotal = activeGrants.reduce((s: number, g: any) => s + Number(g.amount_awarded || 0), 0);
+  const activeIds = new Set(activeGrants.map((g: any) => g.id));
+
   const inColumn = (colKey: string) =>
     grants.filter((g: any) => {
       const s = (g.status || "researching").toLowerCase();
@@ -94,7 +103,8 @@ export default async function Grants() {
       // prepared / submitted). Decided (won/lost) is history, so it may keep an
       // old deadline. An unknown (null) deadline is not treated as expired.
       if (colKey !== "decided" && isExpired(g.deadline, todayIso)) return false;
-      if (colKey === "decided") return s === "won" || s === "lost";
+      // active grants live in the band at the top, not the decided column (one home each)
+      if (colKey === "decided") return (s === "won" || s === "lost") && !activeIds.has(g.id);
       if (colKey === "prepared") return s === "review" || s === "drafting";
       return s === colKey;
     });
@@ -110,6 +120,38 @@ export default async function Grants() {
         </span>
       }
     >
+      {activeGrants.length > 0 && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-h">
+            <span className="flex"><Award size={15} /> Active grants · funding we hold now</span>
+            <span className="money" style={{ fontSize: 13, fontWeight: 600 }}>{money(activeTotal)} committed</span>
+          </div>
+          <div className="agrant-grid">
+            {activeGrants.map((g: any) => (
+              <div key={g.id} className="agrant">
+                <div className="between" style={{ alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="agrant-funder">{clean(g.funder)}</div>
+                    {g.program && <div className="agrant-prog">{clean(g.program)}</div>}
+                  </div>
+                  <Badge tone="green">active</Badge>
+                </div>
+                <div className="between" style={{ marginTop: 12, alignItems: "flex-end" }}>
+                  <div>
+                    <div className="money agrant-amt">{money(Number(g.amount_awarded))}</div>
+                    <div className="faint" style={{ fontSize: 11 }}>committed{g.decision_on ? ` · awarded ${date(g.decision_on)}` : ""}</div>
+                  </div>
+                  <GrantPeek g={g} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="faint" style={{ fontSize: 11.5, lineHeight: 1.5, padding: "12px 22px", borderTop: "1px solid var(--line)" }}>
+            These grants fund specific programmes (SANARA → Maisha vocational training; Smile Together Korea → School Uniforms). The money flows into Kenya operations and is tracked in Finance; we report against each programme rather than reconciling dollar-for-dollar.
+          </div>
+        </div>
+      )}
+
       {(opps || []).length > 0 && (
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="card-h"><span className="flex"><Compass size={15} /> Opportunities · found by the grant hunter</span><Badge tone="teal">{(opps || []).length}</Badge></div>
