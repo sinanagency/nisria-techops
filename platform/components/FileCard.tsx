@@ -2,7 +2,7 @@
 
 import { useTabs } from "./tabs-context";
 import { Badge } from "./ui";
-import { FileText, Maximize2, ExternalLink, Download } from "lucide-react";
+import { FileText, Maximize2, ExternalLink, Download, Sparkles } from "lucide-react";
 
 const TYPE_LABEL: Record<string, string> = {
   bank_statement: "Bank statement", invoice: "Invoice", receipt: "Receipt",
@@ -33,12 +33,19 @@ export default function FileCard({ doc }: { doc: any }) {
       brand: doc.brand || undefined,
       width: 1040,
       titleExtra: <Badge tone="gray">{TYPE_LABEL[doc.doc_type] || doc.doc_type || "Document"}</Badge>,
-      render: () =>
-        renderable ? (
+      render: () => (
+        <>
+          {doc.summary && (
+            <div className="card" style={{ padding: 14, marginBottom: 14, background: "var(--surface-2)", boxShadow: "none" }}>
+              <div className="flex" style={{ gap: 8, marginBottom: 6 }}><Sparkles size={14} color="var(--teal-700)" /><span className="strong" style={{ fontSize: 13 }}>Summary</span></div>
+              <div style={{ fontSize: 13.5, lineHeight: 1.6, color: "var(--ink-2)", whiteSpace: "pre-wrap" }}>{doc.summary}</div>
+            </div>
+          )}
+          {renderable ? (
           <iframe
             src={src}
             title={doc.title}
-            style={{ width: "100%", height: "74vh", border: "1px solid var(--line)", borderRadius: 10, background: "#fff" }}
+            style={{ width: "100%", height: doc.summary ? "60vh" : "74vh", border: "1px solid var(--line)", borderRadius: 10, background: "#fff" }}
           />
         ) : (
           <div className="empty" style={{ padding: 32 }}>
@@ -49,7 +56,9 @@ export default function FileCard({ doc }: { doc: any }) {
             </div>
             <a className="btn sm teal" href={src} target="_blank" rel="noopener" style={{ marginTop: 12 }}><Download size={13} /> Open / download</a>
           </div>
-        ),
+        )}
+        </>
+      ),
       footer: (
         <>
           <a className="btn sm ghost" href={src} target="_blank" rel="noopener"><ExternalLink size={13} /> Open in new tab</a>
@@ -67,6 +76,7 @@ export default function FileCard({ doc }: { doc: any }) {
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="strong" style={{ fontSize: 13.5, overflow: "hidden", wordBreak: "break-word", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{doc.title}</div>
           {doc.subfolder && <div className="faint" style={{ fontSize: 11.5, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.subfolder}</div>}
+          {doc.summary && <div className="muted" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, overflow: "hidden", wordBreak: "break-word", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>{doc.summary}</div>}
         </div>
       </div>
       <div className="flex wrap" style={{ gap: 6, marginTop: 10 }}>
