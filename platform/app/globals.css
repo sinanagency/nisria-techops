@@ -817,3 +817,19 @@ details.collapse[open] .collapse-head { border-bottom: 1px solid var(--line); }
   .report-section { margin-bottom: 16px !important; }
   @page { size: letter; margin: 16mm; }
 }
+
+/* ── Money flows (2026 plan): headline tension + two-stream layout ───────── */
+.flow-tension { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
+.flow-tstat { background: var(--surface); padding: 16px 22px; }
+.flow-tstat.flow-gap { background: linear-gradient(180deg, rgba(217,119,6,0.05), rgba(217,119,6,0.02)); }
+.flow-tlabel { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); margin-bottom: 8px; }
+.flow-tnum { font-family: var(--font-display); font-weight: 600; font-size: 23px; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--ink); }
+.flow-cols { display: grid; grid-template-columns: 1fr 1fr; }
+.flow-colsep { border-left: 1px solid var(--line); }
+.flow-coltitle { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); margin-bottom: 4px; }
+.flow-note { font-size: 11.5px; line-height: 1.55; padding: 14px 22px; border-top: 1px solid var(--line); }
+@media (max-width: 860px) {
+  .flow-tension { grid-template-columns: 1fr; }
+  .flow-cols { grid-template-columns: 1fr; }
+  .flow-colsep { border-left: 0; border-top: 1px solid var(--line); }
+}

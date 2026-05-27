@@ -6,6 +6,7 @@ import { Money, MoneyHideToggle } from "../../components/Money";
 import { addPayment, markPaid, logMpesa, logPayout } from "./actions";
 import ExpenseIntake from "../../components/ExpenseIntake";
 import FinancePulse from "../../components/FinancePulse";
+import MoneyFlows from "../../components/MoneyFlows";
 import FinanceLedger from "../../components/FinanceLedger";
 import KenyaReceiptUpload from "../../components/KenyaReceiptUpload";
 import Countdown from "../../components/Countdown";
@@ -259,6 +260,9 @@ export default async function Finance() {
 
       {/* FINANCE PULSE: copilot insights + monthly burn trend (additive section) */}
       <FinancePulse />
+
+      {/* MONEY FLOWS: 2026 plan — funding streams vs spend, funding gap, donor actual */}
+      <MoneyFlows />
 
       {/* LEDGER: every outflow as a scrollable, month-grouped row list over the itemised payments */}
       <FinanceLedger />
