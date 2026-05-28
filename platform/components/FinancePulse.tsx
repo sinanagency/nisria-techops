@@ -19,21 +19,22 @@ const sevTone: Record<string, { tone: string; icon: any }> = {
 export default async function FinancePulse() {
   const db = admin();
   const [{ data: pays }, { data: insights }] = await Promise.all([
-    db.from("payments").select("amount,paid_at,created_by,recurrence,status,currency").eq("currency", "KES").limit(2000),
+    db.from("payments").select("amount,paid_at,recurrence,status,currency").eq("currency", "KES").limit(5000),
     db.from("finance_insights").select("*").order("created_at", { ascending: false }).limit(8),
   ]);
 
-  // monthly burn from the itemised history; current month = the recurring obligations total
+  // monthly burn from every paid KES month (the full Drive history), last 6 shown;
+  // current month = the recurring obligations total.
   const months: Record<string, number> = {};
   for (const p of (pays || []) as any[]) {
-    if (p.created_by === "drive itemised history" && p.paid_at) {
+    if (p.status === "paid" && p.paid_at) {
       const ym = String(p.paid_at).slice(0, 7);
       months[ym] = (months[ym] || 0) + Number(p.amount || 0);
     }
   }
+  const hist = Object.entries(months).sort(([a], [b]) => (a < b ? -1 : 1)).slice(-6);
   const recurring = (pays || []).filter((p: any) => p.recurrence === "monthly").reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
-  if (recurring) months["current"] = recurring;
-  const series = Object.entries(months).sort(([a], [b]) => (a === "current" ? 1 : b === "current" ? -1 : a < b ? -1 : 1));
+  const series: [string, number][] = [...hist, ...(recurring ? ([["current", recurring]] as [string, number][]) : [])];
   const max = Math.max(1, ...series.map(([, v]) => v));
 
   if (!series.length && !(insights || []).length) return null;

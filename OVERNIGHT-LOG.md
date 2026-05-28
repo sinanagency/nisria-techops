@@ -445,3 +445,13 @@ Per Sinan: one place (Workspace) to chat, assign tasks, and open whoever you're 
   AI reply text to client). app/workspace/page.tsx groups messages->threads, feeds team/tasks/events.
 - Replaced WorkspaceHome overview with the portal. WhatsApp folds in automatically (inbound already
   writes to messages; CH map renders channel='whatsapp' green). Eye-verified.
+
+### RUN GO 19 — Finance history backfill (38 months from the Drive)
+The ledger only reached Nov 2025 (3 itemised sheets). The Drive holds ~38 monthly "nisria Expenses"
+Google Sheets (Mar 2023 -> Apr 2026). scripts/backfill-monthly-expenses.mjs: SA-export each sheet as
+XLSX, parse (Name|Designation|Expense|Amount KES|Amount $) with continuation-row carry-forward,
+categorise, write per-line payments dated to the month. created_by='drive monthly history',
+idempotent (clears prior monthly batches). Result: 1,624 lines / 38 months / KES 43.2M.
+- FinancePulse: now builds the burn trend from ALL paid KES months, shows the LAST 6 + current
+  obligations (was keyed to the old 3-month batch). FinanceLedger limit 1000->5000 so it scrolls to 2023.
+- Ledger now 1,305+ entries back to Mar 2023; Pulse shows 6-month trend. Eye-verified.

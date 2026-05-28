@@ -25,7 +25,7 @@ export default async function FinanceLedger() {
     .from("payments")
     .select("payee,purpose,category,amount,currency,status,paid_at,due_on,created_at,direction")
     .eq("direction", "out")
-    .limit(1000);
+    .limit(5000);
   const rows = (data || []) as any[];
   if (!rows.length) return null;
 
