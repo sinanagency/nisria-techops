@@ -22,12 +22,11 @@ export default async function BankingView() {
   const accounts: Record<string, any[]> = {};
   for (const r of rows) (accounts[r.account || "Account"] ||= []).push(r);
 
+  // no outer card — a Collapsible wraps this in the page so the (older, scanned)
+  // statement history stays tucked away until you open it.
   return (
-    <div className="card" style={{ marginBottom: 16 }}>
-      <div className="card-h">
-        <span className="flex"><Landmark size={15} /> Banking</span>
-        <span className="faint" style={{ fontSize: 11.5 }}>{Object.keys(accounts).length} account{Object.keys(accounts).length === 1 ? "" : "s"} · reconciled to closing</span>
-      </div>
+    <>
+      <div className="faint" style={{ fontSize: 11.5, padding: "12px 22px 0" }}>Scanned bank statements (Oct 2021 – Nov 2022). Historical reference; current spend lives in This-month spend above.</div>
       {Object.entries(accounts).map(([acct, txns]) => {
         const sigN = (s: string) => parseInt(String(s || "").split("#")[1] || "0", 10);
         txns.sort((a, b) => sigN(a.signature) - sigN(b.signature)); // statement order
@@ -72,6 +71,6 @@ export default async function BankingView() {
           </div>
         );
       })}
-    </div>
+    </>
   );
 }

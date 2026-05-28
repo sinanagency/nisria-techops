@@ -5,6 +5,7 @@ import { admin, date } from "../../lib/supabase-admin";
 import { Money, MoneyHideToggle } from "../../components/Money";
 import { addPayment, markPaid, logMpesa, logPayout } from "./actions";
 import ExpenseIntake from "../../components/ExpenseIntake";
+import Collapsible from "../../components/Collapsible";
 import FinancePulse from "../../components/FinancePulse";
 import MoneyFlows from "../../components/MoneyFlows";
 import FinanceLedger from "../../components/FinanceLedger";
@@ -254,92 +255,13 @@ export default async function Finance() {
         </div>
       </div>
 
-      {/* CASH POSITION: what's actually in the bank accounts (reconciled) */}
-      <BankingView />
+      {/* (Banking + Givebutter/Kenya streams are historical — moved below as collapsed dropdowns) */}
 
-      {/* GIVEBUTTER → KENYA reconciliation */}
-      <Card
-        title="Givebutter → Kenya reconciliation"
+      {/* SALARIES — this month: recurring payroll, ticking to payday (dropdown) */}
+      <Collapsible
+        defaultOpen
+        title="Salaries — this month"
         action={
-          <span className="flex" style={{ gap: 8, alignItems: "center" }}>
-            <Badge tone={"peri" as any}>{payoutCount} payouts</Badge>
-            <Badge tone="green">{kenyaCount} Kenya payments</Badge>
-            <KenyaReceiptUpload />
-          </span>
-        }
-      >
-        <div className="card-pad">
-          <div
-            className="flex"
-            style={{ gap: 16, alignItems: "stretch", flexWrap: "wrap", justifyContent: "space-between" }}
-          >
-            {/* withdrawn */}
-            <div style={{ flex: "1 1 200px", minWidth: 180 }}>
-              <div className="flex" style={{ gap: 9 }}>
-                <span className="aico peri" style={{ width: 30, height: 30, borderRadius: 9 }}>
-                  <Landmark size={15} />
-                </span>
-                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13.5 }}>Withdrawn from Givebutter</span>
-              </div>
-              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 26, letterSpacing: "-0.03em", marginTop: 10 }}>
-                <Money amount={withdrawnUsd} />
-              </div>
-              <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>
-                Cash wired to the bank across {payoutCount} payout{payoutCount === 1 ? "" : "s"}
-              </div>
-            </div>
-
-            {/* arrow */}
-            <div className="flex" style={{ flex: "0 0 auto", alignSelf: "center", color: "var(--faint)" }}>
-              <ArrowRight size={22} />
-            </div>
-
-            {/* spent in kenya */}
-            <div style={{ flex: "1 1 200px", minWidth: 180 }}>
-              <div className="flex" style={{ gap: 9 }}>
-                <span className="aico green" style={{ width: 30, height: 30, borderRadius: 9 }}>
-                  <MapPin size={15} />
-                </span>
-                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13.5 }}>Paid out in Kenya</span>
-              </div>
-              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 26, letterSpacing: "-0.03em", marginTop: 10 }}>
-                <Money amount={kenyaSpentKes} currency="KES" />
-              </div>
-              <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>
-                {kenyaCount} Kenya payment{kenyaCount === 1 ? "" : "s"} (M-Pesa &amp; field spend)
-                {kenyaSpentUsd > 0 ? (
-                  <> · plus <Money amount={kenyaSpentUsd} /> in USD</>
-                ) : null}
-              </div>
-            </div>
-          </div>
-          <div className="faint" style={{ fontSize: 11.5, marginTop: 16, lineHeight: 1.5 }}>
-            Payouts are in USD and Kenya spend is in KES, so they are shown side by side without converting.
-            You read "withdrew this much, paid this much on the ground." Payouts sync automatically from Givebutter;
-            log one manually below if a withdrawal hasn’t synced yet.
-            {kenyaSpentKes === 0 && kenyaSpentUsd === 0 ? (
-              <>
-                {" "}
-                <span style={{ color: "var(--warning)", fontWeight: 600 }}>
-                  The Kenya side reads zero because no ground spend is logged yet.
-                </span>{" "}
-                Older spend may be incomplete or missing — that’s expected. Use “Log a past Kenya receipt” above to
-                capture what you have, and from here forward every receipt you log fills in this side.
-              </>
-            ) : (
-              <>
-                {" "}Older spend may be incomplete; from here forward every Kenya receipt you log is captured here.
-              </>
-            )}
-          </div>
-        </div>
-      </Card>
-
-      {/* SALARIES — this month: the recurring payroll obligations, ticking to payday */}
-      <div style={{ marginTop: 16 }}>
-        <Card
-          title="Salaries — this month"
-          action={
             <span className="flex" style={{ gap: 6, alignItems: "center" }}>
               <Badge tone="gray">{salaryPeriodLabel}</Badge>
               {salaryOverdueCount > 0 && <Badge tone="red"><AlarmClock size={11} /> {salaryOverdueCount} overdue</Badge>}
@@ -430,12 +352,11 @@ export default async function Finance() {
               })}
             </div>
           )}
-        </Card>
-      </div>
+      </Collapsible>
 
-      {/* REMINDERS — due soon (first & prominent) */}
-      <div style={{ marginTop: 16 }} />
-      <Card
+      {/* REMINDERS — due soon (dropdown, open) */}
+      <Collapsible
+        defaultOpen
         title="Reminders — due soon"
         action={
           <span className="flex" style={{ gap: 6 }}>
@@ -496,19 +417,18 @@ export default async function Finance() {
             })}
           </div>
         )}
-      </Card>
+      </Collapsible>
 
-      {/* TREND + PLAN + FULL HISTORY: after the cash + what's-due tier */}
-      <FinancePulse />
-      <MoneyFlows />
+      {/* THIS-MONTH SPEND first (queryable, scrolls back), then plan, then trend */}
       <FinanceLedger />
+      <MoneyFlows />
+      <FinancePulse />
 
-      {/* RECURRING OBLIGATIONS grouped by category */}
-      <div style={{ marginTop: 16 }}>
-        <Card
-          title="Recurring obligations"
-          action={<Badge tone="gray">{recurring.length} active</Badge>}
-        >
+      {/* RECURRING OBLIGATIONS grouped by category (dropdown, closed) */}
+      <Collapsible
+        title="Recurring obligations"
+        action={<Badge tone="gray">{recurring.length} active</Badge>}
+      >
           {recurring.length === 0 ? (
             <div className="empty">
               No recurring obligations yet. Add a subscription, salary or vendor payment below and set it to repeat monthly or yearly — it will refresh itself every cycle.
@@ -558,8 +478,39 @@ export default async function Finance() {
               </div>
             </details>
           )}
-        </Card>
-      </div>
+      </Collapsible>
+
+      {/* HISTORICAL (collapsed dropdowns): bank statements + the Givebutter/Kenya streams */}
+      <Collapsible title={<span className="flex" style={{ gap: 7 }}><Landmark size={15} /> Banking</span>} action={<span className="faint" style={{ fontSize: 11.5 }}>scanned statements · 2021–22</span>}>
+        <BankingView />
+      </Collapsible>
+
+      <Collapsible
+        title="Givebutter & Kenya — two streams"
+        action={
+          <span className="flex" style={{ gap: 8, alignItems: "center" }}>
+            <Badge tone={"peri" as any}>{payoutCount} payouts</Badge>
+            <Badge tone="green">{kenyaCount} Kenya payments</Badge>
+            <KenyaReceiptUpload />
+          </span>
+        }
+      >
+        <div className="card-pad">
+          <div className="flex" style={{ gap: 16, alignItems: "stretch", flexWrap: "wrap", justifyContent: "space-between" }}>
+            <div style={{ flex: "1 1 200px", minWidth: 180 }}>
+              <div className="flex" style={{ gap: 9 }}><span className="aico peri" style={{ width: 30, height: 30, borderRadius: 9 }}><Landmark size={15} /></span><span style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13.5 }}>Withdrawn from Givebutter</span></div>
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 26, letterSpacing: "-0.03em", marginTop: 10 }}><Money amount={withdrawnUsd} /></div>
+              <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>Cash wired to the bank across {payoutCount} payout{payoutCount === 1 ? "" : "s"}</div>
+            </div>
+            <div style={{ flex: "1 1 200px", minWidth: 180 }}>
+              <div className="flex" style={{ gap: 9 }}><span className="aico green" style={{ width: 30, height: 30, borderRadius: 9 }}><MapPin size={15} /></span><span style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13.5 }}>Paid out in Kenya</span></div>
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 26, letterSpacing: "-0.03em", marginTop: 10 }}><Money amount={kenyaSpentKes} currency="KES" /></div>
+              <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>{kenyaCount} Kenya payment{kenyaCount === 1 ? "" : "s"} (M-Pesa &amp; field spend){kenyaSpentUsd > 0 ? (<> · plus <Money amount={kenyaSpentUsd} /> in USD</>) : null}</div>
+            </div>
+          </div>
+          <div className="faint" style={{ fontSize: 11.5, marginTop: 16, lineHeight: 1.5 }}>Two independent streams shown side by side, not a forced match. Kenya money also comes from grants and direct gifts outside Givebutter, so we never claim every shilling traces to a payout.</div>
+        </div>
+      </Collapsible>
 
       {/* TOOLS: log/record (data entry lives below the information) */}
       <div id="finance-expense-intake" style={{ marginTop: 16 }}>
