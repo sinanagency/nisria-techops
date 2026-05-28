@@ -149,11 +149,6 @@ export default async function Beneficiaries({
         </a>
       </div>
 
-      {/* AI intake — photos / voice / text -> gated confirm. PII stays private. */}
-      <div id="beneficiary-intake" style={{ marginBottom: 16 }}>
-        <BeneficiaryIntake />
-      </div>
-
       {/* filters */}
       <div className="card card-pad" style={{ marginBottom: 16 }}>
         <div className="stack" style={{ gap: 14 }}>
@@ -193,6 +188,11 @@ export default async function Beneficiaries({
           empty={isFiltered ? "No beneficiaries match these filters." : "No beneficiaries yet. They enter via the intake form."}
         />
       </Card>
+
+      {/* TOOL — below the list: you come here to see people; adding is secondary. PII stays private. */}
+      <div id="beneficiary-intake" style={{ marginTop: 16 }}>
+        <BeneficiaryIntake />
+      </div>
     </Shell>
   );
 }

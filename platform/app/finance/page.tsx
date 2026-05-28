@@ -227,12 +227,7 @@ export default async function Finance() {
         </Link>
       }
     >
-      {/* AI EXPENSE INTAKE — drop a receipt, talk, or type */}
-      <div id="finance-expense-intake" style={{ marginBottom: 16 }}>
-        <ExpenseIntake />
-      </div>
-
-      {/* top: money in / money out / net for the month */}
+      {/* SNAPSHOT FIRST: money in / money out / net for the month */}
       <div className="grid cols-3" style={{ marginBottom: 16 }}>
         <div className="feature teal" style={{ position: "relative" }}>
           <MoneyHideToggle style={{ position: "absolute", top: 16, right: 16 }} />
@@ -259,17 +254,8 @@ export default async function Finance() {
         </div>
       </div>
 
-      {/* FINANCE PULSE: copilot insights + monthly burn trend (additive section) */}
-      <FinancePulse />
-
-      {/* MONEY FLOWS: 2026 plan — funding streams vs spend, funding gap, donor actual */}
-      <MoneyFlows />
-
-      {/* BANKING: real bank account from the reconciled scanned statement */}
+      {/* CASH POSITION: what's actually in the bank accounts (reconciled) */}
       <BankingView />
-
-      {/* LEDGER: every outflow as a scrollable, month-grouped row list over the itemised payments */}
-      <FinanceLedger />
 
       {/* GIVEBUTTER → KENYA reconciliation */}
       <Card
@@ -512,6 +498,11 @@ export default async function Finance() {
         )}
       </Card>
 
+      {/* TREND + PLAN + FULL HISTORY: after the cash + what's-due tier */}
+      <FinancePulse />
+      <MoneyFlows />
+      <FinanceLedger />
+
       {/* RECURRING OBLIGATIONS grouped by category */}
       <div style={{ marginTop: 16 }}>
         <Card
@@ -568,6 +559,11 @@ export default async function Finance() {
             </details>
           )}
         </Card>
+      </div>
+
+      {/* TOOLS: log/record (data entry lives below the information) */}
+      <div id="finance-expense-intake" style={{ marginTop: 16 }}>
+        <ExpenseIntake />
       </div>
 
       {/* forms: add obligation + M-Pesa upload */}
