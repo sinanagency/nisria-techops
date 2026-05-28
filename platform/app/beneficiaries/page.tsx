@@ -32,6 +32,7 @@ export default async function Beneficiaries({
   const status = one("status");
   const consent = one("consent"); // public | private | ""
   const cat = one("cat"); // category cohort (the real segmentation)
+  const photo = one("photo"); // with | without | ""
 
   const active: Record<string, string> = {};
   if (q) active.q = q;
@@ -39,6 +40,7 @@ export default async function Beneficiaries({
   if (status) active.status = status;
   if (consent) active.consent = consent;
   if (cat) active.cat = cat;
+  if (photo) active.photo = photo;
 
   const db = admin();
   const { data } = await db
@@ -63,8 +65,10 @@ export default async function Beneficiaries({
   if (consent === "public") rows = rows.filter((r: any) => !!r.consent_public);
   if (consent === "private") rows = rows.filter((r: any) => !r.consent_public);
   if (cat) rows = rows.filter((r: any) => (r.category || "") === cat);
+  if (photo === "with") rows = rows.filter((r: any) => !!r.photo_asset_id);
+  if (photo === "without") rows = rows.filter((r: any) => !r.photo_asset_id);
 
-  const isFiltered = !!(q || program || status || consent || cat);
+  const isFiltered = !!(q || program || status || consent || cat || photo);
   const publicCount = (data || []).filter((r: any) => r.consent_public).length;
 
   // Cohort overview from the real category + lifecycle segmentation. The
@@ -177,6 +181,14 @@ export default async function Beneficiaries({
             <a className={`pill ${!consent ? "on" : ""}`} href={qs(active, { consent: undefined })}>All</a>
             <a className={`pill ${consent === "public" ? "on" : ""}`} href={qs(active, { consent: "public" })}>Consented</a>
             <a className={`pill ${consent === "private" ? "on" : ""}`} href={qs(active, { consent: "private" })}>Private only</a>
+          </div>
+
+          {/* photo */}
+          <div className="flex wrap" style={{ gap: 6 }}>
+            <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", minWidth: 76 }}>Photo</span>
+            <a className={`pill ${!photo ? "on" : ""}`} href={qs(active, { photo: undefined })}>All</a>
+            <a className={`pill ${photo === "with" ? "on" : ""}`} href={qs(active, { photo: "with" })}>With photo</a>
+            <a className={`pill ${photo === "without" ? "on" : ""}`} href={qs(active, { photo: "without" })}>No photo</a>
           </div>
         </div>
       </div>

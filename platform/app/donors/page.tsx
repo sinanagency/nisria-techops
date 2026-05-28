@@ -22,7 +22,8 @@ const STATUS_OPTS = ["active", "recurring", "major", "prospect", "lapsed"];
 const TYPE_OPTS = ["individual", "organization", "foundation"];
 const SORT_OPTS: { v: string; label: string }[] = [
   { v: "recent", label: "Most recent gift" },
-  { v: "lifetime", label: "Lifetime ↓" },
+  { v: "lifetime", label: "Highest giving" },
+  { v: "lifetime_asc", label: "Lowest giving" },
   { v: "name", label: "Name A–Z" },
 ];
 
@@ -53,7 +54,9 @@ export default async function Donors({
   const db = admin();
   const order =
     sort === "lifetime"
-      ? { col: "lifetime_value", asc: false }
+      ? { col: "lifetime_value", asc: false } // highest first
+      : sort === "lifetime_asc"
+      ? { col: "lifetime_value", asc: true } // lowest first
       : sort === "name"
       ? { col: "full_name", asc: true }
       : { col: "last_gift_at", asc: false };

@@ -19,7 +19,7 @@ export default async function MissionControl() {
   const [
     { data: don }, { data: approvals }, { data: tasks }, counts, cached, { data: events }, MONTHLY_GOAL,
   ] = await Promise.all([
-    db.from("donations").select("amount,status,is_recurring,donated_at"),
+    db.from("donations").select("amount,status,is_recurring,donated_at,currency"),
     db.from("approvals").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(12),
     db.from("tasks").select("title,status,priority,assignee:team_members(name)").neq("status", "done").limit(7),
     getCounts(db),
@@ -30,7 +30,9 @@ export default async function MissionControl() {
   const evAgo = (iso: string) => { const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000); return s < 60 ? "now" : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`; };
   const evLabel = (e: any) => { const p = e.payload || {}; const m: Record<string, string> = { "agent.decided": `Sasa drafted a reply${p.from ? ` to ${p.from}` : ""}`, "approval.created": `${p.title || "Item"} queued`, "approval.approved": "You approved an action", "action.executed": `Sent${p.to ? ` to ${p.to}` : ""}`, "task.assigned": `Task assigned${p.assignee ? ` to ${p.assignee}` : ""}`, "payment.verified": "Payment logged", "grants.refreshed": `${p.found || ""} grant opportunities refreshed`, "asset.ingested": `Filed "${p.title || "asset"}" to Library` }; return m[e.type] || e.type.replace(/\./g, " "); };
 
-  const succ: any[] = (don || []).filter((d: any) => d.status === "succeeded");
+  // USD only for the $ headline figures — never mix KES (bank/M-Pesa donations)
+  // into a dollar total. KES gifts live on donor records and the donations page.
+  const succ: any[] = (don || []).filter((d: any) => d.status === "succeeded" && (d.currency || "USD").toUpperCase() === "USD");
   const now = new Date();
   const inMonth = (d: any, off = 0) => { const x = new Date(d.donated_at); const m = new Date(now.getFullYear(), now.getMonth() - off, 1); return x.getMonth() === m.getMonth() && x.getFullYear() === m.getFullYear(); };
   const raisedMtd = succ.filter((d: any) => inMonth(d)).reduce((s: number, d: any) => s + Number(d.amount), 0);

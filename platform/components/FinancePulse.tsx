@@ -49,7 +49,7 @@ export default async function FinancePulse() {
             <div className="flex" style={{ gap: 14, alignItems: "flex-end" }}>
               {series.map(([ym, v]) => (
                 <div key={ym} style={{ flex: 1, minWidth: 0, textAlign: "center" }}>
-                  <div className="money" style={{ fontSize: 12.5, fontWeight: 600, fontVariantNumeric: "tabular-nums", marginBottom: 6 }}>{(v / 1000).toFixed(0)}k</div>
+                  <div className="money" style={{ fontSize: 12.5, fontWeight: 600, fontVariantNumeric: "tabular-nums", marginBottom: 6 }}>{v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `${(v / 1000).toFixed(0)}k`}</div>
                   <div style={{ height: 64, display: "flex", alignItems: "flex-end" }}>
                     <div style={{ width: "100%", height: `${Math.max(6, (v / max) * 64)}px`, background: ym === "current" ? "var(--teal)" : "var(--teal-100)", borderRadius: "6px 6px 0 0" }} />
                   </div>
