@@ -1,10 +1,14 @@
 import { admin } from "../lib/supabase-admin";
 import { Money } from "./Money";
+import AskSasa from "./AskSasa";
 import { TrendingUp, AlertTriangle, Lightbulb, Info, CircleDot } from "lucide-react";
 
 // Finance pulse: the copilot's read on the books, calm and scannable (Midday/Mercury logic).
-// A monthly burn trend computed from the itemised payments, plus the grounded insights from
-// finance_insights. Server-rendered (no AI on the render path); the insights are precomputed.
+// The monthly burn trend is the FULL sequential KES history from the Drive backfill, every
+// month present, newest at the right, the latest highlighted. The series scrolls horizontally
+// rather than truncating, because the months are all there and hiding them lied about coverage.
+// Insights come grounded from finance_insights, and an inline Ask-Sasa box lets Nur question
+// the trend in place (One-brain law). Quarantined rows (status='void') are excluded.
 const MONTH_LABEL = (ym: string) => {
   const [y, m] = ym.split("-");
   return new Date(Number(y), Number(m) - 1, 1).toLocaleString("en-US", { month: "short" }) + " " + y.slice(2);
@@ -23,8 +27,8 @@ export default async function FinancePulse() {
     db.from("finance_insights").select("*").order("created_at", { ascending: false }).limit(8),
   ]);
 
-  // monthly burn from every paid KES month (the full Drive history), last 6 shown;
-  // current month = the recurring obligations total.
+  // Full monthly run from every paid KES month (the whole Drive history). No truncation:
+  // void/quarantined rows carry status != 'paid' and drop out here automatically.
   const months: Record<string, number> = {};
   for (const p of (pays || []) as any[]) {
     if (p.status === "paid" && p.paid_at) {
@@ -32,10 +36,13 @@ export default async function FinancePulse() {
       months[ym] = (months[ym] || 0) + Number(p.amount || 0);
     }
   }
-  const hist = Object.entries(months).sort(([a], [b]) => (a < b ? -1 : 1)).slice(-6);
-  const recurring = (pays || []).filter((p: any) => p.recurrence === "monthly").reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
-  const series: [string, number][] = [...hist, ...(recurring ? ([["current", recurring]] as [string, number][]) : [])];
+  const series = Object.entries(months).sort(([a], [b]) => (a < b ? -1 : 1)) as [string, number][];
   const max = Math.max(1, ...series.map(([, v]) => v));
+  const latest = series.length ? series[series.length - 1] : null;
+  // recurring obligations are scheduled, not paid: sum the monthly-recurrence rows as-is
+  const recurring = (pays || [])
+    .filter((p: any) => p.recurrence === "monthly")
+    .reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
 
   if (!series.length && !(insights || []).length) return null;
 
@@ -45,17 +52,35 @@ export default async function FinancePulse() {
       <div className="card-pad stack" style={{ gap: 18 }}>
         {series.length > 0 && (
           <div>
-            <div className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 10 }}>Monthly run (KES)</div>
-            <div className="flex" style={{ gap: 14, alignItems: "flex-end" }}>
-              {series.map(([ym, v]) => (
-                <div key={ym} style={{ flex: 1, minWidth: 0, textAlign: "center" }}>
-                  <div className="money" style={{ fontSize: 12.5, fontWeight: 600, fontVariantNumeric: "tabular-nums", marginBottom: 6 }}>{v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `${(v / 1000).toFixed(0)}k`}</div>
-                  <div style={{ height: 64, display: "flex", alignItems: "flex-end" }}>
-                    <div style={{ width: "100%", height: `${Math.max(6, (v / max) * 64)}px`, background: ym === "current" ? "var(--teal)" : "var(--teal-100)", borderRadius: "6px 6px 0 0" }} />
-                  </div>
-                  <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>{ym === "current" ? "This month" : MONTH_LABEL(ym)}</div>
-                </div>
-              ))}
+            <div className="between" style={{ marginBottom: 10 }}>
+              <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em" }}>Monthly run (KES)</span>
+              <span className="faint" style={{ fontSize: 11 }}>{series.length} months tracked, {MONTH_LABEL(series[0][0])} to {MONTH_LABEL(latest![0])}</span>
+            </div>
+            {/* full sequential series, horizontally scrollable so no month is hidden */}
+            <div style={{ overflowX: "auto", paddingBottom: 6 }}>
+              <div className="flex" style={{ gap: 8, alignItems: "flex-end", minWidth: "min-content" }}>
+                {series.map(([ym, v], i) => {
+                  const isLatest = i === series.length - 1;
+                  return (
+                    <div key={ym} title={`${MONTH_LABEL(ym)}: KES ${Math.round(v).toLocaleString()}`} style={{ width: 48, flexShrink: 0, textAlign: "center" }}>
+                      <div className="money" style={{ fontSize: 9.5, fontWeight: 600, fontVariantNumeric: "tabular-nums", marginBottom: 5, color: isLatest ? "var(--ink)" : "var(--faint)" }}>{v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `${Math.round(v / 1000)}k`}</div>
+                      <div style={{ height: 72, display: "flex", alignItems: "flex-end" }}>
+                        <div style={{ width: "100%", height: `${Math.max(4, (v / max) * 72)}px`, background: isLatest ? "var(--teal)" : "var(--teal-100)", borderRadius: "5px 5px 0 0" }} />
+                      </div>
+                      <div className="faint" style={{ fontSize: 9.5, marginTop: 5, whiteSpace: "nowrap" }}>{MONTH_LABEL(ym)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            {/* real values rendered through Money (Law 2); recurring shown as its own stat, not a fake bar */}
+            <div className="flex" style={{ gap: 18, marginTop: 12, flexWrap: "wrap" }}>
+              {latest && (
+                <span className="faint" style={{ fontSize: 12 }}>Latest month ({MONTH_LABEL(latest[0])}): <span className="strong"><Money amount={Math.round(latest[1])} currency="KES" /></span></span>
+              )}
+              {recurring > 0 && (
+                <span className="faint" style={{ fontSize: 12 }}>Recurring obligations: <span className="strong"><Money amount={Math.round(recurring)} currency="KES" /></span> per month</span>
+              )}
             </div>
           </div>
         )}
@@ -76,6 +101,10 @@ export default async function FinancePulse() {
             })}
           </div>
         )}
+        {/* talk to it: question the trend in place rather than reading a static block (One-brain) */}
+        <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+          <AskSasa prompt="Walk me through the monthly run trend and what is driving it" label="Ask Sasa about the trend, e.g. why did the run rise" />
+        </div>
       </div>
     </div>
   );

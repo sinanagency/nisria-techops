@@ -12,11 +12,13 @@ Foundation landed. The handoff in HOW-WE-BUILD.md has run through Step 5: supers
 
 Baseline verdict: FAIL with 406 currency and source-of-truth violations. 226 payments carry created_by='drive monthly history' tagged USD when they are Kenyan KES expenses; 180 of those also hold impossible amounts (the USD payments-out total reads as 1.3e23). Banking is two reconciled Absa accounts (Nisria CBO and LHSH) holding both credits and debits, but only for Oct 2021 to Nov 2022.
 
-Next action: the operator confirms the baseline, then says go on Pass 0.
+Pass 0 underway on branch pass-0-money-truth. Done so far: the 226 currency-corrupted payments resolved (46 mislabeled rows corrected USD to KES, 180 unparseable rows quarantined reversibly, original rows snapshotted to docs/baselines/pass-0-quarantine-snapshot-2026-05-29.json). Re-audit now reads PASS, zero violations, USD payments-out total dropped from 1.3e23 to the real 27,651.66 (Givebutter payouts). Finance pulse rebuilt to show all 38 sequential months (2023-03 to 2026-04) instead of a 6-month slice, with an inline Ask-Sasa box to question the trend. Proof: docs/baselines/money-truth-postfix-2026-05-29.md.
+
+Pass 0 remaining: re-extract the 180 quarantined amounts from the Drive source sheets, treasury A-to-Z summary (in, out, net, per currency at market FX), ledger as real spend from bank statements and invoices, Givebutter split into its own tab, funding-in bars showing real amounts, donor currency shown in its own unit.
 
 ## Passes
 
-- Pass 0 (Money truth): NOT STARTED (baseline filed, worktree armed, awaiting operator go)
+- Pass 0 (Money truth): IN PROGRESS (currency corruption resolved + pulse fixed; treasury, real-spend ledger, Givebutter tab, funding-in, donor currency, 180-row re-extraction pending)
 - Pass 1 (Browser shell): NOT STARTED
 - Pass 2 (Depth, full profiles): NOT STARTED
 - Pass 3 (AI, comms, life): NOT STARTED
@@ -31,7 +33,7 @@ To be filled in by Claude Code when it runs the money-truth-auditor and the dril
 
 | Module | Status | Owning law | Notes |
 |---|---|---|---|
-| Finance | MIXED | Currency, Source-of-truth | 226 payments mislabeled USD (should be KES), USD payments-out total poisoned to 1.3e23; KES sums look sane; see docs/baselines/money-truth-baseline-2026-05-29.md |
+| Finance | MIXED | Currency, Source-of-truth | Currency corruption resolved (audit PASS, postfix proof); pulse shows all 38 months. Still pending: treasury summary, real-spend ledger, Givebutter tab, 180-row re-extraction |
 | Workspace | TBD | Browser-OS, Local-first | Awaiting Pass 1 |
 | Beneficiaries | TBD | Source-of-truth, Drill-to-core | 93 imported, photos partial |
 | Grants | TBD | Real-action, Source-of-truth | Active band live, submission not real |
