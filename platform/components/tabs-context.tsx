@@ -36,14 +36,35 @@ export type Sheet = {
 
 export type OpenSheet = Omit<Sheet, "minimized">;
 
-// Top-level sections live in the nav. They are NOT tabbed (no duplication).
-// Tabs only hold things you OPEN: a donor, a contact, a finance entry, etc.
-const NAV_SECTIONS = new Set([
-  "/", "/inbox", "/content", "/library", "/tasks", "/agents", "/smart",
-  "/donors", "/donations", "/campaigns", "/beneficiaries", "/inventory",
-  "/grants", "/outreach", "/team", "/newsletter", "/finance", "/studio",
-  "/reports", "/settings", "/filing",
-]);
+// The three SPACES are not tabbed — they are how you navigate. Everything else you
+// open (a module, a record, a document) becomes a persistent Workspace tab, so the
+// Workspace is a real browser-like surface that accumulates your open apps.
+const NAV_SECTIONS = new Set(["/", "/launchpad", "/workspace", "/login"]);
+
+// Top-level module roots → tab title + icon (so an opened app reads "Finance", not "finance").
+const ROOT_SECTION: Record<string, { icon: string; label: string }> = {
+  "/inbox": { icon: "inbox", label: "Inbox" },
+  "/tasks": { icon: "check", label: "Tasks" },
+  "/donors": { icon: "heart", label: "Donors" },
+  "/donations": { icon: "dollar", label: "Donations" },
+  "/campaigns": { icon: "target", label: "Campaigns" },
+  "/grants": { icon: "award", label: "Grants" },
+  "/finance": { icon: "dollar", label: "Finance" },
+  "/reports": { icon: "file", label: "Reports" },
+  "/legal": { icon: "shield", label: "Legal & Compliance" },
+  "/studio": { icon: "spark", label: "Document Studio" },
+  "/filing": { icon: "folder", label: "Filing" },
+  "/content": { icon: "pen", label: "Content" },
+  "/library": { icon: "folder", label: "Library" },
+  "/newsletter": { icon: "send", label: "Newsletter" },
+  "/inventory": { icon: "box", label: "Inventory" },
+  "/outreach": { icon: "mega", label: "Outreach" },
+  "/beneficiaries": { icon: "life", label: "Beneficiaries" },
+  "/team": { icon: "users", label: "Team" },
+  "/agents": { icon: "bot", label: "Agents" },
+  "/settings": { icon: "file", label: "Settings" },
+  "/smart": { icon: "spark", label: "Smart Mode" },
+};
 
 // detail route → icon + parent section label by prefix
 const SECTION_BY_PREFIX: Record<string, { icon: string; label: string }> = {
@@ -78,6 +99,8 @@ function humanize(seg: string) {
 // the parent section name ("Donor", "Grant") until TabTitle resolves the real
 // human name once the detail page renders.
 function deriveTab(href: string): Tab {
+  // a top-level module root opens as its named tab (Finance, Beneficiaries, …)
+  if (ROOT_SECTION[href]) return { href, title: ROOT_SECTION[href].label, icon: ROOT_SECTION[href].icon };
   const prefixKey = Object.keys(SECTION_BY_PREFIX).find((p) => href.startsWith(p + "/"));
   const section = prefixKey ? SECTION_BY_PREFIX[prefixKey] : null;
   const seg = href.split("/").filter(Boolean).pop() || href;
