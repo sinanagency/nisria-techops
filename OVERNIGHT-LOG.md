@@ -433,3 +433,15 @@ Built the missing third window. SpaceSwipe now rotates Command Center <-> Launch
   is live (webhook already writes inbound to `messages`; CH map renders channel='whatsapp').
 - "Activity": recent events (grant prepared, drive extracted, beneficiary changes...).
 Eye-verified: Live ops shows the 14 email convos + activity feed; Open-now empty (headless has no tabs).
+
+### RUN GO 18 — Workspace becomes the OPS PORTAL (chat · assign · open-as-tab)
+Per Sinan: one place (Workspace) to chat, assign tasks, and open whoever you're talking to as a tab.
+- components/WorkspacePortal.tsx (client) — 3-pane: Conversations rail (messages grouped by contact,
+  channel-badged, unread) | Chat (bubbles in/out + composer + Sasa-draft + Send) | Tasks + Open tabs.
+  Header: "Open profile" -> router.push(/contacts/[id]) opens person as a Workspace tab; "Assign task"
+  -> inline form (title, assignee from team_members, due).
+- app/workspace/actions.ts: sendChat (email sends via sasa@; whatsapp/other QUEUED until connected),
+  assignTask (real task; source must be manual|ai so origin goes in description), sasaDraft (returns
+  AI reply text to client). app/workspace/page.tsx groups messages->threads, feeds team/tasks/events.
+- Replaced WorkspaceHome overview with the portal. WhatsApp folds in automatically (inbound already
+  writes to messages; CH map renders channel='whatsapp' green). Eye-verified.
