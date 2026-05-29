@@ -185,7 +185,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // source_group: when the task is born in a team group, remember which one so
     // follow-ups post back to that same group (set from ctx, not the model).
     const source_group = ctx.sourceGroup || null;
-    const { data: task } = await db.from("tasks").insert({ title, assignee_id: member?.id || null, priority, status: "todo", source: "smart", created_by: "Nur", due_on, source_group }).select("id,title").single();
+    const { data: task, error: taskErr } = await db.from("tasks").insert({ title, assignee_id: member?.id || null, priority, status: "todo", source: "ai", created_by: "Nur", due_on, source_group }).select("id,title").single();
+    if (taskErr || !task) return { ok: false, summary: "", error: taskErr?.message || "task insert failed" };
     await emit({ type: "task.assigned", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: task?.id || null, payload: { title, assignee: member?.name || null, via: ctx.sourceGroup ? "group" : "smart", group: source_group } });
     const who = member?.name ? `assigned to ${member.name}` : "unassigned";
     return { ok: true, summary: humanize(`Created the task "${title}", ${who}.`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: task?.id, assignee: member?.name } };
