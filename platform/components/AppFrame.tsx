@@ -10,6 +10,7 @@ import ContextBar from "./ContextBar";
 import VoiceDock from "./VoiceDock";
 import ActivityChip from "./ActivityChip";
 import FocusSheetHost from "./FocusSheet";
+import SasaTour from "./SasaTour";
 import { logout } from "../app/login/actions";
 import { TabsProvider, useTabs } from "./tabs-context";
 import {
@@ -155,7 +156,7 @@ function TopNav({ user }: { user: NavUser }) {
             <Search size={15} /> <span>Search anything…</span> <kbd>⌘K</kbd>
           </button>
           <Link href="/smart" className={`navpill smartbtn ${path === "/smart" ? "active" : ""}`} title="Smart Mode"><Wand2 size={16} /> Smart</Link>
-          <Link href="/guide" className={`iconbtn ${path === "/guide" ? "active" : ""}`} aria-label="Guide, how this works and what to set up" title="Guide"><HelpCircle size={17} /></Link>
+          <button className="iconbtn" aria-label="Take the tour with Sasa" title="Tour with Sasa" onClick={() => window.dispatchEvent(new Event("start-sasa-tour"))}><HelpCircle size={17} /></button>
           <ActivityChip />
           <div className="dropwrap" ref={avRef}>
             <button className="avatar" title={user?.name || "Account"} aria-label="Account menu" onClick={() => setAvOpen((o) => !o)}>{user?.initials || "?"}</button>
@@ -165,7 +166,7 @@ function TopNav({ user }: { user: NavUser }) {
                   <div style={{ fontWeight: 600, fontSize: 13 }}>{user?.name || "Signed in"}</div>
                   <div className="faint" style={{ fontSize: 11.5 }}>{user?.org || "By Nisria Inc"}</div>
                 </div>
-                <Link href="/guide" className={isActive("/guide") ? "active" : ""} onClick={() => setAvOpen(false)}><span className="ico"><Compass size={15} /></span> Guide</Link>
+                <button className="dropbtn" onClick={() => { setAvOpen(false); window.dispatchEvent(new Event("start-sasa-tour")); }}><span className="ico"><Compass size={15} /></span> Tour with Sasa</button>
                 <div className="droplbl">System</div>
                 <Link href="/agents" className={isActive("/agents") ? "active" : ""} onClick={() => setAvOpen(false)}><span className="ico"><Bot size={15} /></span> Agents</Link>
                 <Link href="/settings" className={isActive("/settings") ? "active" : ""} onClick={() => setAvOpen(false)}><span className="ico"><Settings size={15} /></span> Settings</Link>
@@ -180,18 +181,6 @@ function TopNav({ user }: { user: NavUser }) {
 }
 
 function Chrome({ children, user }: { children: React.ReactNode; user: NavUser }) {
-  const path = usePathname();
-  const router = useRouter();
-  // First login: take the founder to the Guide once, then never again.
-  useEffect(() => {
-    if (user?.role !== "founder") return;
-    if (path !== "/") return;
-    try {
-      if (localStorage.getItem("nis.guideSeen") === "1") return;
-      localStorage.setItem("nis.guideSeen", "1");
-      router.push("/guide");
-    } catch {}
-  }, [user?.role, path, router]);
   return (
     <div className="appshell">
       <CommandPalette />
@@ -203,6 +192,8 @@ function Chrome({ children, user }: { children: React.ReactNode; user: NavUser }
       <SpaceSwipe />
       <MissionControl />
       <VoiceDock />
+      {/* Sasa meets the founder on first login, walks the platform, then asks for what she needs. */}
+      <SasaTour autoStart={user?.role === "founder"} />
     </div>
   );
 }

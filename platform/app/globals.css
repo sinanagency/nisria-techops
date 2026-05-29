@@ -1008,3 +1008,45 @@ details.collapse[open] .collapse-head { border-bottom: 1px solid var(--line); }
 
 .guide-hero .card-pad, .guide-steps .card-pad { padding: 0; }
 @media (max-width: 760px) { .guidestep-go { margin-left: 0; } }
+
+/* ── Sasa-led tour (components/SasaTour.tsx) ────────────────────────────── */
+.sasatour-orb { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-family: var(--font-display); background: linear-gradient(135deg, var(--teal), var(--peri)); box-shadow: 0 4px 14px rgba(0,196,194,0.35); flex: none; }
+.sasatour-orb.big { width: 60px; height: 60px; font-size: 26px; margin-bottom: 6px; }
+
+/* intro + done: a focused, centered meeting */
+.sasatour-scrim { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: 24px; background: rgba(14,30,34,0.42); backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); animation: tourfade .2s var(--ease); }
+.sasatour-intro { max-width: 460px; width: 100%; padding: 30px 30px 26px; text-align: center; background: var(--surface-elevated); display: flex; flex-direction: column; align-items: center; }
+.sasatour-intro h2 { font-family: var(--font-display); font-size: 23px; margin: 6px 0 8px; color: var(--ink); }
+.sasatour-intro p { font-size: 14px; color: var(--ink-2); line-height: 1.55; margin: 0 0 10px; max-width: 38ch; }
+.sasatour-introbtns { display: flex; gap: 10px; margin-top: 12px; }
+
+/* the walk: a coach dock at the bottom so the real page stays visible above */
+.sasatour-dock { position: fixed; left: 0; right: 0; bottom: 22px; z-index: var(--z-modal); display: flex; justify-content: center; padding: 0 18px; pointer-events: none; animation: tourup .24s var(--ease); }
+.sasatour-panel { pointer-events: auto; width: 100%; max-width: 660px; padding: 16px 18px 14px; background: var(--surface-elevated); box-shadow: var(--shadow-lg, 0 18px 50px rgba(14,30,34,0.28)); border: 1px solid var(--hairline); }
+.sasatour-row { display: flex; align-items: center; gap: 11px; }
+.sasatour-meta { flex: 1; min-width: 0; }
+.sasatour-name { font-weight: 700; font-size: 14px; color: var(--ink); display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.sasatour-where { font-weight: 500; font-size: 12px; color: var(--teal-700); }
+.sasatour-progress { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+.sasatour-say { font-size: 14px; line-height: 1.55; color: var(--ink-2); margin: 11px 2px 13px; }
+.sasatour-answer { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px; }
+.sasatour-answer textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font-family: inherit; font-size: 13.5px; color: var(--ink); background: var(--surface); line-height: 1.5; }
+.sasatour-answer textarea:focus { outline: none; border-color: var(--teal); }
+.sasatour-controls { display: flex; align-items: center; gap: 10px; }
+.sasatour-dots { display: flex; gap: 5px; margin: 0 auto; }
+.sasatour-dots .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--hairline); transition: all .2s var(--ease); }
+.sasatour-dots .dot.on { background: var(--teal); transform: scale(1.35); }
+
+.iconbtn.sm { width: 30px; height: 30px; }
+.iconbtn.rec { background: rgba(224,72,77,0.14); border-color: rgba(224,72,77,0.4); color: var(--red); animation: tourpulse 1.2s ease-in-out infinite; }
+.dropbtn { width: 100%; display: flex; align-items: center; gap: 9px; text-align: left; background: none; border: 0; padding: 9px 11px; border-radius: 11px; color: var(--ink-2); cursor: pointer; font-size: 13.5px; font-family: inherit; }
+.dropbtn:hover { background: var(--canvas); color: var(--ink); }
+.dropbtn .ico { color: var(--muted); display: grid; place-items: center; }
+
+/* a soft glow on the nav item Sasa is talking about */
+.tour-glow { box-shadow: 0 0 0 2px var(--teal), 0 0 16px rgba(0,196,194,0.5) !important; border-radius: var(--radius-pill); transition: box-shadow .25s var(--ease); }
+
+@keyframes tourfade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tourup { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes tourpulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+@media (max-width: 760px) { .sasatour-dots { display: none; } .sasatour-dock { bottom: 12px; } }
