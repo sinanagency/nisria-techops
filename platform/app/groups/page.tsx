@@ -3,6 +3,7 @@ import { Badge } from "../../components/ui";
 import { TabTitle } from "../../components/tabs-context";
 import { admin, date } from "../../lib/supabase-admin";
 import { postToGroupAction } from "../team/actions";
+import GroupLink from "../../components/GroupLink";
 import { Users, Send, MessageSquare, Smartphone, Bot } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,9 @@ export default async function Groups() {
       action={<Badge tone="gray">{groupList.length} groups</Badge>}
     >
       <TabTitle title="Groups" />
+
+      {/* live link panel: scannable QR for the group number, auto-refreshing */}
+      <GroupLink />
 
       {/* connections: the two numbers and how the team is reached */}
       <div className="grid cols-2" style={{ marginBottom: 16 }}>

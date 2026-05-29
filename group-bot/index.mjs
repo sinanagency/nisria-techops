@@ -14,6 +14,7 @@
 //   GROUP_ALLOWLIST   optional comma-separated group-name substrings; empty = all groups
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from "@whiskeysockets/baileys";
 import qrcode from "qrcode-terminal";
+import QRCode from "qrcode";
 import pino from "pino";
 
 const PLATFORM_URL = (process.env.PLATFORM_URL || "").replace(/\/$/, "");
@@ -58,6 +59,18 @@ async function groupName(sock, jid) {
   } catch {
     return jid;
   }
+}
+
+// push the current link state to the portal so Nur can scan a live QR from
+// command.nisria.co/groups without anyone babysitting a terminal
+async function postLink(state) {
+  try {
+    await fetch(`${PLATFORM_URL}/api/group/link`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-group-secret": SECRET },
+      body: JSON.stringify({ ...state, ts: new Date().toISOString() }),
+    });
+  } catch (e) { log.warn({ err: e?.message }, "postLink failed"); }
 }
 
 // resolve a portal group name to a WhatsApp jid: exact first, then contains
@@ -122,9 +135,14 @@ async function start() {
     if (qr) {
       log.info("Scan this QR with the Nisria GROUP WhatsApp number (Linked Devices):");
       qrcode.generate(qr, { small: true });
+      // also push it to the portal so Nur can scan a live QR from /groups
+      QRCode.toDataURL(qr, { width: 320, margin: 1 })
+        .then((dataUrl) => postLink({ qr: dataUrl, connected: false }))
+        .catch((e) => log.warn({ err: e?.message }, "qr dataurl failed"));
     }
     if (connection === "open") {
       log.info("connected. listening to team groups.");
+      postLink({ qr: null, connected: true });
       // prime the name->jid map so portal sends can target groups by name
       sock.groupFetchAllParticipating()
         .then((groups) => { for (const g of Object.values(groups || {})) remember(g.id, g.subject); log.info({ groups: nameToJid.size }, "groups primed"); })
