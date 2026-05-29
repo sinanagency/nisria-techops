@@ -117,6 +117,9 @@ export default async function Finance() {
     .sort((a: any, b: any) => new Date(b.paid_at).getTime() - new Date(a.paid_at).getTime());
   const salaryTotal = salaryUnpaid.length + salaryPaidMonth.length;
   const salaryOverdueCount = salaryUnpaid.filter((p: any) => p.due_on && dueTimeOf(p) < today.getTime()).length;
+  // Honesty: "paid" is only trustworthy with proof. Count how many of this month's
+  // marked-paid salaries actually carry a proof attachment (screenshot/receipt).
+  const salaryWithProof = salaryPaidMonth.filter((p: any) => !!p.screenshot_path).length;
 
   const isUsd = (p: any) => (p.currency || "USD").toUpperCase() === "USD";
   const paidThisMonth = (p: any) =>
@@ -267,7 +270,12 @@ export default async function Finance() {
               {salaryOverdueCount > 0 && <Badge tone="red"><AlarmClock size={11} /> {salaryOverdueCount} overdue</Badge>}
               {salaryTotal > 0 && (
                 <Badge tone={salaryUnpaid.length === 0 ? "green" : "teal"}>
-                  {salaryPaidMonth.length}/{salaryTotal} paid
+                  {salaryPaidMonth.length}/{salaryTotal} marked paid
+                </Badge>
+              )}
+              {salaryPaidMonth.length > 0 && (
+                <Badge tone={salaryWithProof === salaryPaidMonth.length ? "green" : "gold"}>
+                  {salaryWithProof}/{salaryPaidMonth.length} with proof
                 </Badge>
               )}
             </span>
@@ -339,11 +347,17 @@ export default async function Finance() {
                         ) : (
                           <span className="strong">{p.payee || "—"}</span>
                         )}
-                        <Badge tone="green"><CheckCircle2 size={11} /> Paid</Badge>
+                        {p.screenshot_path ? (
+                          <Badge tone="green"><CheckCircle2 size={11} /> Paid · proof</Badge>
+                        ) : String(p.created_by || "").toLowerCase().startsWith("drive") ? (
+                          <Badge tone="gray">Recorded · historical</Badge>
+                        ) : (
+                          <Badge tone="gold">Marked paid · no proof</Badge>
+                        )}
                       </div>
                       <div className="faint" style={{ fontSize: 11.5, marginTop: 3 }}>
                         {p.purpose ? `${p.purpose} · ` : ""}
-                        {salaryPeriodLabel} · Paid {date(p.paid_at)}
+                        {salaryPeriodLabel} · {p.screenshot_path ? "Paid" : "Marked"} {date(p.paid_at)}
                       </div>
                     </div>
                     <Money amount={p.amount} currency={p.currency} className="strong" style={{ whiteSpace: "nowrap", flexShrink: 0 }} />
