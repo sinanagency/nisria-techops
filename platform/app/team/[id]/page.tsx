@@ -8,7 +8,7 @@ import { admin, date } from "../../../lib/supabase-admin";
 import { setTaskStatus, setMemberStatus } from "../actions";
 import {
   Mail, Phone, MapPin, Calendar, Briefcase, Tag, DollarSign, ListChecks,
-  Bot, Activity as ActIcon, CheckCircle2, Circle, Clock, FileText,
+  Bot, Activity as ActIcon, CheckCircle2, Circle, Clock, FileText, MessageSquare,
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +71,32 @@ export default async function TeamMember360({ params }: { params: { id: string }
     .limit(40);
   const events: any[] = eventRows || [];
 
+  // this member's WhatsApp messages (group history backfill + future live). They
+  // link via contact: matched either by name (the chat-history attribution) or by
+  // phone (the live webhook). Union both, then pull their messages newest-first.
+  const contactIds = new Set<string>();
+  {
+    const { data } = await db.from("contacts").select("id").eq("channel", "whatsapp").eq("name", m.name);
+    (data || []).forEach((c: any) => contactIds.add(c.id));
+  }
+  if (m.phone) {
+    const { data } = await db.from("contacts").select("id").eq("channel", "whatsapp").eq("phone", m.phone);
+    (data || []).forEach((c: any) => contactIds.add(c.id));
+  }
+  let messages: any[] = [];
+  let messageCount = 0;
+  if (contactIds.size) {
+    const { data: msgRows, count } = await db
+      .from("messages")
+      .select("id,body,account,created_at,direction", { count: "exact" })
+      .in("contact_id", Array.from(contactIds))
+      .eq("channel", "whatsapp")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    messages = msgRows || [];
+    messageCount = count || 0;
+  }
+
   // task breakdown: ongoing (in_progress), pending (todo|blocked), done
   const ongoing = tasks.filter((t) => t.status === "in_progress");
   const pending = tasks.filter((t) => t.status === "todo" || t.status === "blocked");
@@ -112,6 +138,15 @@ export default async function TeamMember360({ params }: { params: { id: string }
       title: String(e.type || "").replace(/\./g, " "),
       meta: e.payload?.status || e.payload?.title || "",
       at: e.created_at,
+    });
+  // fold this member's recent messages into the unified timeline
+  for (const msg of messages.slice(0, 12))
+    timeline.push({
+      icon: MessageSquare,
+      aico: "teal",
+      title: String(msg.body || "").replace(/\s+/g, " ").slice(0, 120),
+      meta: msg.account || "WhatsApp",
+      at: msg.created_at,
     });
   timeline.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
@@ -284,6 +319,30 @@ export default async function TeamMember360({ params }: { params: { id: string }
                   {pending.map((tk) => <TaskItem key={tk.id} tk={tk} />)}
                   {done.slice(0, 8).map((tk) => <TaskItem key={tk.id} tk={tk} />)}
                 </>
+              )}
+            </div>
+          </div>
+
+          {/* messages: this person's words in the team groups */}
+          <div className="card">
+            <div className="card-h">
+              <span className="flex"><MessageSquare size={15} /> Messages</span>
+              <Badge tone="gray">{messageCount}</Badge>
+            </div>
+            <div style={{ padding: "6px 18px 12px" }}>
+              {messages.length === 0 ? (
+                <div className="empty">No messages yet. Group history appears here once this person is active.</div>
+              ) : (
+                messages.slice(0, 30).map((msg) => (
+                  <div key={msg.id} className="actrow">
+                    <span className="aico teal"><MessageSquare size={15} /></span>
+                    <div className="abody">
+                      <div className="atitle" style={{ whiteSpace: "pre-wrap", fontWeight: 400 }}>{String(msg.body || "").slice(0, 400)}</div>
+                      <div className="ameta">{msg.account || "WhatsApp"}</div>
+                    </div>
+                    <span className="aright">{date(msg.created_at)}</span>
+                  </div>
+                ))
               )}
             </div>
           </div>
