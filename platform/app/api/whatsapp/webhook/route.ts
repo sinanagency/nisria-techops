@@ -2,18 +2,20 @@
 //   GET  = Meta's one-time verification handshake (echoes hub.challenge when the
 //          verify token matches WHATSAPP_VERIFY_TOKEN).
 //   POST = inbound messages + delivery statuses. We verify Meta's signature (when
-//          WHATSAPP_APP_SECRET is set), store each inbound message (channel
-//          'whatsapp', matched to the team member by phone), and emit an event so
-//          the bot pipeline can act on it. We ALWAYS return 200 fast so Meta never
-//          disables the webhook; processing failures are swallowed + logged.
+//          WHATSAPP_APP_SECRET is set), resolve the sender to a contact, store the
+//          inbound message (deduped on the WhatsApp message id), then ENQUEUE a
+//          whatsapp.reply job and return 200 immediately. A separate worker
+//          (/api/whatsapp/worker) runs the slow brain + sends the reply, so Meta
+//          never times out and never disables the webhook.
 //
 // This endpoint is public (Meta calls it unauthenticated) and is bypassed in
-// middleware.ts. Sending replies + parsing reports/invoices into the platform is
-// the next layer (lib/whatsapp + the bot agent); this is the ingress only.
+// middleware.ts. The reply (Sasa for operators, donor-comms for everyone else)
+// is the worker's job; this is ingress + fast hand-off only.
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
+import { enqueueJob, triggerWorker } from "../../../../lib/jobs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,7 +28,6 @@ export async function GET(req: NextRequest) {
   const challenge = sp.get("hub.challenge") || "";
   const expected = process.env.WHATSAPP_VERIFY_TOKEN;
   if (mode === "subscribe" && expected && token === expected) {
-    // Meta requires the raw challenge echoed back as text/plain.
     return new NextResponse(challenge, { status: 200, headers: { "content-type": "text/plain" } });
   }
   return new NextResponse("forbidden", { status: 403 });
@@ -40,16 +41,30 @@ function safeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ab, bb);
 }
 
-// normalise a phone to digits-only for matching against team_members
 const digits = (s: string) => (s || "").replace(/\D/g, "");
+
+// Resolve (or create) the contact row for a WhatsApp sender, so the conversation
+// threads by contact_id across messages. Returns the contact id or null.
+async function resolveContact(db: any, waId: string, name: string | null): Promise<string | null> {
+  const phone = digits(waId);
+  if (!phone) return null;
+  const { data: found } = await db.from("contacts").select("id").eq("phone", phone).eq("channel", "whatsapp").limit(1);
+  if (found && found.length) return found[0].id;
+  const { data: made } = await db
+    .from("contacts")
+    .insert({ name: name || phone, phone, channel: "whatsapp" })
+    .select("id")
+    .single();
+  return made?.id ?? null;
+}
 
 // --- POST: inbound messages + statuses -------------------------------------
 export async function POST(req: NextRequest) {
   const raw = await req.text();
 
-  // Verify Meta's signature when the app secret is configured. If it is not set
-  // yet (early setup), we accept so the handshake/test flow works; once the
-  // secret is in env, spoofed calls are rejected.
+  // Verify Meta's signature when the app secret is configured. If unset (early
+  // setup), accept so the flow works; once the secret is in env, spoofed calls
+  // are rejected.
   const secret = process.env.WHATSAPP_APP_SECRET;
   if (secret) {
     const sig = req.headers.get("x-hub-signature-256") || "";
@@ -59,11 +74,10 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  let shouldTrigger = false;
   try {
     const body = JSON.parse(raw || "{}");
     const db = admin();
-    const team: any[] = (await db.from("team_members").select("id,name,phone")).data || [];
-    const byPhone = new Map<string, any>(team.map((t: any) => [digits(t.phone), t]));
 
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
@@ -71,41 +85,73 @@ export async function POST(req: NextRequest) {
         const contacts: any[] = v.contacts || [];
         for (const m of v.messages || []) {
           const from = digits(m.from);
-          const member: any = byPhone.get(from) || null;
+          const waMsgId = m.id || null;
+
+          // DEDUPE: Meta retries webhooks. If we already stored this message id,
+          // skip it entirely so the bot never double-replies.
+          if (waMsgId) {
+            const { data: dupe } = await db.from("messages").select("id").eq("external_id", waMsgId).limit(1);
+            if (dupe && dupe.length) continue;
+          }
+
           const contactName = contacts.find((c) => digits(c.wa_id) === from)?.profile?.name || null;
-          const text =
+          // The text we have on the message itself: a typed message, a button, or
+          // the CAPTION on a media message (image/document captions carry text).
+          const caption =
             m.text?.body ||
             m.button?.text ||
             m.interactive?.list_reply?.title ||
             m.interactive?.button_reply?.title ||
-            (m.type && m.type !== "text" ? `[${m.type} message]` : "");
+            m.image?.caption ||
+            m.document?.caption ||
+            m.video?.caption ||
+            "";
+          // Any attached media (image / document / audio / video / voice).
+          const media = m.image || m.document || m.audio || m.video || m.voice || null;
+          const mediaId: string | null = media?.id || null;
+          const mediaMime: string | null = media?.mime_type || null;
+          const body = caption || (m.type && m.type !== "text" ? `[${m.type}]` : "");
 
-          // store the inbound message so nothing is lost, even before the bot
-          // pipeline parses it into a report / invoice / task update.
+          const contactId = await resolveContact(db, from, contactName);
+
           await db.from("messages").insert({
             channel: "whatsapp",
             direction: "in",
-            body: text,
+            body,
             handled_by: "whatsapp",
             status: "received",
             account: "whatsapp",
+            external_id: waMsgId,
+            contact_id: contactId,
           });
 
           await emit({
             type: "whatsapp.message_in",
             source: "whatsapp",
-            actor: member?.name || contactName || from,
-            subject_type: member ? "team_member" : "contact",
-            subject_id: member?.id ?? null,
-            payload: { from, name: member?.name || contactName, text: String(text).slice(0, 500), wa_message_id: m.id, type: m.type },
+            actor: contactName || from,
+            subject_type: "contact",
+            subject_id: contactId,
+            payload: { from, name: contactName, text: String(body).slice(0, 500), wa_message_id: waMsgId, type: m.type },
           });
+
+          // Hand off to the worker. Text gets a reply; media (image/doc/audio/
+          // video) gets read + processed there too. The worker enforces who may
+          // get a response, so we enqueue for any meaningful inbound.
+          if (body || mediaId) {
+            await enqueueJob("whatsapp.reply", contactId, {
+              from, name: contactName, text: caption, wa_message_id: waMsgId, contact_id: contactId,
+              msg_type: m.type, media_id: mediaId, media_mime: mediaMime,
+            });
+            shouldTrigger = true;
+          }
         }
       }
     }
   } catch (e: any) {
-    // never fail the webhook back to Meta; log and move on
-    try { await emit({ type: "whatsapp.error", source: "whatsapp", actor: "system", payload: { error: String(e?.message || e).slice(0, 300) } }); } catch {}
+    try { await emit({ type: "whatsapp.error", source: "whatsapp", actor: "system", payload: { stage: "ingress", error: String(e?.message || e).slice(0, 300) } }); } catch {}
   }
 
+  // Fire-and-forget the worker so the brain runs off the webhook's response path.
+  if (shouldTrigger) triggerWorker("/api/whatsapp/worker");
   return NextResponse.json({ received: true });
 }

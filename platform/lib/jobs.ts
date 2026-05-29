@@ -13,7 +13,7 @@
 // is dropped. Everything is idempotent and capped.
 import { admin } from "./supabase-admin";
 
-export type JobKind = "grant.prepare" | "studio.generate" | "ingest.process";
+export type JobKind = "grant.prepare" | "studio.generate" | "ingest.process" | "whatsapp.reply";
 export type JobStatus = "queued" | "running" | "done" | "error";
 
 export type Job = {

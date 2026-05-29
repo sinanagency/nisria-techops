@@ -78,6 +78,7 @@ export const SMART_TOOLS = [
   { name: "add_inventory_item", description: "Add a Maisha inventory item (handmade goods). SAFE: internal record. Use for 'add 20 necklaces to inventory'.", input_schema: { type: "object", properties: { name: { type: "string" }, quantity: { type: "number" }, category: { type: "string" }, collection: { type: "string" }, unit_price: { type: "number" } }, required: ["name"] } },
   { name: "add_beneficiary", description: "Intake a child/family into a program. SAFE: lands PRIVATE (never donor-facing until Nur publishes). Use for 'add a beneficiary named ...'.", input_schema: { type: "object", properties: { full_name: { type: "string" }, program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, region: { type: "string" }, needs: { type: "string" } }, required: ["full_name"] } },
   { name: "prepare_grants", description: "Trigger the Grant agent to prepare all un-prepared applications in the background. SAFE: enqueues jobs, nothing is submitted. Use for 'prepare the grants'.", input_schema: { type: "object", properties: {} } },
+  { name: "record_payment", description: "Log a payment Nur has ALREADY MADE into the finance ledger as paid. SAFE: records internal finance state (it does NOT move money, she already paid it). Call ONCE PER payment when she reports payments she made, whether typed or read from a screenshot/receipt/PDF. currency is KES or USD only, NEVER mix them, default KES if she does not say (and state the currency back so she can correct). category one of: payroll, rent, utilities, stipend, upkeep, petty cash, health, legal, payout, other. If a payee or amount is unclear, ASK rather than guess.", input_schema: { type: "object", properties: { payee: { type: "string" }, amount: { type: "number" }, currency: { type: "string", enum: ["KES", "USD"] }, category: { type: "string" }, purpose: { type: "string", description: "what it was for" }, method: { type: "string", description: "mpesa, bank, cash, etc" }, date: { type: "string", description: "YYYY-MM-DD, defaults to today" } }, required: ["payee", "amount"] } },
 
   // ---- ACTION · GATED SENDS (queue into approvals, NEVER auto-send) ----
   { name: "draft_thank_you", description: "Draft a donor thank-you and QUEUE it into Needs-You for Nur's approval. GATED: never auto-sent. Pass donor_name OR use latest_gift first.", input_schema: { type: "object", properties: { donor_name: { type: "string", description: "donor name, or omit to thank the latest gift" } } } },
@@ -225,6 +226,34 @@ async function runAction(db: any, name: string, input: any): Promise<ToolResult>
     await emit({ type: "grant.prepare_queued", source: "agent:sasa", actor: "Nur", subject_type: "grant", subject_id: null, payload: { queued, via: "smart" } });
     const msg = queued > 0 ? `Started preparing ${queued} grant${queued === 1 ? "" : "s"} in the background. They will land in Prepared, review.` : "Every application is already prepared or in progress.";
     return { ok: true, summary: humanize(msg, opts), affordance: { kind: "open", label: "Open grants", href: "/grants" }, detail: { queued } };
+  }
+
+  // ---- SAFE: record_payment (logs a payment Nur already made) ----
+  if (name === "record_payment") {
+    const payee = String(input.payee || "").trim();
+    const amount = Number(String(input.amount).replace(/[^0-9.]/g, "")) || 0;
+    if (!payee || !amount) return { ok: false, summary: "I need a payee and an amount to log a payment.", error: "missing payee/amount" };
+    let currency = String(input.currency || "KES").toUpperCase();
+    if (!["KES", "USD"].includes(currency)) currency = "KES";
+    const CATS = ["payroll", "rent", "utilities", "stipend", "upkeep", "petty cash", "health", "legal", "payout", "other"];
+    let category = String(input.category || "other").toLowerCase();
+    if (!CATS.includes(category)) category = "other";
+    const purpose = String(input.purpose || input.note || "").trim() || null;
+    const method = String(input.method || "").trim() || (currency === "KES" ? "mpesa" : null);
+    let paid_at = new Date().toISOString();
+    if (input.date) { const d = new Date(String(input.date) + "T12:00:00Z"); if (!isNaN(d.getTime())) paid_at = d.toISOString(); }
+
+    // soft dedup: same payee + amount + currency, paid the same day, already logged
+    const day = paid_at.slice(0, 10);
+    const { data: dupe } = await db.from("payments").select("id").eq("payee", payee).eq("amount", amount).eq("currency", currency).eq("status", "paid").gte("paid_at", `${day}T00:00:00Z`).lte("paid_at", `${day}T23:59:59Z`).limit(1);
+    if (dupe && dupe.length) return { ok: true, summary: humanize(`Already logged: ${currency} ${amount.toLocaleString()} to ${payee}.`, opts), detail: { deduped: true } };
+
+    const { data: row } = await db.from("payments").insert({
+      direction: "out", payee, purpose, amount, currency, method, status: "paid", paid_at,
+      category, recurrence: "none", ref: `AI-WA-${Date.now()}`, created_by: "Nur",
+    }).select("id").single();
+    await emit({ type: "payment.verified", source: "agent:sasa", actor: "Nur", subject_type: "payment", subject_id: row?.id ?? null, payload: { payee, amount, currency, method, category, paid_at, intake: "whatsapp", ai: true } });
+    return { ok: true, summary: humanize(`Logged ${currency} ${amount.toLocaleString()} to ${payee}${purpose ? ` for ${purpose}` : ""}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { id: row?.id, currency, amount, category } };
   }
 
   // ---- GATED: draft_thank_you (queues into Needs-You) ----

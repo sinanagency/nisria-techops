@@ -91,6 +91,31 @@ export async function askClaudeVision(opts: {
   return j?.content?.[0]?.text ?? "";
 }
 
+// Read an inbound WhatsApp attachment (image OR pdf) and return extracted text.
+// Images go in as an image block, PDFs as a document block. Turns a screenshot of
+// an M-Pesa/bank payment, a receipt photo, or a PDF statement into text the agent
+// can then record. Returns "" on unsupported mime (audio/video/sheets), so the
+// caller can fall back gracefully.
+export async function readMedia(base64: string, mime: string, prompt: string, maxTokens = 1200): Promise<string> {
+  let block: any;
+  if (mime.startsWith("image/")) {
+    block = { type: "image", source: { type: "base64", media_type: mime, data: base64 } };
+  } else if (mime === "application/pdf") {
+    block = { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } };
+  } else {
+    return "";
+  }
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "x-api-key": KEY(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, messages: [{ role: "user", content: [block, { type: "text", text: prompt }] }] }),
+    cache: "no-store",
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j?.error?.message || "media read failed");
+  return j?.content?.[0]?.text ?? "";
+}
+
 // Like claudeJSON, but multimodal (text + images). Strips fences, parses, null on fail.
 export async function claudeVisionJSON<T = any>(system: string, text: string, images: { media: string; data: string }[] = [], maxTokens = 1500): Promise<T | null> {
   const raw = await askClaudeVision({ system: system + "\n\nRespond with ONLY valid JSON, no prose, no code fences.", text, images, maxTokens });
