@@ -12,6 +12,7 @@
 import { admin } from "../supabase-admin";
 import { now } from "../now";
 import { humanize, withHumanSystem } from "../humanize";
+import { recall, groundingText } from "../memory";
 import { SMART_TOOLS, runSmartTool, isReadTool, type ToolResult } from "../smart-tools";
 
 const MODEL = "claude-sonnet-4-5";
@@ -20,6 +21,24 @@ const KEY = () => process.env.ANTHROPIC_API_KEY || "";
 // The only tools a field team member may use over WhatsApp. No donor/finance
 // reads, no team-admin, no outbound. Capture + look-up-your-own-work only.
 const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "add_beneficiary", "add_inventory_item"]);
+
+// Brain grounding that carries money. A team member never sees donor or
+// financial figures (their hard limit), and the financial TOOLS are already
+// stripped for them, so this grounding text is the only path a figure could
+// reach a team prompt. Strip a row if it carries finance VOCABULARY or an actual
+// CURRENCY AMOUNT, so a bare figure ("raised KES 4.2M") cannot slip through a
+// keyword gap. Org identity, programs, people, and history still ground the reply.
+const FINANCE_GROUNDING = /(financ|budget|funding|fundrais|grant|donor|donation|banking|bank account|payroll|salar|revenue)/i;
+// A MATERIAL money figure: currency with a k/m/b or million/thousand magnitude,
+// or a thousands-separated amount (KES 100,000), in either order. Deliberately
+// NOT bare small amounts like "KSh 100" (the team's own welfare fund), so the
+// team keeps its operating rules while real budget/fundraising/salary figures
+// are stripped.
+const MONEY_FIGURE = /(?:KES|USD|Ksh|\$|€|£)\s?\d[\d,.]*\s*(?:k|m|b|thousand|million|billion)\b|(?:KES|USD|Ksh|\$|€|£)\s?\d{1,3}(?:,\d{3})+|\b\d{1,3}(?:,\d{3})+\s?(?:KES|USD|Ksh|shillings?|dollars?)\b|\b\d+(?:\.\d+)?\s?(?:k|m|b|thousand|million|billion)\s?(?:KES|USD|Ksh|shillings?|dollars?)\b/i;
+const carriesMoney = (m: { title?: string | null; content?: string | null }) => {
+  const t = `${m.title || ""} ${m.content || ""}`;
+  return FINANCE_GROUNDING.test(t) || MONEY_FIGURE.test(t);
+};
 
 async function callClaude(system: string, messages: any[], tools: any[]) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -36,8 +55,15 @@ async function callClaude(system: string, messages: any[], tools: any[]) {
 export type SasaTurn = { role: "user" | "assistant"; content: string };
 export type SasaResult = { reply: string; actions: { ok: boolean; summary: string; affordance?: any }[] };
 
-function buildSystem(role: "admin" | "team", who: string, dateLong: string, snapshot: string): string {
+function buildSystem(role: "admin" | "team", who: string, dateLong: string, snapshot: string, grounding: string): string {
   const captureLaw = `Capture everything: when ${who} tells you something that needs doing, CREATE A TASK with create_task so nothing is lost. When something needs a decision, money, approval, or an outbound message, it routes to Nur in Needs You, so do that and tell them plainly that you have flagged it for Nur. Never claim you sent an email or moved money.`;
+
+  // One-brain law (lib/CLAUDE.md rule 4): every Sasa call is grounded in the
+  // Brain. This is who Nisria is, who is on the team, who has left, how the org
+  // runs. Answer from it; never contradict it; never invent people or facts that
+  // are not here or in a tool result.
+  const brain = `What you know about Nisria (your standing knowledge from the Brain, ground every answer in this and never contradict it):
+${grounding}`;
 
   if (role === "team") {
     return withHumanSystem(`You are Sasa, the operations assistant for Nisria (By Nisria Inc, a US nonprofit helping children and families in Kenya; sister brands Maisha and AHADI). You are talking to ${who}, a Nisria team member, over WhatsApp. The current date is ${dateLong}.
@@ -45,6 +71,8 @@ function buildSystem(role: "admin" | "team", who: string, dateLong: string, snap
 You ACT, you are not a chatbot. Your job with a team member: turn what they report into TASKS, record beneficiary intakes and inventory, and tell them what is on their plate.
 
 ${captureLaw}
+
+${brain}
 
 Hard limits for a team member: you CANNOT share donor information or any financial or donation figures. If they ask about money, donations, donors, or grants, do not answer with figures; tell them you have flagged the question for Nur. Keep replies short (1-2 sentences), warm, and concrete. Do not list tool names. Do not reveal you are an AI.
 
@@ -63,6 +91,8 @@ ${captureLaw}
 
 Logging payments: when ${who} reports payments she has MADE, whether typed in a list or read from a screenshot, receipt, or PDF, call record_payment ONCE PER payment (payee, amount, currency, what it was for, date). Currency is KES or USD and they NEVER mix, default KES if she does not say, and state the currency back so she can correct it. If a payee or amount is unclear, ask rather than guess. After logging a batch, confirm with a per-currency total, for example "Logged 6 payments, KES 142,000 total." This is the same whether she sends one payment or twenty.
 
+${brain}
+
 This is a WhatsApp/console reply: keep it SHORT (1-3 sentences), concrete, warm. Quote real figures. Do not list tool names. Do not reveal you are an AI.
 
 Right now: ${snapshot}`);
@@ -76,15 +106,20 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   const role = opts.operatorRole || "admin";
   const who = opts.operatorName || (role === "team" ? "a team member" : "Nur");
 
-  const [{ count: pending }, { count: newMsgs }, { count: openTasks }] = await Promise.all([
+  const [{ count: pending }, { count: newMsgs }, { count: openTasks }, memories] = await Promise.all([
     db.from("approvals").select("id", { count: "exact", head: true }).eq("status", "pending"),
     db.from("messages").select("id", { count: "exact", head: true }).eq("direction", "in").eq("status", "new").eq("sender_type", "individual"),
     db.from("tasks").select("id", { count: "exact", head: true }).neq("status", "done"),
+    // One-brain law: load the Brain (org facts, brand voice, people, history) for
+    // every Sasa exchange, query-relevant rows plus the always-on org grounding.
+    recall(opts.command, { limit: 6 }),
   ]);
 
   const n = await now();
   const snapshot = `${pending || 0} items waiting in Needs You, ${newMsgs || 0} messages need a reply, ${openTasks || 0} open tasks.`;
-  const system = buildSystem(role, who, n.long, snapshot);
+  const safe = role === "team" ? memories.filter((m) => !carriesMoney(m)) : memories;
+  const grounding = groundingText(safe);
+  const system = buildSystem(role, who, n.long, snapshot, grounding);
   const tools = (role === "team" ? SMART_TOOLS.filter((t) => TEAM_TOOL_NAMES.has(t.name)) : SMART_TOOLS) as any[];
 
   let convo: any[] = (opts.history || []).slice(-8).map((m) => ({ role: m.role, content: String(m.content || "") }));

@@ -100,13 +100,19 @@ export async function recall(
     }
   };
 
-  // 1) org-defining grounding is always on (brand voice + org facts)
+  // 1) org-defining grounding is always on (brand voice + org facts). Doctrine
+  // (lib/CLAUDE.md rule 4): recall ALWAYS loads org_facts, even on the simplest
+  // query. The query-relevance step below EXCLUDES these kinds, so this is the
+  // ONLY path org_facts reach the agent. The cap therefore has to cover the whole
+  // org-grounding set, not an arbitrary slice. Ordered oldest-first for a stable,
+  // deterministic prompt. Revisit if org_facts ever outgrow this bound.
   try {
     let g = db
       .from("agent_memory")
       .select("kind,brand,title,content")
       .in("kind", ORG_GROUNDING_KINDS)
-      .limit(8);
+      .order("created_at", { ascending: true })
+      .limit(50);
     if (opts.brand) g = g.or(`brand.eq.${opts.brand},brand.is.null`);
     const { data } = await g;
     push(data);
