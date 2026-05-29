@@ -4,98 +4,130 @@ import { TabTitle } from "../../components/tabs-context";
 import { admin, date } from "../../lib/supabase-admin";
 import { postToGroupAction } from "../team/actions";
 import GroupLink from "../../components/GroupLink";
-import { Users, Send, MessageSquare, Smartphone, Bot } from "lucide-react";
+import Link from "next/link";
+import { Users, Send, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
-// The Groups surface: where the team's WhatsApp groups live in the portal. Read
-// what is happening in each group, and post into it (the message is queued and
-// the group bot delivers it, the portal never touches WhatsApp directly).
-export default async function Groups() {
+const t = (s: string) => new Date(s).getTime();
+
+// Groups: one WhatsApp group at a time, read top-to-bottom like a chat (oldest up,
+// newest by the composer), every message attributed to who sent it (click to their
+// profile to assign or follow up). Switch groups with the dropdown or the
+// left/right arrows. Posting queues a group.send the bot delivers.
+export default async function Groups({ searchParams }: { searchParams: { g?: string } }) {
   const db = admin();
 
-  // recent group traffic (group messages are tagged sender_type='group', the
-  // group name in `account`). Pull recent, fold per group, newest first.
-  const { data: rows } = await db
-    .from("messages").select("body,account,direction,created_at,handled_by")
+  // distinct groups + last activity (recent window covers all of them)
+  const { data: recent } = await db
+    .from("messages").select("account,created_at")
     .eq("channel", "whatsapp").eq("sender_type", "group")
-    .order("created_at", { ascending: false }).limit(600);
-  const msgs = (rows || []) as any[];
-
-  const groups = new Map<string, { name: string; last: string; recent: any[] }>();
-  for (const m of msgs) {
+    .order("created_at", { ascending: false }).limit(800);
+  const lastByGroup = new Map<string, string>();
+  for (const m of (recent || []) as any[]) {
     const name = m.account || "Unknown group";
-    if (!groups.has(name)) groups.set(name, { name, last: m.created_at, recent: [] });
-    const g = groups.get(name)!;
-    if (g.recent.length < 10) g.recent.push(m);
+    if (!lastByGroup.has(name)) lastByGroup.set(name, m.created_at);
   }
-  const groupList = Array.from(groups.values());
+  const groups = [...lastByGroup.entries()].sort((a, b) => t(b[1]) - t(a[1])).map(([name, last]) => ({ name, last }));
 
-  // outbox: anything queued/sending for the group bot, and last delivery
-  const { count: queued } = await db.from("jobs").select("id", { count: "exact", head: true }).eq("kind", "group.send").in("status", ["queued", "sending"]);
-  const { data: lastIn } = await db.from("messages").select("created_at").eq("sender_type", "group").order("created_at", { ascending: false }).limit(1);
-  const botLastSeen = lastIn?.[0]?.created_at || null;
+  if (groups.length === 0) {
+    return (
+      <Shell title="Groups" sub="The team WhatsApp groups">
+        <TabTitle title="Groups" />
+        <GroupLink />
+        <div className="card card-pad"><div className="empty">No group messages yet. Once the group number is linked and added to the team groups, conversations appear here.</div></div>
+      </Shell>
+    );
+  }
+
+  const selected = (searchParams.g && groups.find((g) => g.name === searchParams.g)?.name) || groups[0].name;
+  const idx = groups.findIndex((g) => g.name === selected);
+  const prev = groups[idx - 1];
+  const next = groups[idx + 1];
+
+  // newest 300 of the selected group, shown oldest-first (chat order)
+  const { data: rawMsgs } = await db
+    .from("messages").select("id,body,direction,created_at,contact_id,contact:contacts(id,name)")
+    .eq("channel", "whatsapp").eq("sender_type", "group").eq("account", selected)
+    .order("created_at", { ascending: false }).limit(300);
+  const msgs = ((rawMsgs || []) as any[]).reverse();
+
+  // map sender name -> team profile so the name links to where you assign/follow up
+  const { data: team } = await db.from("team_members").select("id,name");
+  const teamByName = new Map<string, string>();
+  for (const m of (team || []) as any[]) teamByName.set(String(m.name || "").toLowerCase(), m.id);
+  const profileHref = (c: any): string | null => {
+    if (!c) return null;
+    const tid = teamByName.get(String(c.name || "").toLowerCase());
+    if (tid) return `/team/${tid}`;
+    return c.id ? `/contacts/${c.id}` : null;
+  };
+
+  // group consecutive messages by the same sender (WhatsApp style)
+  type Run = { name: string; href: string | null; out: boolean; items: any[] };
+  const runs: Run[] = [];
+  for (const m of msgs) {
+    const c = Array.isArray(m.contact) ? m.contact[0] : m.contact;
+    const out = m.direction === "out";
+    const name = out ? "Sasa" : (c?.name || "Unknown");
+    const href = out ? null : profileHref(c);
+    const last = runs[runs.length - 1];
+    if (last && last.name === name && last.out === out) last.items.push(m);
+    else runs.push({ name, href, out, items: [m] });
+  }
 
   return (
-    <Shell
-      title="Groups"
-      sub="The team WhatsApp groups, read and post from here"
-      action={<Badge tone="gray">{groupList.length} groups</Badge>}
-    >
-      <TabTitle title="Groups" />
-
-      {/* live link panel: scannable QR for the group number, auto-refreshing */}
+    <Shell title="Groups" sub="Team WhatsApp groups, read and post here">
+      <TabTitle title={selected} />
       <GroupLink />
 
-      {/* connections: the two numbers and how the team is reached */}
-      <div className="grid cols-2" style={{ marginBottom: 16 }}>
-        <div className="card card-pad">
-          <div className="flex" style={{ gap: 10, marginBottom: 6 }}>
-            <span className="aico teal"><Bot size={16} /></span>
-            <div><div style={{ fontWeight: 700 }}>Group bot</div><div className="muted" style={{ fontSize: 12.5 }}>userbot, the team's groups</div></div>
+      {/* group switcher: prev arrow, dropdown, next arrow */}
+      <div className="flex" style={{ alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <Link href={prev ? `/groups?g=${encodeURIComponent(prev.name)}` : "#"} aria-label="Previous group"
+          className="pill" style={{ padding: 8, opacity: prev ? 1 : 0.35, pointerEvents: prev ? "auto" : "none" }}><ChevronLeft size={16} /></Link>
+        <details className="card" style={{ flex: 1 }}>
+          <summary style={{ listStyle: "none", cursor: "pointer", padding: "11px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span className="flex" style={{ gap: 8, fontWeight: 700 }}><Users size={16} /> {selected}</span>
+            <span className="flex" style={{ gap: 8 }}><Badge tone="gray">last {date(groups[idx].last)}</Badge><ChevronDown size={15} /></span>
+          </summary>
+          <div style={{ borderTop: "1px solid var(--line)", padding: 6 }}>
+            {groups.map((g) => (
+              <Link key={g.name} href={`/groups?g=${encodeURIComponent(g.name)}`} className="actrow" style={{ textDecoration: "none", color: "inherit", borderRadius: 8, background: g.name === selected ? "var(--canvas)" : undefined }}>
+                <span className="aico teal"><Users size={14} /></span>
+                <div className="abody"><div className="atitle">{g.name}</div><div className="ameta">last {date(g.last)}</div></div>
+              </Link>
+            ))}
           </div>
-          <div className="muted" style={{ fontSize: 13 }}>
-            {botLastSeen ? <>Last group activity {date(botLastSeen)}.</> : "No group activity yet. Link the number to go live."} {queued ? `${queued} message(s) queued to send.` : "Outbox clear."}
-          </div>
-        </div>
-        <div className="card card-pad">
-          <div className="flex" style={{ gap: 10, marginBottom: 6 }}>
-            <span className="aico gold"><Smartphone size={16} /></span>
-            <div><div style={{ fontWeight: 700 }}>727 line</div><div className="muted" style={{ fontSize: 12.5 }}>Nur and Taona only</div></div>
-          </div>
-          <div className="muted" style={{ fontSize: 13 }}>Your private line to feed the brain and run admin. Never messages the team.</div>
-        </div>
+        </details>
+        <Link href={next ? `/groups?g=${encodeURIComponent(next.name)}` : "#"} aria-label="Next group"
+          className="pill" style={{ padding: 8, opacity: next ? 1 : 0.35, pointerEvents: next ? "auto" : "none" }}><ChevronRight size={16} /></Link>
       </div>
 
-      {groupList.length === 0 ? (
-        <div className="card card-pad"><div className="empty">No group messages yet. Once the group bot is linked and added to the team groups, conversations appear here.</div></div>
-      ) : (
-        <div className="stack" style={{ gap: 16 }}>
-          {groupList.map((g) => (
-            <div key={g.name} className="card">
-              <div className="card-h">
-                <span className="flex"><Users size={15} /> {g.name}</span>
-                <Badge tone="gray">last {date(g.last)}</Badge>
+      {/* the chat: oldest at top, newest by the composer */}
+      <div className="card">
+        <div style={{ padding: "14px 18px", display: "flex", flexDirection: "column", gap: 14, maxHeight: "62vh", overflowY: "auto" }}>
+          {runs.length === 0 && <div className="empty">No messages in this group yet.</div>}
+          {runs.map((r, i) => (
+            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: r.out ? "flex-end" : "flex-start", gap: 3 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: r.out ? "var(--teal)" : "var(--ink)" }}>
+                {r.href ? <Link href={r.href} style={{ color: "inherit", textDecoration: "none" }}>{r.name}</Link> : r.name}
               </div>
-              <div style={{ padding: "6px 18px 4px" }}>
-                {g.recent.map((m, i) => (
-                  <div key={i} className="actrow">
-                    <span className={`aico ${m.direction === "out" ? "gold" : "teal"}`}>{m.direction === "out" ? <Bot size={14} /> : <MessageSquare size={14} />}</span>
-                    <div className="abody"><div className="atitle" style={{ fontWeight: 400, whiteSpace: "pre-wrap" }}>{String(m.body || "").slice(0, 300)}</div></div>
-                    <span className="aright">{date(m.created_at)}</span>
-                  </div>
-                ))}
-              </div>
-              {/* compose: queues a group.send the bot delivers */}
-              <form action={postToGroupAction} className="flex" style={{ gap: 8, padding: "10px 18px 16px", borderTop: "1px solid var(--line)" }}>
-                <input type="hidden" name="group" value={g.name} />
-                <input name="text" placeholder={`Post to ${g.name}...`} required style={{ flex: 1, padding: "9px 13px", borderRadius: 10, border: "1px solid var(--line)", background: "var(--surface)", fontFamily: "var(--font-body)", fontSize: 13.5 }} />
-                <button type="submit" className="btn"><Send size={14} /> Post</button>
-              </form>
+              {r.items.map((m: any) => (
+                <div key={m.id} style={{ maxWidth: "76%", background: r.out ? "var(--teal)" : "var(--surface)", color: r.out ? "#fff" : "var(--ink)", border: r.out ? "none" : "1px solid var(--line)", borderRadius: 12, padding: "8px 12px" }}>
+                  <div style={{ fontSize: 13.5, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.body}</div>
+                  <div style={{ fontSize: 10.5, opacity: 0.6, marginTop: 3, textAlign: "right" }}>{date(m.created_at)}</div>
+                </div>
+              ))}
             </div>
           ))}
         </div>
-      )}
+        {/* composer pinned under the chat */}
+        <form action={postToGroupAction} className="flex" style={{ gap: 8, padding: "12px 18px", borderTop: "1px solid var(--line)" }}>
+          <input type="hidden" name="group" value={selected} />
+          <input name="text" placeholder={`Post to ${selected}...`} required style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: "1px solid var(--line)", background: "var(--surface)", fontFamily: "var(--font-body)", fontSize: 13.5 }} />
+          <button type="submit" className="btn"><Send size={14} /> Post</button>
+        </form>
+      </div>
     </Shell>
   );
 }

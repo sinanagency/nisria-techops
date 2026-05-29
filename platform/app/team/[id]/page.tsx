@@ -8,7 +8,7 @@ import { admin, date } from "../../../lib/supabase-admin";
 import { setTaskStatus, setMemberStatus, followUpTask } from "../actions";
 import {
   Mail, Phone, MapPin, Calendar, Briefcase, Tag, DollarSign, ListChecks,
-  Bot, Activity as ActIcon, CheckCircle2, Circle, Clock, FileText, MessageSquare,
+  Bot, Activity as ActIcon, CheckCircle2, Circle, Clock, FileText, MessageSquare, ChevronDown,
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -330,21 +330,22 @@ export default async function TeamMember360({ params }: { params: { id: string }
             </div>
           </div>
 
-          {/* messages: this person's words in the team groups */}
-          <div className="card">
-            <div className="card-h">
+          {/* messages: this person's words in the team groups, collapsed by default
+              so the profile stays scannable (it was a wall of links otherwise) */}
+          <details className="card">
+            <summary className="card-h" style={{ listStyle: "none", cursor: "pointer" }}>
               <span className="flex"><MessageSquare size={15} /> Messages</span>
-              <Badge tone="gray">{messageCount}</Badge>
-            </div>
+              <span className="flex" style={{ gap: 6 }}><Badge tone="gray">{messageCount}</Badge><ChevronDown size={14} /></span>
+            </summary>
             <div style={{ padding: "6px 18px 12px" }}>
               {messages.length === 0 ? (
                 <div className="empty">No messages yet. Group history appears here once this person is active.</div>
               ) : (
-                messages.slice(0, 30).map((msg) => (
+                messages.slice(0, 20).map((msg) => (
                   <div key={msg.id} className="actrow">
                     <span className="aico teal"><MessageSquare size={15} /></span>
                     <div className="abody">
-                      <div className="atitle" style={{ whiteSpace: "pre-wrap", fontWeight: 400 }}>{String(msg.body || "").slice(0, 400)}</div>
+                      <div className="atitle" style={{ whiteSpace: "pre-wrap", fontWeight: 400 }}>{String(msg.body || "").slice(0, 240)}</div>
                       <div className="ameta">{msg.account || "WhatsApp"}</div>
                     </div>
                     <span className="aright">{date(msg.created_at)}</span>
@@ -352,7 +353,7 @@ export default async function TeamMember360({ params }: { params: { id: string }
                 ))
               )}
             </div>
-          </div>
+          </details>
 
           {/* unified timeline */}
           <div className="card">
