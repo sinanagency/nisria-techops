@@ -179,6 +179,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "create_task") {
     const title = String(input.title || "").trim();
     if (!title) return { ok: false, summary: "I need a title for the task.", error: "no title" };
+    // dedup: if an open task with the same title already exists, do not create a
+    // second one (stops the bot re-creating the same task across a burst of messages).
+    const { data: dupe } = await db.from("tasks").select("id,title").neq("status", "done").ilike("title", title).limit(1);
+    if (dupe?.[0]) return { ok: true, summary: humanize(`Already tracked: "${dupe[0].title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: dupe[0].id, deduped: true } };
     const member = await findMember(db, input.assignee_name);
     const priority = ["low", "medium", "high"].includes(input.priority) ? input.priority : "medium";
     const due_on = /^\d{4}-\d{2}-\d{2}$/.test(String(input.due_on || "")) ? input.due_on : null;
