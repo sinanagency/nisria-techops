@@ -5,7 +5,7 @@ import { admin, date } from "../../lib/supabase-admin";
 import { postToGroupAction } from "../team/actions";
 import GroupLink from "../../components/GroupLink";
 import Link from "next/link";
-import { Users, Send, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
+import { Users, Send, ChevronLeft, ChevronRight, ChevronDown, Paperclip } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -47,7 +47,7 @@ export default async function Groups({ searchParams }: { searchParams: { g?: str
 
   // newest 300 of the selected group, shown oldest-first (chat order)
   const { data: rawMsgs } = await db
-    .from("messages").select("id,body,direction,created_at,contact_id,contact:contacts(id,name)")
+    .from("messages").select("id,body,direction,created_at,contact_id,contact:contacts(id,name),asset:assets(storage_path,mime)")
     .eq("channel", "whatsapp").eq("sender_type", "group").eq("account", selected)
     .order("created_at", { ascending: false }).limit(300);
   const msgs = ((rawMsgs || []) as any[]).reverse();
@@ -112,12 +112,23 @@ export default async function Groups({ searchParams }: { searchParams: { g?: str
               <div style={{ fontSize: 12, fontWeight: 600, color: r.out ? "var(--teal)" : "var(--ink)" }}>
                 {r.href ? <Link href={r.href} style={{ color: "inherit", textDecoration: "none" }}>{r.name}</Link> : r.name}
               </div>
-              {r.items.map((m: any) => (
-                <div key={m.id} style={{ maxWidth: "76%", background: r.out ? "var(--teal)" : "var(--surface)", color: r.out ? "#fff" : "var(--ink)", border: r.out ? "none" : "1px solid var(--line)", borderRadius: 12, padding: "8px 12px" }}>
-                  <div style={{ fontSize: 13.5, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.body}</div>
-                  <div style={{ fontSize: 10.5, opacity: 0.6, marginTop: 3, textAlign: "right" }}>{date(m.created_at)}</div>
-                </div>
-              ))}
+              {r.items.map((m: any) => {
+                const asset = Array.isArray(m.asset) ? m.asset[0] : m.asset;
+                const isImg = asset && String(asset.mime || "").startsWith("image/");
+                return (
+                  <div key={m.id} style={{ maxWidth: "76%", background: r.out ? "var(--teal)" : "var(--surface)", color: r.out ? "#fff" : "var(--ink)", border: r.out ? "none" : "1px solid var(--line)", borderRadius: 12, padding: "8px 12px" }}>
+                    {m.body && <div style={{ fontSize: 13.5, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.body}</div>}
+                    {asset && (isImg ? (
+                      <a href={`/api/asset?path=${encodeURIComponent(asset.storage_path)}`}>
+                        <img src={`/api/asset?path=${encodeURIComponent(asset.storage_path)}`} alt="attachment" style={{ maxWidth: 220, borderRadius: 8, marginTop: 6, display: "block" }} />
+                      </a>
+                    ) : (
+                      <a href={`/api/asset?path=${encodeURIComponent(asset.storage_path)}`} style={{ color: "inherit", fontSize: 12.5, marginTop: 6, display: "inline-flex", gap: 5, alignItems: "center" }}><Paperclip size={12} /> attachment</a>
+                    ))}
+                    <div style={{ fontSize: 10.5, opacity: 0.6, marginTop: 3, textAlign: "right" }}>{date(m.created_at)}</div>
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>

@@ -19,6 +19,7 @@ import { sendText, operatorOf, downloadMedia } from "../../../../lib/whatsapp";
 import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
 import { readMedia } from "../../../../lib/anthropic";
 import { createBatch } from "../../../../lib/ingest";
+import { storeMedia } from "../../../../lib/media-store";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -78,11 +79,18 @@ async function processJob(db: any, job: any): Promise<void> {
   // (so a screenshot of an M-Pesa payment becomes a recorded payment). Voice,
   // video, and unsupported files get a warm nudge to send it a readable way.
   let command = text;
+  let proofPath: string | null = null; // storage path of a stored receipt, threaded to record_payment
   if (mediaId && mediaMime) {
     const isReadable = mediaMime.startsWith("image/") || mediaMime === "application/pdf";
     if (isReadable) {
       const media = await downloadMedia(mediaId);
       if (media) {
+        // PERSIST the attachment: store the file + link it to the inbound message,
+        // so the receipt is viewable in the thread and reusable as payment proof
+        // (going-forward version of the one-time recovery sweep).
+        const stored = await storeMedia({ base64: media.base64, mime: media.mime, name: mediaName, sourceRef: mediaId, title: text || mediaName });
+        proofPath = stored.storagePath;
+        if (stored.assetId && waMsgId) { try { await db.from("messages").update({ asset_id: stored.assetId }).eq("external_id", waMsgId); } catch {} }
         const extractPrompt = "Read this attachment. If it shows one or more payments (M-Pesa, bank transfer, receipt, invoice, statement), list each as: payee, amount, currency (KES or USD), what it was for, and date if shown. Otherwise describe what it contains in 1-2 lines. Be precise with numbers, never guess an amount.";
         let extracted = "";
         try { extracted = await readMedia(media.base64, media.mime, extractPrompt); } catch { extracted = ""; }
@@ -125,7 +133,7 @@ async function processJob(db: any, job: any): Promise<void> {
   }
 
   const history = await historyFor(db, contactId);
-  const { reply } = await runSasa({ history, command, operatorName: opName || name || undefined, operatorRole: role });
+  const { reply } = await runSasa({ history, command, operatorName: opName || name || undefined, operatorRole: role, proofPath: proofPath || undefined });
   if (!reply) { await markJobDone(job.id); return; }
 
   const res = await sendText(from, reply);

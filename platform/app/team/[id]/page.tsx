@@ -88,7 +88,7 @@ export default async function TeamMember360({ params }: { params: { id: string }
   if (contactIds.size) {
     const { data: msgRows, count } = await db
       .from("messages")
-      .select("id,body,account,created_at,direction", { count: "exact" })
+      .select("id,body,account,created_at,direction,asset:assets(storage_path,mime)", { count: "exact" })
       .in("contact_id", Array.from(contactIds))
       .eq("channel", "whatsapp")
       .order("created_at", { ascending: false })
@@ -341,16 +341,25 @@ export default async function TeamMember360({ params }: { params: { id: string }
               {messages.length === 0 ? (
                 <div className="empty">No messages yet. Group history appears here once this person is active.</div>
               ) : (
-                messages.slice(0, 20).map((msg) => (
-                  <div key={msg.id} className="actrow">
-                    <span className="aico teal"><MessageSquare size={15} /></span>
-                    <div className="abody">
-                      <div className="atitle" style={{ whiteSpace: "pre-wrap", fontWeight: 400 }}>{String(msg.body || "").slice(0, 240)}</div>
-                      <div className="ameta">{msg.account || "WhatsApp"}</div>
+                messages.slice(0, 20).map((msg) => {
+                  const asset = Array.isArray(msg.asset) ? msg.asset[0] : msg.asset;
+                  const isImg = asset && String(asset.mime || "").startsWith("image/");
+                  return (
+                    <div key={msg.id} className="actrow">
+                      <span className="aico teal"><MessageSquare size={15} /></span>
+                      <div className="abody">
+                        <div className="atitle" style={{ whiteSpace: "pre-wrap", fontWeight: 400 }}>{String(msg.body || "").slice(0, 240)}</div>
+                        {asset && (isImg ? (
+                          <a href={`/api/asset?path=${encodeURIComponent(asset.storage_path)}`}><img src={`/api/asset?path=${encodeURIComponent(asset.storage_path)}`} alt="attachment" style={{ maxWidth: 160, borderRadius: 6, marginTop: 5, display: "block" }} /></a>
+                        ) : (
+                          <a href={`/api/asset?path=${encodeURIComponent(asset.storage_path)}`} className="linkbtn" style={{ fontSize: 12, marginTop: 4, display: "inline-block" }}>attachment</a>
+                        ))}
+                        <div className="ameta">{msg.account || "WhatsApp"}</div>
+                      </div>
+                      <span className="aright">{date(msg.created_at)}</span>
                     </div>
-                    <span className="aright">{date(msg.created_at)}</span>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </details>
