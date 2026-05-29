@@ -39,36 +39,36 @@ Mode: read-only (no writes, no deletes, no mutations)
 
 - Donations USD (succeeded): **$26482.61**
 - Donations KES (succeeded): **14827776 KES**
-- Payments out KES (paid): **12654463 KES**
+- Payments out KES (paid): **24226463 KES**
 - Note: these are NOT summed across currencies. Per the Currency Law, a blended total requires market FX and is built in Pass 0.
 
 ## Spot check: 10 random USD donations
 | amount | currency | donated_at | external_id | campaign |
 | --- | --- | --- | --- | --- |
-| 10.00 | USD | 2025-10-17 | ggS9EukX8V96jd4f | One of 500 |
-| 77.50 | USD | 2025-09-27 | gCtGEWeyjHpU5IO7 | One of 500 |
-| 300.00 | USD | 2026-03-24 | hEAq5Q3cb5Gjs36c | One of 500 |
-| 1800.00 | USD | 2025-01-28 | jSdZPvwQia6Wx0jh | One of 500 |
-| 100.00 | USD | 2025-10-01 | mRhcyxpQHSq7WlwC | One of 500 |
-| 10.00 | USD | 2025-12-17 | l5GuEXyjoyYvRkYc | One of 500 |
-| 100.00 | USD | 2025-12-01 | G8dwsv9Q51NnsQAn | One of 500 |
-| 500.00 | USD | 2026-05-22 | UVbRnoZ2Bo8rJW4c | One of 500 |
-| 116.11 | USD | 2025-03-16 | dAuSJLV1irvN6qsG | One of 500 |
-| 50.00 | USD | 2025-12-01 | FV95VxbrPPvNDSIY | One of 500 |
+| 116.00 | USD | 2025-03-12 | lxxnXR4bacDYeVDs | One of 500 |
+| 100.00 | USD | 2025-09-01 | PbEJ8U9mcMsEIR78 | One of 500 |
+| 100.00 | USD | 2025-12-17 | WjL9QTWFQ2yzgSSd | One of 500 |
+| 100.00 | USD | 2026-02-01 | 6kPgLJn6TnxDkfZb | One of 500 |
+| 100.00 | USD | 2025-11-01 | B53b406cTX4vCe56 | One of 500 |
+| 115.00 | USD | 2025-06-15 | DlvCLHRUWElZ06dO | One of 500 |
+| 1.00 | USD | 2025-07-14 | HpKSbrR5QMESYh80 | Help Us Rescue 100 Abandoned Children |
+| 50.00 | USD | 2026-05-24 | IPSes661HZ0fI8Y5 | One of 500 |
+| 100.00 | USD | 2026-03-08 | vjyevmbtBSuMc3XZ | One of 500 |
+| 50.00 | USD | 2026-04-24 | WGmqjmuHn6T04SE2 | One of 500 |
 
 ## Spot check: 10 random KES payments
 | payee | amount | currency | paid_at | created_by | ref |
 | --- | --- | --- | --- | --- | --- |
-| Cynthia Shinamote | 5000 | KES | 2025-03-28 | drive sheet 2025-03 | drive sheet 202503 #26 |
-| Kevin Mburu | 20000 | KES | 2025-02-28 | drive sheet 2025-02 | drive sheet 202502 #10 |
-| Maisha Wifi | 3500 | KES | 2025-09-28 | drive sheet 2025-09 | drive sheet 202509 #25 |
-| Monicah Wanjira | 20000 | KES | 2026-04-28 | drive sheet 2026-04 | drive sheet 202604 #13 |
-| Geoffrey Wainaina | 5000 | KES | 2025-01-28 | drive sheet 2025-01 | drive sheet 202501 #26 |
-| Eric | 5000 | KES | 2025-01-28 | drive sheet 2025-01 | drive sheet 202501 #28 |
-| Electricity | 3000 | KES | 2026-05-28 | drive sheet 2026-05 | drive sheet 202605 #35 |
-| Simon Ngigi | 7200 | KES | 2024-09-28 | drive sheet 2024-09 | drive sheet 202409 #24 |
-| Water | 3500 | KES | 2026-02-28 | drive sheet 2026-02 | drive sheet 202602 #20 |
-| Cecilia Wambui | 11142.06 | KES | 2026-03-28 | drive sheet 2026-03 | drive sheet 202603 #18 |
+| Julia Mwaniki | 15000 | KES | 2025-10-28 | drive sheet 2025-10 | drive sheet 202510 #7 |
+| Grace | 20000 | KES | 2023-06-28 | drive sheet 2023-06 | drive sheet 202306 #3 |
+| Supermarket | 40000 | KES | 2025-05-28 | drive sheet 2025-05 | drive sheet 202505 #30 |
+| John Njuguna | 4850 | KES | 2023-08-28 | drive sheet 2023-08 | drive sheet 202308 #14 |
+| Rick Wambui | 8000 | KES | 2025-08-28 | drive sheet 2025-08 | drive sheet 202508 #18 |
+| Valentine Mwenja | 65000 | KES | 2024-07-28 | drive sheet 2024-07 | drive sheet 202407 #41 |
+| Jackline Agutu | 5000 | KES | 2026-02-28 | drive sheet 2026-02 | drive sheet 202602 #16 |
+| Mburu Paul | 12579 | KES | 2024-08-28 | drive sheet 2024-08 | drive sheet 202408 #2 |
+| Cynthia Mwangi | 15000 | KES | 2025-09-28 | drive sheet 2025-09 | drive sheet 202509 #5 |
+| John Wahome | 6000 | KES | 2023-04-28 | drive sheet 2023-04 | drive sheet 202304 #15 |
 
 ## Verdict
 

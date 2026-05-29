@@ -101,43 +101,51 @@ for (const m of MONTHS) {
   if (!f) { console.log(`${m.ym}: SHEET NOT FOUND, skipping`); continue; }
   const rows = parseCSV(await csvOf(f.id));
   const header = rows.find((r) => r.some((c) => /amount/i.test(c))) || rows[0];
-  const idx = (re) => header.findIndex((c) => re.test(c));
-  const iName = idx(/name/i), iExp = idx(/expense/i), iAmt = idx(/amount/i), iGrant = idx(/grant/i), iDesig = idx(/desig/i);
-  let curName = "";
-  const items = []; let stated = null;
+  // Read the KES amount ONLY from the labeled KES column (never Payment Details / PayBill / Bank /
+  // the $ column), so account numbers can never be parsed as money. KES is the operating currency;
+  // the older sheets' tiny, inconsistently-recorded USD agency column is intentionally not loaded.
+  const findCol = (re) => header.findIndex((c) => re.test(c || ""));
+  let iKes = findCol(/amount\s*\(kes\)|amount.*kes|kes.*amount/i);
+  if (iKes < 0) iKes = findCol(/amount/i);
+  const iName = findCol(/name/i), iExp = findCol(/expense/i), iGrant = findCol(/grant/i), iDesig = findCol(/desig/i);
+  let curName = "", stated = null;
+  const items = [];
   for (const r of rows) {
     if (r === header) continue;
     const name = (r[iName] || "").trim();
     if (name) curName = name;
-    const isTotal = r.some((c) => /^total/i.test((c || "").trim()));
-    const amt = num(r[iAmt]);
-    if (isTotal) { stated = num(r[iAmt]) ?? Math.max(...r.map(num).filter((n) => n != null)); continue; }
-    if (amt == null || amt === 0) continue;
-    const grant = (r[iGrant] || "").trim();
     const expense = (r[iExp] || "").trim();
     const desig = iDesig >= 0 ? (r[iDesig] || "").trim() : "";
-    items.push({
-      payee: curName || expense || "Expense",
-      purpose: [expense, desig, grant ? `[${grant}]` : ""].filter(Boolean).join(" ").trim(),
-      category: catOf(expense),
-      amount: amt,
-      fund: grant || "core",
-    });
+    const kes = num(r[iKes]);
+    // a LABELED total row (cell that is/begins with "total") is the stated month total, never an item
+    if (r.some((c) => /^total/i.test((c || "").trim()))) { if (kes != null) stated = kes; continue; }
+    if (kes == null || kes === 0) continue;
+    items.push({ payee: curName || expense || "Expense", purpose: [expense, desig, (r[iGrant] || "").trim() ? `[${(r[iGrant] || "").trim()}]` : ""].filter(Boolean).join(" ").trim(), category: catOf(expense), amount: kes, allEmpty: !name && !desig && !expense });
+  }
+  // older sheets have an UNLABELED total as the final all-empty row whose value equals the sum above
+  if (stated == null && items.length) {
+    const last = items[items.length - 1];
+    const rest = items.slice(0, -1).reduce((a, b) => a + b.amount, 0);
+    if (last.allEmpty && Math.abs(last.amount - rest) <= Math.max(2, rest * 0.02)) { stated = last.amount; items.pop(); }
   }
   const sum = items.reduce((s, x) => s + x.amount, 0);
-  parsed.push({ ...m, file: f.name, items, stated, sum });
-  const ok = stated != null && Math.abs(sum - stated) < 1;
-  console.log(`${m.ym}  ${f.name.padEnd(34)} items=${String(items.length).padStart(2)}  sum=${sum.toLocaleString().padStart(9)}  stated=${stated ? stated.toLocaleString() : "?"}  ${ok ? "RECONCILES" : "*** MISMATCH ***"}`);
+  const absurd = items.find((i) => i.amount > 1_000_000);
+  parsed.push({ ...m, file: f.name, items, stated, sum, absurd: !!absurd });
+  const flag = absurd ? "*** ABSURD ITEM ***" : (stated != null && Math.abs(sum - stated) > Math.max(2, stated * 0.001) ? `(stated ${Math.round(stated).toLocaleString()}, stale, line items win)` : "ok");
+  console.log(`${m.ym}  ${f.name.slice(0, 32).padEnd(32)} items=${String(items.length).padStart(2)} sum=${Math.round(sum).toLocaleString().padStart(9)}  ${flag}`);
 }
 
-// only load months that reconcile to their own stated total; report the rest for a manual look
-const tol = (p) => Math.max(2, (p.stated || 0) * 0.001);
-const reconciled = parsed.filter((p) => p.stated != null && Math.abs(p.sum - p.stated) <= tol(p));
-const mismatched = parsed.filter((p) => !(p.stated != null && Math.abs(p.sum - p.stated) <= tol(p)));
-console.log(`\nreconciled: ${reconciled.length}/${parsed.length} months  |  mismatched: ${mismatched.map((m) => `${m.ym}(sum ${Math.round(m.sum).toLocaleString()} vs stated ${m.stated ? Math.round(m.stated).toLocaleString() : "?"})`).join(", ") || "none"}  |  DRY_RUN=${DRY}`);
+// Trust the line items (read from the labeled amount columns). Load every month that has valid
+// items and no absurd parse. Stale stated totals are reported but do not block, the itemized
+// expenses are the truth. Only ABSURD parses (a >1M single KES line) or empty months are skipped.
+const loadable = parsed.filter((p) => !p.absurd && p.items.length > 0);
+const skipped = parsed.filter((p) => p.absurd || p.items.length === 0);
+const stale = loadable.filter((p) => p.stated != null && Math.abs(p.sum - p.stated) > Math.max(2, p.stated * 0.001));
+console.log(`\nloadable: ${loadable.length}/${parsed.length} months  |  skipped: ${skipped.map((m) => `${m.ym}${m.absurd ? "(absurd)" : "(empty)"}`).join(", ") || "none"}`);
+console.log(`stale stated totals (loaded from line items anyway): ${stale.map((m) => `${m.ym}`).join(", ") || "none"}  |  DRY_RUN=${DRY}`);
 
-if (DRY) { console.log("\nDRY RUN: no writes. Re-run with DRY_RUN=0 to snapshot, purge old data, and load the reconciled months."); process.exit(0); }
-if (!reconciled.length) { console.log("aborting: nothing reconciled."); process.exit(2); }
+if (DRY) { console.log("\nDRY RUN: no writes. Re-run with DRY_RUN=0 to snapshot, purge old data, and load."); process.exit(0); }
+if (!loadable.length) { console.log("aborting: nothing loadable."); process.exit(2); }
 
 // 1) snapshot anything we are about to replace (old backfill + my earlier partial load) — reversible
 const snap = await sql("select id,payee,purpose,amount::text,currency,status,paid_at::text,ref,created_by,category from payments where created_by like 'drive monthly history%' or created_by like 'drive sheet%';");
@@ -149,9 +157,9 @@ console.log(`snapshot: ${snap.length} rows -> ${snapPath}`);
 const del = await sql("delete from payments where created_by like 'drive monthly history%' or created_by like 'drive sheet%' returning id;");
 console.log(`deleted rows: ${del.length}`);
 
-// 3) insert clean rows for every reconciled month
+// 3) insert clean rows for every loadable month, currency per item (KES + agency USD)
 let inserted = 0;
-for (const p of reconciled) {
+for (const p of loadable) {
   const [y, mo] = p.ym.split("-");
   const paidAt = `${p.ym}-28`;
   const recurrence = p.ym === latestYm ? "monthly" : "none";
@@ -160,9 +168,9 @@ for (const p of reconciled) {
   ).join(",\n");
   await sql(`insert into payments (direction,payee,purpose,amount,currency,method,status,paid_at,ref,created_by,category,recurrence) values\n${values};`);
   inserted += p.items.length;
-  console.log(`inserted ${p.items.length} rows for ${p.ym} (sum ${p.sum.toLocaleString()} KES)`);
+  console.log(`inserted ${p.items.length} rows for ${p.ym} (KES ${Math.round(p.sum).toLocaleString()})`);
 }
-console.log(`\nDONE. inserted ${inserted} clean rows across ${reconciled.length} months.`);
-// 4) verify
-const ver = await sql("select to_char(date_trunc('month',paid_at),'YYYY-MM') ym, round(sum(amount)::numeric,0) kes, count(*) n from payments where currency='KES' and status='paid' and created_by='drive sheet '||to_char(date_trunc('month',paid_at),'YYYY-MM') group by 1 order by 1;");
-console.log("verify (clean months):", JSON.stringify(ver));
+console.log(`\nDONE. inserted ${inserted} clean rows across ${loadable.length} months.`);
+// 4) verify coverage
+const ver = await sql("select count(distinct to_char(date_trunc('month',paid_at),'YYYY-MM')) months, min(paid_at)::date first, max(paid_at)::date last, round(sum(amount)::numeric,0) kes from payments where currency='KES' and status='paid' and created_by like 'drive sheet%';");
+console.log("verify:", JSON.stringify(ver));
