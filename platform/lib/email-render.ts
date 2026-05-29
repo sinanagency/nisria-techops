@@ -40,8 +40,27 @@ export function snippet(raw: string, n = 90): string {
   return cleanEmail(raw).replace(/\s+/g, " ").slice(0, n);
 }
 
-// Is this sender a real person (show a profile) vs an automated system?
-const AUTOMATED = /(no-?reply|do-?not-?reply|notify|notification|mailer|accounts@|updates@|automated|team@|support@|@notify|@mail|@em\.|@e\.|donotreply)/i;
+// Is this sender a real person (show a profile, expect a reply) vs an automated
+// system (notifications, billing, marketing blasts, mailing lists)?
+//
+// The upstream sender_type classifier lives OUTSIDE this repo (the Gmail sync), so
+// it can be absent (null) or wrong. This module is therefore the authoritative
+// safety net every surface routes through, never sender_type alone.
+const AUTOMATED = /(no-?reply|do-?not-?reply|notify|notification|notifications|mailer|postmaster|accounts@|updates@|automated|team@|support@|service@|billing@|payments?@|receipts?@|news@|newsletter|marketing@|hello@|info(rmation)?@|@notify|@mail\d?\.|@em\.|@e\.|donotreply|paypal|stripe|givebutter|donorbox|railway|kuja|goodstack|charitynavigator|comments-noreply|calendar-notification|notifications\.google|via google)/i;
+
+// Phrases that mark a machine-generated message even from a person-looking address:
+// calendar invites, Drive share/comment notifications, automated reminders, blasts.
+const AUTOMATED_CONTENT = /(has accepted this invitation|has declined this invitation|requests access to an item|added a comment to the following|replied to a comment in the following|new activity in the following document|this is your reminder|your weekly report|unsubscribe|view (?:this email|it) in your browser|complete profile|enrol for the session|update your (?:email )?preferences|you are receiving this (?:email|because))/i;
+
+// The hard veto used by Workspace and the inbox: a machine / billing / marketing
+// sender, OR a person-looking address whose content is clearly machine-generated.
+export function isAutomatedSender(name?: string | null, email?: string | null, sample?: string | null): boolean {
+  const who = `${name || ""} ${email || ""}`;
+  if (AUTOMATED.test(who)) return true;
+  if (sample && AUTOMATED_CONTENT.test(sample)) return true;
+  return false;
+}
+
 export function isIndividual(email?: string | null, senderType?: string | null): boolean {
   if (senderType) return senderType === "individual";
   if (!email) return false;

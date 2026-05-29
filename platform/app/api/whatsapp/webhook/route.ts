@@ -110,7 +110,10 @@ export async function POST(req: NextRequest) {
           const media = m.image || m.document || m.audio || m.video || m.voice || null;
           const mediaId: string | null = media?.id || null;
           const mediaMime: string | null = media?.mime_type || null;
-          const body = caption || (m.type && m.type !== "text" ? `[${m.type}]` : "");
+          const mediaName: string | null = m.document?.filename || null;
+          // Show the filename for a document (so the thread reads "STP Report.pdf"
+          // not "[document]"); fall back to the bare type tag for other media.
+          const body = caption || mediaName || (m.type && m.type !== "text" ? `[${m.type}]` : "");
 
           const contactId = await resolveContact(db, from, contactName);
 
@@ -140,7 +143,7 @@ export async function POST(req: NextRequest) {
           if (body || mediaId) {
             await enqueueJob("whatsapp.reply", contactId, {
               from, name: contactName, text: caption, wa_message_id: waMsgId, contact_id: contactId,
-              msg_type: m.type, media_id: mediaId, media_mime: mediaMime,
+              msg_type: m.type, media_id: mediaId, media_mime: mediaMime, media_name: mediaName,
             });
             shouldTrigger = true;
           }

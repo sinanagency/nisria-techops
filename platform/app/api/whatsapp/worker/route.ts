@@ -18,6 +18,7 @@ import { claimJobs, markJobDone, markJobError } from "../../../../lib/jobs";
 import { sendText, operatorOf, downloadMedia } from "../../../../lib/whatsapp";
 import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
 import { readMedia } from "../../../../lib/anthropic";
+import { createBatch } from "../../../../lib/ingest";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -57,6 +58,8 @@ async function processJob(db: any, job: any): Promise<void> {
   const name: string | null = p.name || null;
   const mediaId: string | null = p.media_id || null;
   const mediaMime: string | null = p.media_mime || null;
+  const mediaName: string | null = p.media_name || null;
+  const waMsgId: string | null = p.wa_message_id || null;
   const msgType: string = p.msg_type || "text";
   if (!from || (!text && !mediaId)) { await markJobDone(job.id); return; }
 
@@ -84,8 +87,26 @@ async function processJob(db: any, job: any): Promise<void> {
         let extracted = "";
         try { extracted = await readMedia(media.base64, media.mime, extractPrompt); } catch { extracted = ""; }
         if (extracted) {
-          const kind = media.mime.startsWith("image/") ? "image/screenshot" : "document";
+          const isDoc = !media.mime.startsWith("image/");
+          const kind = isDoc ? "document" : "image/screenshot";
           command = `${text ? text + "\n\n" : ""}[${kind} attachment, here is what it shows]\n${extracted}\n\nIf the above shows payments Nur made, record each one with record_payment. Otherwise act on it appropriately.`;
+          // POPULATE ACCORDINGLY (one-brain + local-first laws): a document Nur
+          // sends is not just chat. Write its content back onto the inbound message
+          // (so the thread stops reading as a bare "[document]") and route it
+          // through the ingest pipeline, which classifies it to the Brain, the
+          // Library, or a record for Nur's review. Best-effort: never break the reply.
+          if (isDoc) {
+            const label = mediaName || "Document";
+            const summary = `${label}\n\n${extracted}`.slice(0, 4000);
+            if (waMsgId) { try { await db.from("messages").update({ body: summary }).eq("external_id", waMsgId); } catch {} }
+            try {
+              await createBatch({
+                source: "whatsapp",
+                attribution: opName || name || "WhatsApp",
+                inputs: [{ channel: "whatsapp", attribution: opName || name || "WhatsApp", filename: mediaName, mime: media.mime, text: extracted }],
+              });
+            } catch {}
+          }
         } else {
           command = text || "(attachment could not be read)";
         }
