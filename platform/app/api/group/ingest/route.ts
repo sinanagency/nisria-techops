@@ -26,6 +26,17 @@ const digits = (s: string) => String(s || "").replace(/[^\d]/g, "");
 // in-group replies once things are settled.
 const LISTEN_ONLY = (process.env.GROUP_LISTEN_ONLY ?? "true").toLowerCase() !== "false";
 
+// PER-GROUP MUTE. Comma-separated group names (lowercased) that must behave like
+// LISTEN_ONLY=true for THAT group only: still store, still run the brain to
+// populate the portal, but never speak. Parsed once. Matched exactly (full
+// lowercased name) so a substring can't accidentally catch a team group that also
+// contains "nisria". Used for the public announcement community ("nisria").
+// dequote guards against the known Vercel trailing-quote bug (value stored with
+// literal wrapping quotes) so "nisria" and nisria both match.
+const dequote = (s: string) => String(s || "").trim().replace(/^["']+|["']+$/g, "").trim();
+const MUTE_LIST = dequote(process.env.GROUP_MUTE_LIST || "").split(",").map((s) => dequote(s).toLowerCase()).filter(Boolean);
+const isMuted = (g: string) => MUTE_LIST.includes(String(g || "").trim().toLowerCase());
+
 // trivial chatter we store but do not wake the brain for (cost + noise control)
 function substantive(text: string): boolean {
   const t = (text || "").trim();
@@ -107,8 +118,8 @@ export async function POST(req: NextRequest) {
 
   // LISTEN-ONLY: brain still ran (tasks/intakes captured above), but say nothing
   // in the group. Do not log a phantom outbound either, so the thread stays honest.
-  if (LISTEN_ONLY) {
-    return NextResponse.json({ ok: true, reply: "", listenOnly: true });
+  if (LISTEN_ONLY || isMuted(group)) {
+    return NextResponse.json({ ok: true, reply: "", listenOnly: true, muted: isMuted(group) });
   }
 
   if (reply && reply.trim()) {
