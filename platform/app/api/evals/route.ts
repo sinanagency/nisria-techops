@@ -104,7 +104,7 @@ const CASES: Case[] = [
   },
   {
     name: "REMINDERS: 'remind me' creates a task WITH a due date",
-    command: "Remind me next Monday to file the 990 form for our 501c3.",
+    command: "Remind me on June 30, 2026 about the KRA tax filing.",
     assert: (o) => [{ label: "calls create_task with a due_on", pass: o.toolCalls.some((t) => t.name === "create_task" && !!t.input?.due_on) }],
   },
 ];
