@@ -8,11 +8,31 @@
 // The QR is a WhatsApp linking secret, so GET requires the portal session cookie.
 import { NextRequest, NextResponse } from "next/server";
 import { admin } from "../../../../lib/supabase-admin";
+import { emit } from "../../../../lib/events";
+import { sendText } from "../../../../lib/whatsapp";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const KEY = "group_link";
+
+// States where the group eyes have gone dark. When the bot transitions INTO one
+// of these, Nur gets an urgent 727 text once (latched, so a flapping connection
+// does not spam her). The latch clears when the bot reports "connected" again.
+const DOWN = new Set(["banned", "logged_out"]);
+const DOWN_MSG: Record<string, string> = {
+  banned:
+    "Urgent: the Nisria group number looks blocked by WhatsApp, so the team groups are not being watched right now. Nothing said in them is being captured. Reply here and we will move it onto a fresh number.",
+  logged_out:
+    "Urgent: the Nisria group number was logged out, so the team groups are not being watched right now. It needs to be re-linked. Reply here and we will sort it.",
+};
+
+async function alertOperators(status: string) {
+  const text = DOWN_MSG[status] || "Urgent: the Nisria group bot is offline, the team groups are not being watched right now.";
+  const nums = (process.env.WHATSAPP_OPERATORS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  for (const n of nums) { try { await sendText(n, text); } catch {} }
+  await emit({ type: "group.bot_down", source: "group-bot", actor: "group-bot", subject_type: "job", subject_id: null, payload: { status, notified: nums.length } });
+}
 
 function bySecret(req: NextRequest) {
   return (req.headers.get("x-group-secret") || "") === (process.env.GROUP_BOT_SECRET || "\0");
@@ -27,8 +47,22 @@ export async function POST(req: NextRequest) {
   // status: "connected" | "banned" | "logged_out" | "waiting". The bot sets it; we
   // derive a sane default for older payloads that only send `connected`.
   const status = b.status || (b.connected ? "connected" : "waiting");
-  const value = { qr: b.qr || null, connected: !!b.connected, status, ts: b.ts || new Date().toISOString() };
-  await admin().from("bot_status").upsert({ key: KEY, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+  const db = admin();
+
+  // compare against the prior state so we only alert on the DOWN transition, and
+  // only once per outage (alerted_status latches until we are connected again).
+  const { data: prevRow } = await db.from("bot_status").select("value").eq("key", KEY).maybeSingle();
+  const prev: any = prevRow?.value || {};
+  let alertedStatus = prev.alerted_status || null;
+
+  if (DOWN.has(status) && prev.status !== status && alertedStatus !== status) {
+    await alertOperators(status);
+    alertedStatus = status;
+  }
+  if (status === "connected") alertedStatus = null; // re-arm for the next outage
+
+  const value = { qr: b.qr || null, connected: !!b.connected, status, ts: b.ts || new Date().toISOString(), alerted_status: alertedStatus };
+  await db.from("bot_status").upsert({ key: KEY, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
   return NextResponse.json({ ok: true });
 }
 

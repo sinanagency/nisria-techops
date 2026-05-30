@@ -12,7 +12,14 @@
 //   GROUP_BOT_SECRET  shared secret, must match the platform env
 //   AUTH_DIR          where the WhatsApp session persists (Railway volume, e.g. /data/auth)
 //   GROUP_ALLOWLIST   optional comma-separated group-name substrings; empty = all groups
+//   PROXY_URL         optional. route the WhatsApp session through a sticky
+//                     residential/mobile proxy so the linked-device login does not
+//                     originate from a datacenter IP (the main ban signal). Accepts
+//                     socks5://user:pass@host:port or http(s)://user:pass@host:port.
+//                     Empty = direct connection (current behaviour, nothing changes).
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from "@whiskeysockets/baileys";
+import { SocksProxyAgent } from "socks-proxy-agent";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import qrcode from "qrcode-terminal";
 import QRCode from "qrcode";
 import pino from "pino";
@@ -23,6 +30,21 @@ const AUTH_DIR = process.env.AUTH_DIR || "./auth";
 const ALLOW = (process.env.GROUP_ALLOWLIST || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const log = pino({ level: process.env.LOG_LEVEL || "info" });
 
+// Proxy agent (dormant unless PROXY_URL is set). socks* uses SocksProxyAgent,
+// anything else (http/https) uses HttpsProxyAgent. Applied to both the WhatsApp
+// socket and Baileys media fetches so all traffic shares one residential exit.
+const PROXY_URL = process.env.PROXY_URL || "";
+function makeProxyAgent(url) {
+  if (!url) return undefined;
+  try {
+    return /^socks/i.test(url) ? new SocksProxyAgent(url) : new HttpsProxyAgent(url);
+  } catch (e) {
+    log.error({ err: e?.message }, "invalid PROXY_URL, falling back to direct connection");
+    return undefined;
+  }
+}
+const proxyAgent = makeProxyAgent(PROXY_URL);
+
 if (!PLATFORM_URL || !SECRET) {
   log.error("PLATFORM_URL and GROUP_BOT_SECRET are required");
   process.exit(1);
@@ -32,6 +54,31 @@ const subjectCache = new Map(); // jid -> group subject
 const nameToJid = new Map();    // lowercased group name -> jid (for portal-targeted sends)
 const POLL_MS = Number(process.env.OUTBOX_POLL_MS || 4000);
 let pollTimer = null;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Human-paced, rate-limited send. WhatsApp flags numbers that fire instant,
+// back-to-back, machine-cadence messages, so every outbound goes through here:
+// a minimum gap between sends (jittered), a "typing" presence, and a short
+// compose delay scaled to the message length. Sparse + human is the whole
+// anti-ban posture on the behavioural side; the proxy covers the network side.
+const MIN_SEND_GAP_MS = Number(process.env.MIN_SEND_GAP_MS || 2500);
+let lastSendAt = 0;
+async function humanSend(sock, jid, content) {
+  const now = Date.now();
+  const gap = MIN_SEND_GAP_MS - (now - lastSendAt);
+  if (gap > 0) await sleep(gap + Math.floor(Math.random() * 1200));
+  const text = content?.text || "";
+  try {
+    await sock.sendPresenceUpdate("composing", jid);
+    await sleep(Math.min(4000, 700 + text.length * 25) + Math.floor(Math.random() * 800));
+  } catch {}
+  try { await sock.sendMessage(jid, content); }
+  finally {
+    lastSendAt = Date.now();
+    try { await sock.sendPresenceUpdate("paused", jid); } catch {}
+  }
+}
 
 function textOf(m) {
   const mm = m.message || {};
@@ -92,7 +139,7 @@ async function pollOutbox(sock) {
       let ok = false, error = "";
       if (!jid) { error = `unknown group "${s.group}"`; }
       else {
-        try { await sock.sendMessage(jid, { text: s.text }); ok = true; }
+        try { await humanSend(sock, jid, { text: s.text }); ok = true; }
         catch (e) { error = e?.message || "send failed"; }
       }
       await fetch(`${PLATFORM_URL}/api/group/outbox`, {
@@ -126,7 +173,12 @@ async function ingest(payload) {
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({ version, auth: state, logger: pino({ level: "silent" }), printQRInTerminal: false, markOnlineOnConnect: false });
+  log.info({ proxy: proxyAgent ? "on" : "direct" }, "starting WhatsApp socket");
+  const sock = makeWASocket({
+    version, auth: state, logger: pino({ level: "silent" }),
+    printQRInTerminal: false, markOnlineOnConnect: false,
+    agent: proxyAgent, fetchAgent: proxyAgent,
+  });
 
   sock.ev.on("creds.update", saveCreds);
 
@@ -158,7 +210,7 @@ async function start() {
     }
     if (connection === "open") {
       log.info("connected. listening to team groups.");
-      postLink({ qr: null, connected: true });
+      postLink({ qr: null, connected: true, status: "connected" });
       // prime the name->jid map so portal sends can target groups by name
       sock.groupFetchAllParticipating()
         .then((groups) => { for (const g of Object.values(groups || {})) remember(g.id, g.subject); log.info({ groups: nameToJid.size }, "groups primed"); })
@@ -170,10 +222,20 @@ async function start() {
     if (connection === "close") {
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       const code = lastDisconnect?.error?.output?.statusCode;
-      const loggedOut = code === DisconnectReason.loggedOut;
-      log.warn({ code, loggedOut }, "connection closed");
-      if (!loggedOut) setTimeout(start, 3000); // reconnect unless the session was revoked
-      else log.error("logged out. delete AUTH_DIR and re-scan the QR.");
+      const loggedOut = code === DisconnectReason.loggedOut; // 401, session revoked
+      const banned = code === 403;                            // forbidden, number flagged
+      // status the platform uses to alert Nur on the 727 (down-transition only)
+      const status = banned ? "banned" : loggedOut ? "logged_out" : "waiting";
+      postLink({ qr: null, connected: false, status });
+      log.warn({ code, loggedOut, banned }, "connection closed");
+      if (loggedOut || banned) {
+        // terminal: the session will not come back on its own. The platform has
+        // alerted Nur; an operator must re-link a (new) number to AUTH_DIR.
+        log.error("session ended (logged out or banned). delete AUTH_DIR and re-link.");
+      } else {
+        // benign drop: reconnect with a jittered backoff (avoid a tight loop)
+        setTimeout(start, 3000 + Math.floor(Math.random() * 2500));
+      }
     }
   });
 
@@ -202,7 +264,7 @@ async function start() {
         });
 
         if (reply && reply.trim()) {
-          await sock.sendMessage(jid, { text: reply.trim() });
+          await humanSend(sock, jid, { text: reply.trim() });
           log.info({ group: name }, "replied");
         }
       } catch (e) {
