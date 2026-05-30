@@ -7,6 +7,7 @@ import { addPayment, markPaid, logMpesa, logPayout } from "./actions";
 import ExpenseIntake from "../../components/ExpenseIntake";
 import Collapsible from "../../components/Collapsible";
 import FinancePulse from "../../components/FinancePulse";
+import Treasury from "../../components/Treasury";
 import MoneyFlows from "../../components/MoneyFlows";
 import FinanceLedger from "../../components/FinanceLedger";
 import BankingView from "../../components/BankingView";
@@ -235,7 +236,11 @@ export default async function Finance() {
         </Link>
       }
     >
-      {/* SNAPSHOT FIRST: money in / money out / net for the month */}
+      {/* TREASURY: the A-to-Z money summary (Law 7). Lifetime in/out per currency, blended
+          USD with FX visible, honest cash position. Leads the page; the month snapshot follows. */}
+      <Treasury />
+
+      {/* SNAPSHOT: money in / money out / net for the month */}
       <div className="grid cols-3" style={{ marginBottom: 16 }}>
         <div className="feature teal" style={{ position: "relative" }}>
           <MoneyHideToggle style={{ position: "absolute", top: 16, right: 16 }} />
@@ -438,6 +443,7 @@ export default async function Finance() {
       </Collapsible>
 
       {/* THIS-MONTH SPEND first (queryable, scrolls back), then plan, then trend */}
+      <div id="ledger" />
       <FinanceLedger />
       <MoneyFlows />
       <FinancePulse />
@@ -500,6 +506,7 @@ export default async function Finance() {
 
       {/* HISTORICAL (collapsed dropdowns): bank statements + the Givebutter/Kenya streams */}
       <Collapsible title={<span className="flex" style={{ gap: 7 }}><Landmark size={15} /> Banking</span>} action={<span className="faint" style={{ fontSize: 11.5 }}>scanned statements · 2021–22</span>}>
+        <div id="banking" />
         <BankingView />
       </Collapsible>
 
