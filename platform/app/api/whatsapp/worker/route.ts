@@ -65,12 +65,14 @@ async function processJob(db: any, job: any): Promise<void> {
   const msgType: string = p.msg_type || "text";
   if (!from || (!text && !mediaId)) { await markJobDone(job.id); return; }
 
-  // ACCESS CONTROL: this is an internal line. Only admins (Nur / the operator
-  // allowlist) and team members get a reply. Everyone else is ignored silently,
-  // the inbound is still stored, but the bot never responds to a non-member.
+  // ACCESS CONTROL: the 727 is the OPERATOR command line. It replies ONLY to the
+  // admin allowlist (Nur and Taona via WHATSAPP_OPERATORS). Team members and
+  // everyone else are stored but never answered here, the team works through the
+  // groups (the group bot), not this private line. This keeps the powerful tool
+  // (finance, sends, group posting) in exactly two hands.
   const { role, name: opName } = await operatorOf(db, from);
-  if (!role) {
-    await emit({ type: "whatsapp.ignored", source: "whatsapp", actor: from, subject_type: "contact", subject_id: contactId, payload: { from, reason: "not an operator or team member" } });
+  if (role !== "admin") {
+    await emit({ type: "whatsapp.ignored", source: "whatsapp", actor: from, subject_type: "contact", subject_id: contactId, payload: { from, reason: role === "team" ? "team member, 727 is operator-only" : "not an operator" } });
     await markJobDone(job.id);
     return;
   }

@@ -18,14 +18,14 @@ function authed(req: NextRequest) {
   return (req.headers.get("x-group-secret") || "") === (process.env.GROUP_BOT_SECRET || "\0");
 }
 
-// LISTEN-ONLY: while true the bot is silent in-group, so serve nothing to send.
-// Queued group.send jobs stay 'queued' (not lost) and flush once re-enabled.
-// Fails safe: silent unless GROUP_LISTEN_ONLY is explicitly "false".
-const LISTEN_ONLY = (process.env.GROUP_LISTEN_ONLY ?? "true").toLowerCase() !== "false";
+// OPERATOR-DIRECTED POSTS ALWAYS DELIVER. The group bot never chimes in on its own
+// (autonomous replies are suppressed in /api/group/ingest), but a message the
+// operator (Nur or Taona) explicitly tells the 727 Sasa to post to a group is queued
+// here as a group.send job and the bot delivers it. This is the deliberate
+// 727 -> group bot (Kenyan number) -> group path, separate from autonomous chatter.
 
 export async function GET(req: NextRequest) {
   if (!authed(req)) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  if (LISTEN_ONLY) return NextResponse.json({ ok: true, sends: [], listenOnly: true });
   const db = admin();
   // self-heal: if the bot claimed sends ('sending') then died before acking, those
   // jobs would hang forever. Re-queue any 'sending' older than 5 minutes so the
