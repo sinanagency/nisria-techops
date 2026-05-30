@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { evalSasa, runSasa } from "../../../lib/agents/sasa";
 import { admin } from "../../../lib/supabase-admin";
-import { commitPaymentRow } from "../../../lib/smart-tools";
+import { commitPaymentRow, runSmartTool } from "../../../lib/smart-tools";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -74,6 +74,14 @@ const CASES: Case[] = [
       { label: "does NOT fabricate a payment", pass: !hasTool(o, "record_payment") },
     ],
   },
+  {
+    name: "MEMORY: a recall question searches history, never disclaims memory",
+    command: "What did we discuss earlier about the KRA tax filing?",
+    assert: (o) => [
+      { label: "calls search_history", pass: hasTool(o, "search_history") },
+      { label: "does not disclaim memory ('start fresh', 'no memory', 'cannot recall')", pass: !/no memory|start fresh|don'?t have (a )?memory|cannot recall|can'?t recall|no access to (past|previous)|each conversation (i see )?starts/i.test(o.text) },
+    ],
+  },
 ];
 
 export async function GET(req: NextRequest) {
@@ -124,6 +132,14 @@ export async function GET(req: NextRequest) {
     await db.from("pending_actions").delete().ilike("summary", `%${PAYEE}%`);
     await db.from("payments").delete().eq("payee", PAYEE);
     return NextResponse.json({ test: "source-links", pass: stagedHasSource && committedHasSource, stagedHasSource, committedHasSource });
+  }
+
+  // ?memory=1&q=... -> live test of #11 durable memory: search_history returns real
+  // past messages from the conversation store.
+  if (req.nextUrl.searchParams.get("memory") === "1") {
+    const q = req.nextUrl.searchParams.get("q") || "tax filing KRA";
+    const out: any = await runSmartTool("search_history", { query: q });
+    return NextResponse.json({ test: "search_history", query: q, pass: typeof out?.count === "number", count: out?.count ?? 0, sample: (out?.results || []).slice(0, 3) });
   }
 
   const results = [];

@@ -78,6 +78,7 @@ export const SMART_TOOLS = [
   { name: "inbox_status", description: "Conversations needing a reply, per account, with who and subject.", input_schema: { type: "object", properties: {} } },
   { name: "list_team", description: "The active team roster (names, roles) so you can pick an assignee.", input_schema: { type: "object", properties: {} } },
   { name: "latest_gift", description: "The most recent succeeded gift + its donor (use for 'thank the latest gift').", input_schema: { type: "object", properties: {} } },
+  { name: "search_history", description: "Search PAST conversations and messages to recall what was said, decided, or discussed before, earlier today or in a past session. Use this WHENEVER she refers to an earlier conversation or asks what was discussed, agreed, told, or mentioned about something ('what did we say about the KRA filing', 'remind me what I told you about Mark', 'did we talk about X'). You DO have this memory, search it instead of saying you cannot recall. Returns matching messages with date and who said it.", input_schema: { type: "object", properties: { query: { type: "string", description: "keywords or the topic to look up" } }, required: ["query"] } },
 
   // ---- ACTION · SAFE POPULATES (run immediately, internal state only) ----
   { name: "create_task", description: "Create a task in the platform. Optionally assign it to a team member by name. SAFE: runs immediately. Use for 'assign a task to ...'.", input_schema: { type: "object", properties: { title: { type: "string" }, assignee_name: { type: "string", description: "a team member's name, or omit for unassigned" }, priority: { type: "string", enum: ["low", "medium", "high"] }, due_on: { type: "string", description: "YYYY-MM-DD" } }, required: ["title"] } },
@@ -98,6 +99,7 @@ export const SMART_TOOL_NAMES = new Set(SMART_TOOLS.map((t) => t.name));
 const READ_TOOLS = new Set([
   "query_donations", "lookup_donor", "newest_donor", "finance_summary",
   "list_grants", "list_tasks", "inbox_status", "list_team", "latest_gift",
+  "search_history",
 ]);
 export const isReadTool = (name: string) => READ_TOOLS.has(name);
 
@@ -162,6 +164,25 @@ async function runRead(db: any, name: string, input: any): Promise<any> {
     const { data } = await db.from("donations").select("id,amount,is_recurring,donated_at,donor:donors(id,full_name,email)").eq("status", "succeeded").order("donated_at", { ascending: false }).limit(1).maybeSingle();
     const g: any = data || null;
     return { gift: g ? { id: g.id, amount: money(g.amount), donor: g.donor?.full_name, has_email: !!g.donor?.email, date: g.donated_at?.slice(0, 10) } : null };
+  }
+  if (name === "search_history") {
+    // Durable conversational memory: search past messages by topic. Grounded in the
+    // real `messages` table (no fabrication), ranked by how many query words match.
+    const q = String(input.query || "").trim();
+    if (!q) return { results: [], note: "no query given" };
+    const terms = q.toLowerCase().split(/\s+/).map((w: string) => w.replace(/[,()*%]/g, "")).filter((w: string) => w.length >= 3).slice(0, 6);
+    const used = terms.length ? terms : [q.toLowerCase().replace(/[,()*%]/g, "")];
+    const orExpr = used.map((w: string) => `body.ilike.%${w}%`).join(",");
+    const { data } = await db.from("messages").select("body,created_at,direction,channel").or(orExpr).order("created_at", { ascending: false }).limit(80);
+    const scored = (data || [])
+      .map((m: any) => ({ m, hits: used.filter((w: string) => String(m.body || "").toLowerCase().includes(w)).length }))
+      .filter((x: any) => x.hits > 0 && String(x.m.body || "").trim())
+      .sort((a: any, b: any) => b.hits - a.hits || (a.m.created_at < b.m.created_at ? 1 : -1))
+      .slice(0, 12);
+    return {
+      count: scored.length,
+      results: scored.map(({ m }: any) => ({ when: String(m.created_at || "").slice(0, 16), who: m.direction === "out" ? "Sasa" : "the operator", channel: m.channel, text: String(m.body || "").slice(0, 280) })),
+    };
   }
   return { error: "unknown read tool" };
 }
