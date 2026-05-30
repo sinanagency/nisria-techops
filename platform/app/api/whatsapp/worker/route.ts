@@ -76,7 +76,7 @@ async function processJob(db: any, job: any): Promise<void> {
   // everyone else are stored but never answered here, the team works through the
   // groups (the group bot), not this private line. This keeps the powerful tool
   // (finance, sends, group posting) in exactly two hands.
-  const { role, name: opName } = await operatorOf(db, from);
+  const { role, name: opName, rank: opRank } = await operatorOf(db, from);
   if (role !== "admin") {
     await emit({ type: "whatsapp.ignored", source: "whatsapp", actor: from, subject_type: "contact", subject_id: contactId, payload: { from, reason: role === "team" ? "team member, 727 is operator-only" : "not an operator" } });
     await markJobDone(job.id);
@@ -248,7 +248,7 @@ async function processJob(db: any, job: any): Promise<void> {
 
   let reply: string | undefined;
   try {
-    ({ reply } = await runSasa({ history, command, operatorName: opName || name || undefined, operatorRole: role, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined }));
+    ({ reply } = await runSasa({ history, command, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined }));
   } catch (e: any) {
     // A REAL backend failure (Claude API error, tool/DB throw). This is the only
     // path that admits being stuck and asks the operator to retry.

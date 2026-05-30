@@ -130,6 +130,14 @@ const CASES: Case[] = [
     command: "Who do we have in the rescue program?",
     assert: (o) => [{ label: "calls find_beneficiary", pass: hasTool(o, "find_beneficiary") }],
   },
+  {
+    name: "SEND: 'tell <person> ...' messages that person directly",
+    command: "Tell Nur the team meeting moved to 3pm.",
+    assert: (o) => [
+      { label: "calls message_person", pass: hasTool(o, "message_person") },
+      { label: "does not queue an email instead", pass: !hasTool(o, "draft_email") },
+    ],
+  },
 ];
 
 export async function GET(req: NextRequest) {
@@ -232,6 +240,15 @@ export async function GET(req: NextRequest) {
       if (!ok) allOk = false;
     }
     return NextResponse.json({ test: "read-coverage", pass: allOk, tools: out });
+  }
+
+  // ?send=1 -> live test of message_person's SAFE path: an unknown name resolves
+  // to nothing and does NOT send. (A real delivery is verified in the live smoke
+  // test, to avoid messaging a real person from an automated run.)
+  if (req.nextUrl.searchParams.get("send") === "1") {
+    const r: any = await runSmartTool("message_person", { to: "ZZNoSuchPersonXYZ", text: "automated test, please ignore" });
+    const pass = r?.ok === false && r?.detail?.unresolved === true;
+    return NextResponse.json({ test: "message_person-safe", pass, reply: r?.summary, detail: r?.detail });
   }
 
   // ?memory=1&q=... -> live test of #11 durable memory: search_history returns real

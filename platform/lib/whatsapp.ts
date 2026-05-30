@@ -101,14 +101,31 @@ export function phoneKey(s: string): string {
 //             tasks. NO donor or financial data. Decisions route to Nur.
 //   null    — everyone else. The bot stays SILENT (this is an internal line).
 // The allowlist is matched first, so Nur (also a team member) is treated as admin.
+//
+// rank refines an admin into the authority the bot should recognise:
+//   'owner'   — Taona, the builder/developer of this system, final say on everything.
+//               Detected by OWNER_WHATSAPP env, or as the allowlisted number that is
+//               NOT on the team roster (the builder is not a Nisria staff member).
+//   'founder' — Nur, who runs Nisria day to day (on the team roster as Founder).
+//   'member'  — a team operator (rare); plain admins without a rank otherwise.
 export type OperatorRole = "admin" | "team" | null;
-export async function operatorOf(db: any, waId: string): Promise<{ role: OperatorRole; name: string | null }> {
+export type OperatorRank = "owner" | "founder" | "member" | null;
+export async function operatorOf(db: any, waId: string): Promise<{ role: OperatorRole; name: string | null; rank: OperatorRank }> {
   const key = phoneKey(waId);
-  if (!key) return { role: null, name: null };
+  if (!key) return { role: null, name: null, rank: null };
   const allow = (process.env.WHATSAPP_OPERATORS || "").split(",").map((x) => phoneKey(x)).filter(Boolean);
+  const owners = (process.env.OWNER_WHATSAPP || "").split(",").map((x) => phoneKey(x)).filter(Boolean);
+  const ownerName = process.env.OWNER_NAME || "Taona";
   const { data } = await db.from("team_members").select("name,phone,status").limit(400);
   const member = (data || []).find((t: any) => phoneKey(t.phone) === key);
-  if (allow.includes(key)) return { role: "admin", name: member?.name || null };
-  if (member && (member.status === "active" || !member.status)) return { role: "team", name: member.name };
-  return { role: null, name: null };
+  // Explicit owner override always wins.
+  if (owners.includes(key)) return { role: "admin", name: member?.name || ownerName, rank: "owner" };
+  if (allow.includes(key)) {
+    // An allowlisted builder who is NOT on the team roster is the owner; an
+    // allowlisted person who IS on the roster (Nur) is the founder.
+    if (member) return { role: "admin", name: member.name, rank: "founder" };
+    return { role: "admin", name: ownerName, rank: "owner" };
+  }
+  if (member && (member.status === "active" || !member.status)) return { role: "team", name: member.name, rank: "member" };
+  return { role: null, name: null, rank: null };
 }
