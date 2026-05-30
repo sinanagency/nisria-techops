@@ -221,56 +221,57 @@ async function processJob(db: any, job: any): Promise<void> {
   // produces traces back to the exact instruction that caused it.
   let sourceMessageId: string | null = null;
   if (waMsgId) { const { data: inMsg } = await db.from("messages").select("id").eq("external_id", waMsgId).limit(1); sourceMessageId = inMsg?.[0]?.id || null; }
-  // SLOW + STUCK SAFETY NETS around the brain (the long pole of the turn):
+  // SLOW HANDLING around the brain (the long pole of the turn):
   //  - keep-alive: the typing dots lapse after ~25s, so re-assert them every 20s
   //    until the reply lands, so a heavy turn never shows dead air.
-  //  - 30s: one warm "still working" line. An outbound text dismisses the dots,
-  //    so we re-show them right after.
-  //  - 290s watchdog: just under the 300s function ceiling. Past it the brain is
-  //    genuinely hung, so tell the operator to retry and close the job.
-  // Every terminal path here marks the job DONE (never error) so a handled turn is
-  // not re-claimed and re-sent by the next drain. settled + stuckFired stop any
-  // double-send if the brain resolves at the same instant a timer fires.
-  const STUCK = "That one tripped me up. Hit me again?";
+  //  - reassurance at 30s and 120s: a warm "still working" line for slow turns. An
+  //    outbound text dismisses the dots, so we re-show them right after.
+  // SLOWNESS IS NOT AN ERROR. The ONLY thing that says "tripped me up" is a real
+  // thrown failure from runSasa (the catch below). A turn that just takes long
+  // keeps reassuring and still delivers; if it blows past the 300s ceiling the
+  // function is clamped and reclaimStuckJobs requeues it. No false error, ever.
   const msgId = waMsgId;
-  let settled = false, stuckFired = false;
-  async function sayStuck(reason: string) {
-    const r = await sendText(from, STUCK);
-    await db.from("messages").insert({ channel: "whatsapp", direction: "out", body: STUCK, handled_by: "sasa", status: r.id ? "sent" : "failed", account: "whatsapp", external_id: r.id || null, contact_id: contactId });
-    await emit({ type: "whatsapp.stuck", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { to: from, reason } });
-  }
-  const keepAlive = msgId ? setInterval(() => { if (!settled && msgId) sendTypingIndicator(msgId).catch(() => {}); }, 20000) : null;
-  const slowTimer = setTimeout(async () => {
+  let settled = false;
+  async function reassure(line: string) {
     if (settled) return;
     try {
-      const wait = "Still on it, hang tight.";
-      const r = await sendText(from, wait);
-      await db.from("messages").insert({ channel: "whatsapp", direction: "out", body: wait, handled_by: "sasa", status: r.id ? "sent" : "failed", account: "whatsapp", external_id: r.id || null, contact_id: contactId });
+      const r = await sendText(from, line);
+      await db.from("messages").insert({ channel: "whatsapp", direction: "out", body: line, handled_by: "sasa", status: r.id ? "sent" : "failed", account: "whatsapp", external_id: r.id || null, contact_id: contactId });
       await emit({ type: "whatsapp.message_out", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { to: from, kind: "interim_wait" } });
       if (msgId && !settled) await sendTypingIndicator(msgId);
     } catch {}
-  }, 30000);
-  const stuckTimer = setTimeout(async () => {
-    if (settled) return;
-    stuckFired = true;
-    try { await sayStuck("sasa watchdog timeout"); } catch {}
-    await markJobDone(job.id);
-  }, 290000);
-  const stopTimers = () => { settled = true; if (keepAlive) clearInterval(keepAlive); clearTimeout(slowTimer); clearTimeout(stuckTimer); };
+  }
+  const keepAlive = msgId ? setInterval(() => { if (!settled && msgId) sendTypingIndicator(msgId).catch(() => {}); }, 20000) : null;
+  const slowTimer = setTimeout(() => { reassure("Still on it, hang tight."); }, 30000);
+  const slowTimer2 = setTimeout(() => { reassure("Still working on this, it is a big one."); }, 120000);
+  const stopTimers = () => { settled = true; if (keepAlive) clearInterval(keepAlive); clearTimeout(slowTimer); clearTimeout(slowTimer2); };
 
   let reply: string | undefined;
   try {
     ({ reply } = await runSasa({ history, command, operatorName: opName || name || undefined, operatorRole: role, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined }));
   } catch (e: any) {
+    // A REAL backend failure (Claude API error, tool/DB throw). This is the only
+    // path that admits being stuck and asks the operator to retry.
     stopTimers();
-    if (stuckFired) return; // watchdog already messaged + closed the job
-    await sayStuck(String(e?.message || e));
+    const STUCK = "That one tripped me up. Hit me again?";
+    const r = await sendText(from, STUCK);
+    await db.from("messages").insert({ channel: "whatsapp", direction: "out", body: STUCK, handled_by: "sasa", status: r.id ? "sent" : "failed", account: "whatsapp", external_id: r.id || null, contact_id: contactId });
+    await emit({ type: "whatsapp.stuck", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { to: from, reason: String(e?.message || e) } });
     await markJobDone(job.id);
     return;
   }
   stopTimers();
-  if (stuckFired) return; // brain returned after the watchdog gave up; do not double-send
-  if (!reply) { await sayStuck("empty reply"); await markJobDone(job.id); return; }
+  if (!reply) {
+    // Near-unreachable here (runSasa always finalizes to non-empty in this DM
+    // path). If the model truly returns nothing it is not a backend error, so
+    // ask plainly rather than claiming a fault.
+    const nudge = "I did not catch that one. Mind sending it again?";
+    const r = await sendText(from, nudge);
+    await db.from("messages").insert({ channel: "whatsapp", direction: "out", body: nudge, handled_by: "sasa", status: r.id ? "sent" : "failed", account: "whatsapp", external_id: r.id || null, contact_id: contactId });
+    await emit({ type: "whatsapp.message_out", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { to: from, kind: "empty_reply_reask" } });
+    await markJobDone(job.id);
+    return;
+  }
 
   const res = await sendText(from, reply);
   await db.from("messages").insert({
