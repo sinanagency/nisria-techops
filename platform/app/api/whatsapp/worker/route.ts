@@ -40,14 +40,19 @@ function authed(req: NextRequest): boolean {
 // Rebuild the recent conversation for a contact as Sasa/Claude turns.
 async function historyFor(db: any, contactId: string | null): Promise<SasaTurn[]> {
   if (!contactId) return [];
+  // Load the MOST RECENT 12 messages (descending), then put them back in
+  // chronological order. The old code took ascending+limit, which returned the
+  // 12 OLDEST messages in a long thread, so the bot never saw the live exchange
+  // (it re-greeted every turn and could not obey "stop"). This is its short-term memory.
   const { data } = await db
     .from("messages")
     .select("direction,body,created_at")
     .eq("contact_id", contactId)
     .eq("channel", "whatsapp")
-    .order("created_at", { ascending: true })
+    .order("created_at", { ascending: false })
     .limit(12);
   return (data || [])
+    .reverse()
     .filter((m: any) => m.body)
     .map((m: any) => ({ role: m.direction === "out" ? "assistant" : "user", content: String(m.body) })) as SasaTurn[];
 }
