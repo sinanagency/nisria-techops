@@ -212,10 +212,10 @@ async function runRead(db: any, name: string, input: any): Promise<any> {
       db.from("team_members").select("name,phone,email,role").ilike("name", like).limit(8),
       db.from("beneficiaries").select("full_name,contact_phone").ilike("full_name", like).limit(8),
     ]);
-    const results = [
-      ...((c.data || []) as any[]).map((r) => ({ name: r.name, phone: r.phone || null, email: r.email || null, where: "contacts" })),
-      ...((t.data || []) as any[]).map((r) => ({ name: r.name, phone: r.phone || null, email: r.email || null, role: r.role, where: "team" })),
-      ...((b.data || []) as any[]).map((r) => ({ name: r.full_name, phone: r.contact_phone || null, where: "beneficiary" })),
+    const results: any[] = [
+      ...((c.data || []) as any[]).map((r) => ({ name: r.name, phone: r.phone || null, email: r.email || null, role: null, where: "contacts" })),
+      ...((t.data || []) as any[]).map((r) => ({ name: r.name, phone: r.phone || null, email: r.email || null, role: r.role || null, where: "team" })),
+      ...((b.data || []) as any[]).map((r) => ({ name: r.full_name, phone: r.contact_phone || null, email: null, role: null, where: "beneficiary" })),
     ].filter((r) => r.phone || r.email);
     return { count: results.length, results };
   }
