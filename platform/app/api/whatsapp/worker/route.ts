@@ -18,6 +18,7 @@ import { claimJobs, markJobDone, markJobError } from "../../../../lib/jobs";
 import { sendText, operatorOf, downloadMedia } from "../../../../lib/whatsapp";
 import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
 import { readMedia } from "../../../../lib/anthropic";
+import { transcribeAudio } from "../../../../lib/transcribe";
 import { createBatch } from "../../../../lib/ingest";
 import { storeMedia } from "../../../../lib/media-store";
 
@@ -121,9 +122,30 @@ async function processJob(db: any, job: any): Promise<void> {
       } else {
         command = text || "(attachment could not be downloaded)";
       }
+    } else if (mediaMime.startsWith("audio/")) {
+      // VOICE NOTE: Kenyan staff + Nur talk more than they type. Transcribe via
+      // OpenAI (cloud, never the DGX) and treat the transcript exactly like a
+      // typed message, so "paid Lucy 15k" spoken logs the same as typed.
+      const media = await downloadMedia(mediaId);
+      let transcript = "";
+      if (media) { try { transcript = await transcribeAudio(media.base64, media.mime); } catch { transcript = ""; } }
+      if (transcript) {
+        // keep the transcript on the inbound row so the thread reads the words,
+        // not "[audio]", and so conversation history has the real content.
+        if (waMsgId) { try { await db.from("messages").update({ body: transcript }).eq("external_id", waMsgId); } catch {} }
+        command = `${text ? text + "\n\n" : ""}[voice note, transcribed]\n${transcript}`;
+      } else {
+        // transcription failed: nudge gracefully instead of going silent.
+        const nudge = "I could not make out that voice note. Could you resend it or type it, and I will sort it right away.";
+        const res = await sendText(from, nudge);
+        await db.from("messages").insert({ channel: "whatsapp", direction: "out", body: nudge, handled_by: "sasa", status: res.id ? "sent" : "failed", account: "whatsapp", external_id: res.id || null, contact_id: contactId });
+        await emit({ type: res.id ? "whatsapp.message_out" : "whatsapp.send_failed", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { to: from, kind: "audio", transcribe_failed: true, error: res.error } });
+        if (res.id) await markJobDone(job.id); else await markJobError(job.id, res.error || "send failed");
+        return;
+      }
     } else {
-      // audio / voice / video / sheets: no reader wired yet, nudge gracefully.
-      const nudge = "I can read text, screenshots, photos and PDFs. I cannot listen to voice notes or watch video yet, send it typed or as a screenshot and I will log it right away.";
+      // video / sheets / other: no reader for these, nudge gracefully.
+      const nudge = "I can read text, voice notes, screenshots, photos and PDFs. I cannot watch video yet, send it another way and I will handle it.";
       const res = await sendText(from, nudge);
       await db.from("messages").insert({ channel: "whatsapp", direction: "out", body: nudge, handled_by: "sasa", status: res.id ? "sent" : "failed", account: "whatsapp", external_id: res.id || null, contact_id: contactId });
       await emit({ type: res.id ? "whatsapp.message_out" : "whatsapp.send_failed", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { to: from, kind: msgType, unsupported: true, error: res.error } });

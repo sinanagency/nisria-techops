@@ -130,6 +130,22 @@ async function start() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // Pairing-code link (alternative to QR): if PAIR_NUMBER is set and we are not yet
+  // registered, ask WhatsApp for an 8-char code that Nur types into the dedicated
+  // phone via Linked Devices -> Link with phone number. More robust than a QR image
+  // (no expiring photo to send around). The session still persists to AUTH_DIR.
+  const PAIR_NUMBER = (process.env.PAIR_NUMBER || "").replace(/[^0-9]/g, "");
+  if (PAIR_NUMBER && !sock.authState.creds.registered) {
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(PAIR_NUMBER);
+        const pretty = code?.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+        log.info("PAIRING CODE (bot phone -> Linked Devices -> Link with phone number): " + pretty);
+        postLink({ qr: null, pairingCode: pretty, connected: false });
+      } catch (e) { log.error({ err: e?.message }, "requestPairingCode failed"); }
+    }, 3000);
+  }
+
   sock.ev.on("connection.update", (u) => {
     const { connection, lastDisconnect, qr } = u;
     if (qr) {

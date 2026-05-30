@@ -12,11 +12,19 @@ Foundation landed. The handoff in HOW-WE-BUILD.md has run through Step 5: supers
 
 Baseline verdict: FAIL with 406 currency and source-of-truth violations. 226 payments carry created_by='drive monthly history' tagged USD when they are Kenyan KES expenses; 180 of those also hold impossible amounts (the USD payments-out total reads as 1.3e23). Banking is two reconciled Absa accounts (Nisria CBO and LHSH) holding both credits and debits, but only for Oct 2021 to Nov 2022.
 
-Next action: the operator confirms the baseline, then says go on Pass 0.
+Pass 0 underway on branch pass-0-money-truth. Done so far: (1) the 226 currency-corrupted payments resolved (46 mislabeled rows corrected USD to KES, 180 unparseable rows quarantined reversibly, snapshot at docs/baselines/pass-0-quarantine-snapshot-2026-05-29.json); re-audit reads PASS, USD payments-out total dropped from 1.3e23 to the real 27,651.66. Proof: docs/baselines/money-truth-postfix-2026-05-29.md. (2) Finance pulse rebuilt to show all 38 sequential months (2023-03 to 2026-04) with an inline Ask-Sasa box. (3) Treasury A-to-Z summary built and leads the Finance page: money in and out per currency, blended USD-equivalent with FX visible (129 KES/USD), USD-held and last reconciled bank balance, and an honesty note that a live cash-on-hand needs complete income records and recent statements. It refuses to print a misleading KES net.
+
+(4) FINAL FIX: the whole 'drive monthly history' backfill was found to be fabricated and inflated. Root cause: it misread PayBill/Account/Till numbers from the sheets' "Payment Details" column as amounts, and templated 34 months that have no source sheet (tell: months identical to the shilling, e.g. 2024-04 = 2024-05 = 1,265,836). Only 2026 Feb-May trace to real monthly sheets, and the audited 2024 statement confirms ~3.7M/yr, not the backfill's ~16M. Action: snapshotted all 1,624 backfill rows (docs/baselines/pass-0-backfill-snapshot-2026-05-29.json), purged them, and re-extracted the 4 real sheets correctly via scripts/reextract_expenses.mjs (read the Amount column, reconcile each month to its stated Total, tag funding source). 124 clean rows loaded: Feb 415,120 / Mar 513,471 / Apr 489,000 / May 597,000 KES, every month balances to the sheet. Removed a stale duplicate recurring import (32 rows) so the monthly run reads 597,000 once. Donations, Givebutter payouts, and bank_transactions untouched. Audit: PASS.
+
+The authoritative anchors now: 2026 real months above; 2024 audited (income 3,709,880 / expenditure 3,704,250 / surplus 5,630 / year-end reserves 513,830 KES, banker Stanbic). Full Drive finance inventory is 117 files.
+
+UPDATE (COMPLETE): the full monthly sheet set was found (53 sheets; 2023-2025 named "YYYYMM - nisria Expenses", 2026 "[NS] ... Monthly Expenses"). The parser was hardened for all three layouts: read the KES amount only from the labeled KES column (account numbers can no longer be parsed as money), detect the total row whether labeled or an unlabeled trailing all-empty row, and trust the itemized line items where a sheet's own stated total is stale (rows added after the total was last computed). The peripheral, inconsistently-recorded USD agency column is intentionally not loaded. Result: ALL 39 months load (2023-03 to 2026-05), 1,402 rows, 24,226,463 KES. Per year: 2023 (10 mo) 7,273,765; 2024 (12) 8,291,609; 2025 (12) 6,164,378; 2026 (5) 2,496,711. Recurring monthly run reads 597,000 once. 9 months (2023-10 to 2024-06) had stale stated totals and were loaded from line items (flagged). Audit: PASS. Duplicate months (2024-04 = 2024-05) exist in the source sheets themselves.
+
+Pass 0 remaining (cosmetic/UI only, the data is now complete and honest): surface the 2024 audited annual figures as a Treasury anchor (the monthly sheets are all-programs scope; the audited CBO is narrower), Givebutter its own tab, donor currency in its own unit, then deploy + screenshot-verify.
 
 ## Passes
 
-- Pass 0 (Money truth): NOT STARTED (baseline filed, worktree armed, awaiting operator go)
+- Pass 0 (Money truth): IN PROGRESS (currency fixed, backfill purged + re-extracted from real sheets, pulse + treasury built; 2024 audited anchor, Givebutter tab, donor currency, deploy pending)
 - Pass 1 (Browser shell): NOT STARTED
 - Pass 2 (Depth, full profiles): NOT STARTED
 - Pass 3 (AI, comms, life): NOT STARTED
@@ -31,7 +39,7 @@ To be filled in by Claude Code when it runs the money-truth-auditor and the dril
 
 | Module | Status | Owning law | Notes |
 |---|---|---|---|
-| Finance | MIXED | Currency, Source-of-truth | 226 payments mislabeled USD (should be KES), USD payments-out total poisoned to 1.3e23; KES sums look sane; see docs/baselines/money-truth-baseline-2026-05-29.md |
+| Finance | MIXED | Currency, Source-of-truth | Currency corruption resolved (audit PASS, postfix proof); pulse shows all 38 months. Still pending: treasury summary, real-spend ledger, Givebutter tab, 180-row re-extraction |
 | Workspace | TBD | Browser-OS, Local-first | Awaiting Pass 1 |
 | Beneficiaries | TBD | Source-of-truth, Drill-to-core | 93 imported, photos partial |
 | Grants | TBD | Real-action, Source-of-truth | Active band live, submission not real |

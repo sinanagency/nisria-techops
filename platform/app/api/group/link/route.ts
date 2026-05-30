@@ -24,7 +24,10 @@ function bySession(req: NextRequest) {
 export async function POST(req: NextRequest) {
   if (!bySecret(req)) return NextResponse.json({ ok: false }, { status: 401 });
   let b: any; try { b = await req.json(); } catch { return NextResponse.json({ ok: false }, { status: 400 }); }
-  const value = { qr: b.qr || null, connected: !!b.connected, ts: b.ts || new Date().toISOString() };
+  // status: "connected" | "banned" | "logged_out" | "waiting". The bot sets it; we
+  // derive a sane default for older payloads that only send `connected`.
+  const status = b.status || (b.connected ? "connected" : "waiting");
+  const value = { qr: b.qr || null, connected: !!b.connected, status, ts: b.ts || new Date().toISOString() };
   await admin().from("bot_status").upsert({ key: KEY, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
   return NextResponse.json({ ok: true });
 }
@@ -35,5 +38,6 @@ export async function GET(req: NextRequest) {
   const v: any = data?.value || {};
   // stale if the bot stopped pushing for >90s (QR no longer valid / bot down)
   const ageMs = data?.updated_at ? Date.now() - new Date(data.updated_at).getTime() : Infinity;
-  return NextResponse.json({ ok: true, connected: !!v.connected, qr: v.qr || null, stale: ageMs > 90_000, updated_at: data?.updated_at || null });
+  const status = v.status || (v.connected ? "connected" : "waiting");
+  return NextResponse.json({ ok: true, connected: !!v.connected, status, qr: v.qr || null, stale: ageMs > 90_000, updated_at: data?.updated_at || null });
 }

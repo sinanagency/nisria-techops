@@ -63,3 +63,74 @@ STILL PENDING: WHATSAPP_APP_SECRET (set when Nur pastes it -> signature verifica
 system-user token for WABA 3885 (current temp token expires ~2026-06), delete duplicate WABA 966.
 CONSIDER: route bot-reply send through gateway.ts for idempotency+logging (currently direct sendText;
 inbound dedupe already prevents double-reply). Broaden operator access (all team_members?) per Nur.
+
+## PERMANENT TOKEN IN — 2026-05-29 ~12:35 ✅
+System user "nisria-whatsapp" (ID 61590561056682, Admin) created under By Nisria Inc business.
+Given Full control on the Nisria Automation app (via Accounts>Apps>Add people, NOT the system-user
+"Installed apps" tab which is a dead end) + WhatsApp account 3885764911733268. Generated token:
+type SYSTEM_USER, expires_at 0 (NEVER), scopes whatsapp_business_messaging + management. Validated +
+probe-send OK on phone 1154152401110782. Set as WHATSAPP_TOKEN in Vercel, deployed. Final prod test:
+"paid Dorcas Njambi 10000 salary and 2500 cleaning supplies" -> "Logged 2 payments, KES 12,500"
+DELIVERED. The temp-token expiry problem is permanently solved.
+NOTE: same system user already has the 3 FB Pages (AHADI, Maisha, Nisria) + ad accounts assigned, so
+the SAME app/system-user is the foundation for FB + IG posting later (needs page/IG scopes added:
+pages_manage_posts, pages_read_engagement, pages_show_list, instagram_basic, instagram_content_publish).
+
+## SOCIAL POSTING TOKEN PARKED — 2026-05-29 ~15:15
+Generated a SECOND token from the same system user nisria-whatsapp (one robot, many keys; Meta caps
+admin system users at 1, so reuse it, don't make new admin ones). SYSTEM_USER, expires 0 (never).
+Scopes: pages_show_list, pages_manage_posts, pages_read_engagement, pages_messaging, publish_video,
+instagram_basic, instagram_content_publish, instagram_manage_comments, instagram_manage_insights,
+instagram_manage_messages, instagram_manage_contents, business_management.
+Stored in Vercel as META_SOCIAL_TOKEN (production). NOT YET USED by any code, parked for the future
+FB+IG social feature (draft -> approve in Needs You -> post). Page IDs: Nisria 1129284943925631,
+Maisha By Nisria 112265004832438, AHADI By Nisria 108320923993373.
+IG posting flow when built: get page token -> get linked IG business id -> POST /{ig}/media then
+/media_publish. FB: POST /{page-id}/feed or /photos. Could add later if wanted: pages_manage_engagement
+(reply to FB comments), read_insights (FB page analytics). ZANII ads = separate Business Manager, not here.
+
+## PHASE 1 SHIPPED — 2026-05-29 ~17:30 (security + voice)
+- WHATSAPP_APP_SECRET set (f898...). Webhook now HMAC-verifies x-hub-signature-256. Verified: signed
+  call -> {received:true}, bad sig -> 401 "bad signature". Real Meta calls are signed so inbound works;
+  if a real message ever goes silent, suspect a mistyped secret and check first.
+- Voice notes: lib/transcribe.ts (OpenAI gpt-4o-transcribe, CLOUD not DGX per project rule). Worker
+  audio branch now downloads + transcribes -> transcript becomes the command (logged onto the inbound
+  row too). Round-trip proven: say->m4a->transcribe = "...paid Lucy Wanjiku 15,000 shillings for salary".
+  Video/sheets still nudge. OPENAI_API_KEY already in env.
+LIVE TEST NEEDED (real Meta-signed): Taona sends a real voice note + a real text to 727 to confirm
+signature value matches Meta + transcription end-to-end.
+NOTE: jobs.ts now has a 'group.send' JobKind + smart-tools has member aliases, appearing via parallel
+edits (user/other session likely building the group bot). COORDINATE before I build group listener to
+avoid collision.
+
+## OVERNIGHT AUTONOMOUS RUN — 2026-05-30 (groups redesign + finance + voice + security)
+SHIPPED + DEPLOYED to command.nisria.co (build green each time):
+- VOICE NOTES: lib/transcribe.ts (OpenAI gpt-4o-transcribe, NOT DGX). Worker transcribes audio ->
+  transcript becomes the command. Round-trip proven.
+- APP SECRET set (f898...): webhook now HMAC-verifies signatures. Verified signed->200, bad->401.
+- GROUPS REDESIGN (the big one):
+  * app/api/groups/messages/route.ts (NEW): per-group feed, sender->contact name, mine flag
+    (owner Nur/Sasa = right), system-message noise filtered out ("security code changed" etc).
+  * components/GroupChat.tsx (NEW): WhatsApp-faithful. Owner right / others left + per-name colour,
+    time stamps, date dividers (Today/Yesterday/date), dotted doodle backdrop (.wa-chat), in-chat
+    search w/ highlight, inline images + Drive-link rendering + media-placeholder icons, client-side
+    group switch (edge .wa-edge arrows + dropdown, no reload), MAXIMIZE -> FocusSheet (canonical
+    overlay, same as Need You) with all groups as siblings so prev/next arrows step between groups.
+  * app/groups/page.tsx: now server-loads the group LIST, renders <GroupChat> (hybrid). Old inline
+    server chat removed.
+  * components/GroupLink.tsx: compact pill (collapsed), slim "linked" line when connected,
+    RED auto-return QR when status banned/logged_out. app/api/group/link adds `status` field.
+  * globals.css: .wa-chat doodle + .wa-edge edge arrows.
+  * Data: all 4 groups already imported (Admin 7191, Grants 410, Maisha Ops 1378, Social 348) with
+    real timestamps + sender contacts. scripts/import-wa-groups.py written (idempotent; skipped, data present).
+- FINANCE: Givebutter payouts EXCLUDED from "Reminders — due soon" (app/finance/page.tsx isPayout
+  guard). Was 21 reminders (14 real + 7 payouts) -> now 14 real obligations (rent/utilities/etc).
+  Per doctrine: payouts are the bridge, not a bill.
+
+FLAGS / NOT mine (parallel group-listener track, or needs untestable access):
+- "Act as Nur on tag" REPLY + live group capture = the Baileys group LISTENER (parallel track,
+  waiting on the Kenyan number link). Groups page DISPLAYS; listener REPLIES. Not built here.
+- Links -> Library INGESTION (fetch Drive link content + createBatch): display done, but ingestion
+  needs SA Drive access + a real link to test. NOT built blind (no-proof rule). Flag for when testable.
+- Exports were TEXT-ONLY (no media files), so no historical media to populate; live media handled by worker.
+Scope guard held: did NOT touch group.send/listener backend, jobs.ts JobKind, or the parallel brain edits.
