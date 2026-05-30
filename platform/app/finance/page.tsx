@@ -174,8 +174,12 @@ export default async function Finance() {
   // Everything still owed that isn't payroll (salaries get their own card).
   // "scheduled" recurring bills count too — they were invisible before, which
   // is why nothing showed even with obligations due in days.
+  // EXCLUDE Givebutter payouts: per the finance doctrine they are the bridge
+  // (USD donations -> Kenya cash), NOT an operating bill to be reminded about /
+  // "marked paid". They have their own reconciliation, never a due-soon reminder.
+  const isPayout = (p: any) => p.category === "payout" || p.method === "givebutter";
   const dueRows = payments
-    .filter((p: any) => !isSalary(p) && ["scheduled", "upcoming", "due", "overdue"].includes(p.status))
+    .filter((p: any) => !isSalary(p) && !isPayout(p) && ["scheduled", "upcoming", "due", "overdue"].includes(p.status))
     .sort((a: any, b: any) => new Date(a.due_on || "9999-12-31").getTime() - new Date(b.due_on || "9999-12-31").getTime());
 
   // urgency flag per row: overdue (red) / due within 7 days (gold) / scheduled

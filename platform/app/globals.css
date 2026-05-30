@@ -958,3 +958,22 @@ details.collapse[open] .collapse-head { border-bottom: 1px solid var(--line); }
 /* ── Collapsible section header (finance dropdowns) ─────────────────────── */
 .card-h.collapse-h { width: 100%; background: none; border-left: 0; border-right: 0; border-top: 0; cursor: pointer; font-family: inherit; text-align: left; transition: background .12s var(--ease); }
 .card-h.collapse-h:hover { background: var(--canvas); }
+
+/* ── Groups: WhatsApp-style chat ─────────────────────────────────────── */
+/* subtle dotted backdrop (our tasteful stand-in for WhatsApp's doodles) */
+.wa-chat {
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--line) 0.5px, transparent 0.5px);
+  background-size: 18px 18px;
+}
+/* big prev/next arrows on the screen edges, carousel-style */
+.wa-edge {
+  position: absolute; top: 46%; transform: translateY(-50%);
+  z-index: var(--z-dropdown);
+  width: 40px; height: 40px; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface-elevated); border: 1px solid var(--line);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.10); cursor: pointer; color: var(--ink);
+  transition: background .15s ease, transform .15s ease;
+}
+.wa-edge:hover { background: var(--canvas); transform: translateY(-50%) scale(1.06); }
