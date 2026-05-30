@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTabs } from "./tabs-context";
+import PreviewLink from "./PreviewLink";
 import { Money } from "./Money";
 import { issueInvoice, draftInvoiceFromText } from "../app/reports/actions";
 import type { InvoiceResult } from "../lib/invoice";
@@ -170,7 +171,7 @@ export default function InvoiceBuilder() {
       ),
       footer: (
         <>
-          {res.docId && <a className="btn teal sm" href={`/api/studio/pdf?id=${res.docId}`} target="_blank" rel="noopener"><Download size={13} /> Download PDF</a>}
+          {res.docId && <PreviewLink href={`/api/studio/pdf?id=${res.docId}`} kind="pdf" title="Invoice" className="btn teal sm"><Download size={13} /> View PDF</PreviewLink>}
           <button type="button" className="btn ghost sm" onClick={printResult}><Printer size={13} /> Print</button>
           <button type="button" className="btn ghost sm" onClick={() => closeSheet(id)}>Close</button>
         </>

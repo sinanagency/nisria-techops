@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTabs } from "./tabs-context";
+import PreviewLink from "./PreviewLink";
 import { generateReport, type GeneratedReport } from "../app/reports/actions";
 import {
   Sliders, Sparkles, Loader2, Printer, Download, AlertTriangle, FileBarChart, Calendar, Paperclip, X,
@@ -169,7 +170,7 @@ export default function ReportBuilder() {
       ),
       footer: (
         <>
-          {res.docId && <a className="btn teal sm" href={`/api/studio/pdf?id=${res.docId}`} target="_blank" rel="noopener"><Download size={13} /> Download PDF</a>}
+          {res.docId && <PreviewLink href={`/api/studio/pdf?id=${res.docId}`} kind="pdf" title="Report" className="btn teal sm"><Download size={13} /> View PDF</PreviewLink>}
           <button type="button" className="btn ghost sm" onClick={printResult}><Printer size={13} /> Print</button>
           <button type="button" className="btn ghost sm" onClick={() => closeSheet(id)}>Close</button>
         </>

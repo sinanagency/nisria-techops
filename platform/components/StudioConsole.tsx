@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTabs } from "./tabs-context";
+import PreviewLink from "./PreviewLink";
 import { generateDocument, type StudioResult } from "../app/studio/actions";
 import { Sparkles, UploadCloud, FileText, X, Loader2, Printer, AlertTriangle, Wand2, Download } from "lucide-react";
 
@@ -113,7 +114,7 @@ export default function StudioConsole() {
       ),
       footer: (
         <>
-          {result.docId && <a className="btn teal sm" href={`/api/studio/pdf?id=${result.docId}`} target="_blank" rel="noopener"><Download size={13} /> Download PDF</a>}
+          {result.docId && <PreviewLink href={`/api/studio/pdf?id=${result.docId}`} kind="pdf" title="Document" className="btn teal sm"><Download size={13} /> View PDF</PreviewLink>}
           <button type="button" className="btn ghost sm" onClick={printResult}><Printer size={13} /> Print</button>
           <button type="button" className="btn ghost sm" onClick={() => { closeSheet(id); setResult(null); }}>Close</button>
         </>

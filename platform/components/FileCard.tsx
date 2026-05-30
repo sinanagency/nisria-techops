@@ -2,7 +2,7 @@
 
 import { useTabs } from "./tabs-context";
 import { Badge } from "./ui";
-import { FileText, Maximize2, ExternalLink, Download, Sparkles } from "lucide-react";
+import { FileText, Maximize2, Download, Sparkles } from "lucide-react";
 
 const TYPE_LABEL: Record<string, string> = {
   bank_statement: "Bank statement", invoice: "Invoice", receipt: "Receipt",
@@ -54,14 +54,14 @@ export default function FileCard({ doc }: { doc: any }) {
             <div className="faint" style={{ fontSize: 12.5, marginTop: 4 }}>
               This file type ({doc.mime}) opens best as a download.
             </div>
-            <a className="btn sm teal" href={src} target="_blank" rel="noopener" style={{ marginTop: 12 }}><Download size={13} /> Open / download</a>
+            <a className="btn sm teal" href={src} download style={{ marginTop: 12 }}><Download size={13} /> Download</a>
           </div>
         )}
         </>
       ),
       footer: (
         <>
-          <a className="btn sm ghost" href={src} target="_blank" rel="noopener"><ExternalLink size={13} /> Open in new tab</a>
+          <a className="btn sm ghost" href={src} download>Download</a>
           <a className="btn sm ghost" href={doc.drive_url} target="_blank" rel="noreferrer">View in Drive</a>
           <button type="button" className="btn sm ghost" onClick={() => closeSheet(id)}>Close</button>
         </>

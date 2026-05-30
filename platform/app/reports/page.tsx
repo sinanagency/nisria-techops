@@ -3,6 +3,7 @@ import Shell from "../../components/Shell";
 import { Card, Badge } from "../../components/ui";
 import { admin, date } from "../../lib/supabase-admin";
 import { Money } from "../../components/Money";
+import PreviewLink from "../../components/PreviewLink";
 import ReportNarrative from "../../components/ReportNarrative";
 import ReportBuilder from "../../components/ReportBuilder";
 import InvoiceBuilder from "../../components/InvoiceBuilder";
@@ -297,9 +298,9 @@ export default async function Reports() {
                       <td style={{ textAlign: "right" }}><Money amount={inv.total} currency={inv.currency} /></td>
                       <td style={{ textAlign: "right" }}>
                         {inv.doc_id && (
-                          <a className="pill" href={`/api/studio/pdf?id=${inv.doc_id}`} target="_blank" rel="noopener" style={{ fontSize: 11 }}>
+                          <PreviewLink href={`/api/studio/pdf?id=${inv.doc_id}`} kind="pdf" title="Invoice" className="pill" style={{ fontSize: 11 }}>
                             <ReceiptText size={11} /> PDF
-                          </a>
+                          </PreviewLink>
                         )}
                       </td>
                     </tr>

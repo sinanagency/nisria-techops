@@ -1,6 +1,7 @@
 import Shell from "../../../components/Shell";
 import { Badge, statusTone } from "../../../components/ui";
 import { TabTitle } from "../../../components/tabs-context";
+import PreviewLink from "../../../components/PreviewLink";
 import { admin, money, date } from "../../../lib/supabase-admin";
 import { toggleConsent, setStatus } from "../actions";
 import { Lock, MapPin, Calendar, Users, Tag, Globe, ShieldOff, ImageIcon, HeartHandshake, FileText } from "lucide-react";
@@ -83,9 +84,9 @@ export default async function Beneficiary360({ params }: { params: { id: string 
           <div className="card card-pad">
             <div className="flex" style={{ marginBottom: 14, gap: 14 }}>
               {photoUrl ? (
-                <a href={photoUrl} target="_blank" rel="noreferrer" title="View full photo" style={{ flexShrink: 0, display: "block" }}>
-                  <img src={photoUrl} alt={display} style={{ width: 84, height: 84, borderRadius: 16, objectFit: "cover", boxShadow: "var(--shadow-sm)", border: "1px solid var(--line)" }} />
-                </a>
+                <PreviewLink href={photoUrl} kind="image" title={display} style={{ flexShrink: 0, display: "block" }}>
+                  <img src={photoUrl} alt={display} style={{ width: 84, height: 84, borderRadius: 16, objectFit: "cover", boxShadow: "var(--shadow-sm)", border: "1px solid var(--line)", cursor: "pointer" }} />
+                </PreviewLink>
               ) : (
                 <div className="avatar" style={{ width: 84, height: 84, fontSize: 30, flexShrink: 0 }}>{display.charAt(0).toUpperCase()}</div>
               )}

@@ -4,6 +4,7 @@ import { useRef } from "react";
 import { useTabs } from "./tabs-context";
 import { Badge } from "./ui";
 import { FileText, Printer, Maximize2, Download } from "lucide-react";
+import PreviewLink from "./PreviewLink";
 
 // A saved Studio document in the recent list. Click to re-open the branded HTML
 // in the canonical Focus Tab (sandboxed iframe LIVE PREVIEW — never raw code,
@@ -42,7 +43,7 @@ export default function StudioDocCard({ doc }: { doc: { id: string; title: strin
       render: () => <DocBody html={doc.html} title={doc.title} iframeRef={iframeRef} />,
       footer: (
         <>
-          <a className="btn teal sm" href={`/api/studio/pdf?id=${doc.id}`} target="_blank" rel="noopener"><Download size={13} /> Download PDF</a>
+          <PreviewLink href={`/api/studio/pdf?id=${doc.id}`} kind="pdf" title="Document" className="btn teal sm"><Download size={13} /> View PDF</PreviewLink>
           <button type="button" className="btn ghost sm" onClick={printIt}><Printer size={13} /> Print</button>
           <button type="button" className="btn ghost sm" onClick={() => closeSheet(id)}>Close</button>
         </>
