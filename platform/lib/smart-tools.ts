@@ -22,6 +22,7 @@
 // All generated text passes through humanize() before it is stored or shown.
 
 import { admin, money } from "./supabase-admin";
+import { sendText, phoneKey } from "./whatsapp";
 import { emit } from "./events";
 import { now } from "./now";
 import { humanize, withHumanSystem } from "./humanize";
@@ -98,6 +99,8 @@ export const SMART_TOOLS = [
   { name: "delete_task", description: "Remove a task created in error. Use for 'delete that task', 'remove the task about X'. Match by a fragment of the title, or the most recent if she does not say. If several match, ask which.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the task title to match" } } } },
   { name: "remember_fact", description: "Save a durable fact about Nisria to your long-term memory (the Brain) so you recall it in every future conversation. Use ONLY when Nur tells you to remember, note, or record a fact about the org, people, accounts, policy, or how things work ('remember our EIN is 92-2509133', 'note that Linda is no longer a vendor', 'the team meets on Mondays'). Also use to CORRECT a fact you have wrong: pass the same short topic and the new fact replaces the old one in place. Do NOT use this for one-off tasks, payments, or anything she did not ask you to remember.", input_schema: { type: "object", properties: { fact: { type: "string", description: "the fact to remember, in one clear sentence" }, topic: { type: "string", description: "a short label like 'EIN', 'Linda', 'meeting schedule', so a later correction updates this same fact instead of duplicating" } }, required: ["fact"] } },
   { name: "post_to_group", description: "Post a message into a team WhatsApp GROUP via the group bot. SAFE: queues the send (the group bot delivers it). Use when Nur asks to tell a group something, or to follow up with a person in their group. Provide the group name and the exact text to post. The text may @mention a person.", input_schema: { type: "object", properties: { group: { type: "string", description: "the group name, e.g. 'Maisha Operations'" }, text: { type: "string", description: "the message to post" } }, required: ["group", "text"] } },
+
+  { name: "message_person", description: "Send a WhatsApp message to ONE specific person (Nur, a team member, or a known contact) directly from this line. Use ONLY when the operator EXPLICITLY tells you to message / tell / send / let someone know something, e.g. 'tell Nur the meeting moved to 3', 'message Mark to bring the receipts', 'let Grace know the funds are in'. The exact words to send come from the operator's instruction, never invented. Resolve the recipient by name (or a number if given). If you cannot find a number, ASK for it. If more than one person matches the name, ASK which one. WhatsApp can only reach someone who has messaged this line in the last 24 hours; if it cannot be delivered, say so plainly. Do NOT use this for posting into a group (that is post_to_group) or for email (that is draft_email).", input_schema: { type: "object", properties: { to: { type: "string", description: "the person's name (e.g. 'Nur') or a phone number" }, text: { type: "string", description: "the exact message to send, in the operator's intended words" } }, required: ["to", "text"] } },
 
   // ---- ACTION · GATED SENDS (queue into approvals, NEVER auto-send) ----
   { name: "draft_thank_you", description: "Draft a donor thank-you and QUEUE it into Needs-You for Nur's approval. GATED: never auto-sent. Pass donor_name OR use latest_gift first.", input_schema: { type: "object", properties: { donor_name: { type: "string", description: "donor name, or omit to thank the latest gift" } } } },
@@ -312,6 +315,57 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: job } = await db.from("jobs").insert({ kind: "group.send", payload: { group, text }, status: "queued" }).select("id").single();
     await emit({ type: "group.send_queued", source: "agent:sasa", actor: "Nur", subject_type: "job", subject_id: job?.id || null, payload: { group, text: text.slice(0, 200) } });
     return { ok: true, summary: humanize(`Queued for the ${group} group. The group bot will post it.`, opts), affordance: { kind: "open", label: "View groups", href: "/groups" }, detail: { job_id: job?.id, group } };
+  }
+
+  // ---- ACTION · DIRECT SEND: message_person ----
+  // An explicit operator command ("tell Nur ...") is human-authorized, so it
+  // sends straight away (like the daily reminder cron, not the approvals lane).
+  // We still honor lib-law: resolve carefully, log an event, and guard against a
+  // double-send of the identical text to the same person inside a 2-min window.
+  if (name === "message_person") {
+    const toRaw = String(input.to || "").trim();
+    const text = String(input.text || "").trim();
+    if (!toRaw || !text) return { ok: false, summary: humanize("Tell me who to message and what to say.", opts), error: "missing to/text" };
+
+    // Resolve a wa_id. A number given outright wins; otherwise match a name
+    // across the team and the contacts book (people we actually correspond with).
+    let number: string | null = null;
+    let toName = toRaw;
+    if (phoneKey(toRaw).length >= 9) {
+      number = phoneKey(toRaw);
+    } else {
+      const like = `%${toRaw.replace(/[,()*%]/g, "")}%`;
+      const [t, c] = await Promise.all([
+        db.from("team_members").select("name,phone,status").ilike("name", like).not("phone", "is", null).limit(6),
+        db.from("contacts").select("name,phone").ilike("name", like).not("phone", "is", null).limit(6),
+      ]);
+      const matches = [
+        ...((t.data || []) as any[]).filter((m) => m.status === "active" || !m.status).map((m) => ({ name: m.name, phone: m.phone })),
+        ...((c.data || []) as any[]).map((m) => ({ name: m.name, phone: m.phone })),
+      ].filter((m) => phoneKey(m.phone).length >= 9);
+      // de-dup people who appear in both the team and the contacts book
+      const seen = new Set<string>();
+      const uniq = matches.filter((m) => { const k = phoneKey(m.phone); if (seen.has(k)) return false; seen.add(k); return true; });
+      if (uniq.length === 0) return { ok: false, summary: humanize(`I do not have a WhatsApp number for ${toRaw}. What is the number?`, opts), detail: { unresolved: true } };
+      if (uniq.length > 1) return { ok: false, summary: humanize(`I found more than one match: ${uniq.slice(0, 4).map((m) => m.name).join(", ")}. Which one?`, opts), detail: { ambiguous: true } };
+      number = phoneKey(uniq[0].phone);
+      toName = uniq[0].name;
+    }
+
+    // Idempotency: if the exact same text already went to this person in the last
+    // 2 minutes, do not fire a second time (agent-loop retry / double tap guard).
+    const since = new Date(Date.now() - 120000).toISOString();
+    const { data: recent } = await db.from("events").select("id,payload").eq("type", "whatsapp.message_out").gte("created_at", since).limit(20);
+    const dupe = (recent || []).some((e: any) => e?.payload?.to_last4 === number!.slice(-4) && e?.payload?.text === text.slice(0, 300));
+    if (dupe) return { ok: true, summary: humanize(`Already sent that to ${toName}.`, opts), detail: { deduped: true } };
+
+    const res: any = await sendText(number, text);
+    if (!res?.id) {
+      const why = /re-?engag|24|window|outside/i.test(String(res?.error || "")) ? `${toName} has not messaged us in the last 24 hours, so WhatsApp will not let me reach them directly right now.` : `I could not deliver that to ${toName}.${res?.error ? ` (${res.error})` : ""}`;
+      return { ok: false, summary: humanize(why, opts), error: res?.error || "send failed", detail: { delivered: false } };
+    }
+    await emit({ type: "whatsapp.message_out", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: text.slice(0, 300), via: "message_person", wamid: res.id } });
+    return { ok: true, summary: humanize(`Sent to ${toName}.`, opts), detail: { delivered: true, to: toName } };
   }
 
   // ---- SAFE: add_team_member ----

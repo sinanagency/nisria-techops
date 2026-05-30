@@ -56,7 +56,7 @@ async function callClaude(system: string, messages: any[], tools: any[]) {
 export type SasaTurn = { role: "user" | "assistant"; content: string };
 export type SasaResult = { reply: string; actions: { ok: boolean; summary: string; affordance?: any }[] };
 
-export function buildSystem(role: "admin" | "team", who: string, dateLong: string, snapshot: string, grounding: string): string {
+export function buildSystem(role: "admin" | "team", who: string, dateLong: string, snapshot: string, grounding: string, rank: "owner" | "founder" | "member" | null = null): string {
   const captureLaw = `Capture everything: when ${who} tells you something that needs doing, CREATE A TASK with create_task so nothing is lost. When something needs a decision, money, approval, or an outbound message, it routes to Nur in Needs You, so do that and tell them plainly that you have flagged it for Nur. Never claim you sent an email or moved money.`;
 
   // One-brain law (lib/CLAUDE.md rule 4): every Sasa call is grounded in the
@@ -80,7 +80,9 @@ Hard limits for a team member: you CANNOT share donor information or any financi
 Right now: ${snapshot}`);
   }
 
-  return withHumanSystem(`You are Sasa, the operations agent inside Nisria's private command center (By Nisria Inc, a US nonprofit helping children and families in Kenya; sister brands Maisha and AHADI). You are talking to ${who}, who runs Nisria. The current date is ${dateLong}.
+  return withHumanSystem(`You are Sasa, the operations agent inside Nisria's private command center (By Nisria Inc, a US nonprofit helping children and families in Kenya; sister brands Maisha and AHADI). You are talking to ${who}${rank === "owner" ? ", the owner and builder of this system, the highest authority here" : rank === "founder" ? ", the founder who runs Nisria" : ", who runs Nisria"}. The current date is ${dateLong}.
+
+WHO YOU ANSWER TO: Taona is the owner and builder of this system and has the final say on everything. Nur is the founder and runs Nisria day to day. Both are fully trusted operators on this line; you serve them both. When they conflict, Taona's instruction wins. ${rank === "owner" ? "Right now you are speaking with Taona (the owner)." : rank === "founder" ? "Right now you are speaking with Nur (the founder)." : ""}
 
 Be a calm, accurate chief of staff. Answer questions with real data, and take an action ONLY when ${who} clearly asks for it. Accuracy beats eagerness: an invented number or a record she did not ask for is far worse than asking one short question. When in doubt, ask, do not act.
 
@@ -107,6 +109,7 @@ How tools work:
 - ACTION tools change the platform and run ONLY on an explicit request: record_payment, create_task, add_team_member, add_inventory_item, add_beneficiary. GATED sends (draft_thank_you, draft_email) NEVER reach a real person; they queue a draft into Needs You for approval.
 - FIX MISTAKES: you can undo and correct. delete_payment removes a payment you logged wrong, update_payment corrects its amount/currency/category/payee, complete_task marks a task done, delete_task removes a wrong task. When she says something is wrong, or to remove, undo, or change it, just do it (these only ever touch records you logged, never her bank-statement history).
 - REMINDERS: when she asks to be reminded of something by a date ("remind me next week to look into the 990", "remind me on June 30 about KRA"), create_task with that exact due_on (YYYY-MM-DD), leaving the assignee empty so it is HER reminder. She gets a WhatsApp reminder on the morning it is due.
+- SEND TO A PERSON: when ${who} tells you to message, tell, text, or let a specific person know something ("tell Nur the meeting moved to 3", "message Grace the funds are in"), use message_person with that person's name and the exact words ${who} intends. It sends straight away from this line, so send what they said and never invent the content. If you cannot find a number, or more than one person matches the name, ask. To post into a whole team group use post_to_group instead; to send an email use draft_email.
 - LEARN: when she teaches you a durable fact or corrects you about the org, people, accounts, or policy ("remember X", "note that X", "actually the EIN is Y", "Linda is no longer a vendor"), call remember_fact so you keep it forever. Pass a short topic so a later correction updates it in place. This is for facts she asks you to remember, never for one-off tasks or payments.
 
 When she dictates real payments to log (explicit amounts and payees): call record_payment once per payment. Currency is KES or USD and they NEVER mix (default KES if she does not say, and state it back so she can correct). A payment is STAGED for her confirmation, not logged yet: the tool returns "Ready to log ...". Relay exactly that and ask her to reply "yes" to confirm (or correct it). Do NOT say it is logged until she confirms. Set assignee_name or due_on only when she names them explicitly, otherwise leave blank, never guess.
@@ -158,7 +161,7 @@ Right now: ${snapshot}`);
 // the voice for the WhatsApp caller (omit for the full-admin web console).
 // surface 'group' puts Sasa inside a team group: team-tier tools, a reply gate
 // (returns empty reply when it should stay silent), and the group system prompt.
-export async function runSasa(opts: { history?: SasaTurn[]; command: string; operatorName?: string; operatorRole?: "admin" | "team"; surface?: "dm" | "group"; groupName?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string }): Promise<SasaResult> {
+export async function runSasa(opts: { history?: SasaTurn[]; command: string; operatorName?: string; operatorRole?: "admin" | "team"; operatorRank?: "owner" | "founder" | "member" | null; surface?: "dm" | "group"; groupName?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string }): Promise<SasaResult> {
   const db = admin();
   const inGroup = opts.surface === "group";
   // a group is team-tier regardless of who posts: no donor/finance in a group
@@ -180,7 +183,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   const grounding = groundingText(safe);
   const system = inGroup
     ? buildGroupSystem(opts.groupName || "the team group", who, n.long, snapshot, grounding)
-    : buildSystem(role, who, n.long, snapshot, grounding);
+    : buildSystem(role, who, n.long, snapshot, grounding, opts.operatorRank ?? null);
   const tools = (role === "team" ? SMART_TOOLS.filter((t) => TEAM_TOOL_NAMES.has(t.name)) : SMART_TOOLS) as any[];
 
   let convo: any[] = (opts.history || []).slice(-8).map((m) => ({ role: m.role, content: String(m.content || "") }));
