@@ -171,7 +171,7 @@ async function runRead(db: any, name: string, input: any): Promise<any> {
 // from Smart Mode (events attribute to her). Safe populates run; gated sends
 // queue into approvals.
 // ===========================================================================
-async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?: string } = {}): Promise<ToolResult> {
+async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?: string; proofPath?: string } = {}): Promise<ToolResult> {
   const n = await now();
   const opts = { now: { long: n.long, today: n.today } };
 
@@ -297,6 +297,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: row } = await db.from("payments").insert({
       direction: "out", payee, purpose, amount, currency, method, status: "paid", paid_at,
       category, recurrence: "none", ref: `AI-WA-${Date.now()}`, created_by: "Nur",
+      screenshot_path: ctx.proofPath || null, // the receipt this payment was read from = its proof
     }).select("id").single();
     await emit({ type: "payment.verified", source: "agent:sasa", actor: "Nur", subject_type: "payment", subject_id: row?.id ?? null, payload: { payee, amount, currency, method, category, paid_at, intake: "whatsapp", ai: true } });
     return { ok: true, summary: humanize(`Logged ${currency} ${amount.toLocaleString()} to ${payee}${purpose ? ` for ${purpose}` : ""}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { id: row?.id, currency, amount, category } };
@@ -424,7 +425,7 @@ async function queueThankYouGated(db: any, gift: any, donor: any, n: { long: str
 
 // THE TOOL RUNNER the route calls. Reads run directly; actions go through the
 // gated/safe runner. Always returns a JSON-serializable object for the next turn.
-export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup?: string }): Promise<any> {
+export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup?: string; proofPath?: string }): Promise<any> {
   const db = admin();
   try {
     if (isReadTool(name)) return await runRead(db, name, input || {});

@@ -348,7 +348,9 @@ export default async function Finance() {
                           <span className="strong">{p.payee || "—"}</span>
                         )}
                         {p.screenshot_path ? (
-                          <Badge tone="green"><CheckCircle2 size={11} /> Paid · proof</Badge>
+                          <a href={`/api/asset?path=${encodeURIComponent(p.screenshot_path)}`} className="linkbtn" title="View the receipt">
+                            <Badge tone="green"><CheckCircle2 size={11} /> Paid · proof</Badge>
+                          </a>
                         ) : String(p.created_by || "").toLowerCase().startsWith("drive") ? (
                           <Badge tone="gray">Recorded · historical</Badge>
                         ) : (
