@@ -21,7 +21,7 @@ export async function addItem(fd: FormData) {
     category,
     quantity,
     unit_price,
-    status: "draft",
+    status: "in_stock",
     folklore_listed: false,
   });
 
@@ -87,8 +87,11 @@ Price: ${item.unit_price ? `$${item.unit_price}` : "—"}${story ? `\nMaker stor
     .single();
 
   // Mark the item as listed. (folklore_url is left for the human to paste once
-  // the listing is live on The Folklore.)
-  await db.from("inventory").update({ folklore_listed: true, status: "active" }).eq("id", id);
+  // the listing is live on The Folklore.) Stock status is left untouched —
+  // listing a piece does not change whether it is in_stock; folklore_listed
+  // is the listing flag. Writing status:'active' previously violated the
+  // inventory_status_check constraint (in_stock|low|out|archived) and threw.
+  await db.from("inventory").update({ folklore_listed: true }).eq("id", id);
 
   await emit({
     type: "inventory.listing_generated",

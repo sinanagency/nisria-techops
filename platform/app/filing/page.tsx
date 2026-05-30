@@ -30,7 +30,7 @@ export default async function Filing({ searchParams }: { searchParams?: { [k: st
 
   const db = admin();
   // never pull extracted_text into a list (it can be 200k chars/row) — only metadata
-  const COLS = "id,title,folder,subfolder,doc_type,brand,mime,size_bytes,drive_url,doc_date,modified_at,summary";
+  const COLS = "id,title,folder,subfolder,doc_type,brand,mime,size_bytes,drive_url,drive_file_id,doc_date,modified_at,summary";
   const { data } = await db.from("documents").select(COLS).order("modified_at", { ascending: false }).limit(2000);
   const docs = (data || []) as any[];
 
