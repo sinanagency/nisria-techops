@@ -82,6 +82,26 @@ const CASES: Case[] = [
       { label: "does not disclaim memory ('start fresh', 'no memory', 'cannot recall')", pass: !/no memory|start fresh|don'?t have (a )?memory|cannot recall|can'?t recall|no access to (past|previous)|each conversation (i see )?starts/i.test(o.text) },
     ],
   },
+  {
+    name: "CONTROL: 'delete that' undoes the logged payment",
+    history: [
+      { role: "user", content: "log KES 10,000 salary to Dorcas" },
+      { role: "assistant", content: "Ready to log KES 10,000 to Dorcas for salary. Reply yes to confirm." },
+      { role: "user", content: "yes" },
+      { role: "assistant", content: "Done. Logged KES 10,000 to Dorcas." },
+    ],
+    command: "Actually that was wrong, delete that payment.",
+    assert: (o) => [{ label: "calls delete_payment", pass: hasTool(o, "delete_payment") }],
+  },
+  {
+    name: "CONTROL: a correction updates the payment, not a new one",
+    history: [
+      { role: "user", content: "log KES 10,000 salary to Dorcas" },
+      { role: "assistant", content: "Done. Logged KES 10,000 to Dorcas for salary." },
+    ],
+    command: "That should have been KES 12,000, not 10,000.",
+    assert: (o) => [{ label: "calls update_payment, not record_payment", pass: hasTool(o, "update_payment") && !hasTool(o, "record_payment") }],
+  },
 ];
 
 export async function GET(req: NextRequest) {
@@ -132,6 +152,25 @@ export async function GET(req: NextRequest) {
     await db.from("pending_actions").delete().ilike("summary", `%${PAYEE}%`);
     await db.from("payments").delete().eq("payee", PAYEE);
     return NextResponse.json({ test: "source-links", pass: stagedHasSource && committedHasSource, stagedHasSource, committedHasSource });
+  }
+
+  // ?undo=1 -> live test of #6 control: a bot-logged payment can be created then
+  // undone by delete_payment (and the verified history is untouchable).
+  if (req.nextUrl.searchParams.get("undo") === "1") {
+    const db = admin();
+    const PAYEE = "ZZUndoTest";
+    await db.from("payments").delete().eq("payee", PAYEE);
+    await commitPaymentRow(db, { payee: PAYEE, amount: 999, currency: "KES", category: "other", purpose: "undo test", paid_at: new Date().toISOString() });
+    const { data: before } = await db.from("payments").select("id").eq("payee", PAYEE);
+    const del: any = await runSmartTool("delete_payment", { payee: PAYEE });
+    const { data: after } = await db.from("payments").select("id").eq("payee", PAYEE);
+    await db.from("payments").delete().eq("payee", PAYEE);
+    return NextResponse.json({
+      test: "control-undo",
+      pass: (before || []).length === 1 && (after || []).length === 0 && del?.ok === true,
+      createdThenDeleted: `${(before || []).length} -> ${(after || []).length}`,
+      reply: del?.summary,
+    });
   }
 
   // ?memory=1&q=... -> live test of #11 durable memory: search_history returns real

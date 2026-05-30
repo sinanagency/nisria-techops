@@ -88,6 +88,9 @@ export const SMART_TOOLS = [
   { name: "prepare_grants", description: "Trigger the Grant agent to prepare all un-prepared applications in the background. SAFE: enqueues jobs, nothing is submitted. Use for 'prepare the grants'.", input_schema: { type: "object", properties: {} } },
   { name: "record_payment", description: "Log a payment Nur has ALREADY MADE into the finance ledger as paid. SAFE: records internal finance state (it does NOT move money, she already paid it). Call ONCE PER payment when she reports payments she made, whether typed or read from a screenshot/receipt/PDF. currency is KES or USD only, NEVER mix them, default KES if she does not say (and state the currency back so she can correct). category one of: payroll, rent, utilities, stipend, upkeep, petty cash, health, legal, payout, other. If a payee or amount is unclear, ASK rather than guess.", input_schema: { type: "object", properties: { payee: { type: "string" }, amount: { type: "number" }, currency: { type: "string", enum: ["KES", "USD"] }, category: { type: "string" }, purpose: { type: "string", description: "what it was for" }, method: { type: "string", description: "mpesa, bank, cash, etc" }, date: { type: "string", description: "YYYY-MM-DD, defaults to today" } }, required: ["payee", "amount"] } },
   { name: "complete_task", description: "Mark a task DONE. SAFE: internal state. Use when someone reports they finished something (e.g. 'done with the stall map'). Resolve the task by who reported it and/or a fragment of the title. If more than one open task matches, ask which one rather than guessing.", input_schema: { type: "object", properties: { assignee_name: { type: "string", description: "who did it, defaults to the person speaking" }, title: { type: "string", description: "a fragment of the task title to match" } } } },
+  { name: "delete_payment", description: "Undo a payment YOU logged that was wrong. Removes it from the ledger and records what was removed (recoverable). Use when Nur says a logged payment is wrong ('delete that', 'remove the Linda payment', 'undo that payment'). If she does not say which, target the most recent one you logged. If several match, list them and ask which. Only affects payments logged from chat, never her bank-statement history.", input_schema: { type: "object", properties: { payee: { type: "string", description: "payee to match, optional" }, amount: { type: "number", description: "amount to match, optional" } } } },
+  { name: "update_payment", description: "Correct a payment YOU logged with a wrong amount, currency, category, payee, or purpose. Use for 'change that to KES 12,000', 'that was rent not salary', 'the payee was Mark'. Target the most recent logged payment unless she names which (match_payee / match_amount). Provide only the fields to change.", input_schema: { type: "object", properties: { match_payee: { type: "string" }, match_amount: { type: "number" }, new_amount: { type: "number" }, new_currency: { type: "string", enum: ["KES", "USD"] }, new_category: { type: "string" }, new_payee: { type: "string" }, new_purpose: { type: "string" } } } },
+  { name: "delete_task", description: "Remove a task created in error. Use for 'delete that task', 'remove the task about X'. Match by a fragment of the title, or the most recent if she does not say. If several match, ask which.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the task title to match" } } } },
   { name: "post_to_group", description: "Post a message into a team WhatsApp GROUP via the group bot. SAFE: queues the send (the group bot delivers it). Use when Nur asks to tell a group something, or to follow up with a person in their group. Provide the group name and the exact text to post. The text may @mention a person.", input_schema: { type: "object", properties: { group: { type: "string", description: "the group name, e.g. 'Maisha Operations'" }, text: { type: "string", description: "the message to post" } }, required: ["group", "text"] } },
 
   // ---- ACTION · GATED SENDS (queue into approvals, NEVER auto-send) ----
@@ -409,6 +412,57 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const where = hasRealRecipient ? `to ${recipientName}` : `(no verified email yet, so review the recipient too)`;
     const msg = created ? `Drafted an email ${where} and queued it in Needs You. I never send anything until you approve it.` : `That email is already drafted and waiting in Needs You.`;
     return { ok: true, summary: humanize(msg, opts), affordance: { kind: "queued", label: "Review in Needs You", href: "/" }, detail: { gated: true, sent: false, created } };
+  }
+
+  // ---- CONTROL: undo + correct (#6). Only ever touch bot-logged payments
+  // (ref AI-WA-...), never the verified drive-sheet history or Givebutter payouts. ----
+  if (name === "delete_payment") {
+    const { data } = await db.from("payments").select("id,payee,amount,currency,paid_at,category,purpose").eq("direction", "out").ilike("ref", "AI-WA-%").order("created_at", { ascending: false }).limit(12);
+    let cands = (data || []) as any[];
+    if (input.payee) cands = cands.filter((p) => String(p.payee || "").toLowerCase().includes(String(input.payee).toLowerCase()));
+    if (input.amount) { const a = Number(String(input.amount).replace(/[^0-9.]/g, "")); cands = cands.filter((p) => Number(p.amount) === a); }
+    if (!input.payee && !input.amount) cands = cands.slice(0, 1);
+    if (!cands.length) return { ok: false, summary: humanize("I could not find a payment I logged that matches, so there is nothing to remove.", opts) };
+    if (cands.length > 1) return { ok: false, summary: humanize(`Which one should I remove: ${cands.slice(0, 5).map((p) => `${p.currency} ${Number(p.amount).toLocaleString()} to ${p.payee}`).join("; ")}?`, opts), detail: { ambiguous: true } };
+    const p = cands[0];
+    await db.from("payments").delete().eq("id", p.id);
+    await emit({ type: "payment.deleted", source: "agent:sasa", actor: "Nur", subject_type: "payment", subject_id: p.id, payload: p });
+    return { ok: true, summary: humanize(`Removed ${p.currency} ${Number(p.amount).toLocaleString()} to ${p.payee}${p.purpose ? ` for ${p.purpose}` : ""}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { deleted_id: p.id } };
+  }
+  if (name === "update_payment") {
+    const { data } = await db.from("payments").select("id,payee,amount,currency,category,purpose").eq("direction", "out").ilike("ref", "AI-WA-%").order("created_at", { ascending: false }).limit(12);
+    let cands = (data || []) as any[];
+    if (input.match_payee) cands = cands.filter((p) => String(p.payee || "").toLowerCase().includes(String(input.match_payee).toLowerCase()));
+    if (input.match_amount) { const a = Number(String(input.match_amount).replace(/[^0-9.]/g, "")); cands = cands.filter((p) => Number(p.amount) === a); }
+    if (!input.match_payee && !input.match_amount) cands = cands.slice(0, 1);
+    if (!cands.length) return { ok: false, summary: humanize("I could not find a payment I logged to correct.", opts) };
+    if (cands.length > 1) return { ok: false, summary: humanize(`Which payment: ${cands.slice(0, 5).map((p) => `${p.currency} ${Number(p.amount).toLocaleString()} to ${p.payee}`).join("; ")}?`, opts), detail: { ambiguous: true } };
+    const p = cands[0];
+    const patch: any = {};
+    if (input.new_amount != null && input.new_amount !== "") patch.amount = Number(String(input.new_amount).replace(/[^0-9.]/g, "")) || p.amount;
+    if (input.new_currency && ["KES", "USD"].includes(String(input.new_currency).toUpperCase())) patch.currency = String(input.new_currency).toUpperCase();
+    if (input.new_category) patch.category = String(input.new_category).toLowerCase();
+    if (input.new_payee) patch.payee = String(input.new_payee).trim();
+    if (input.new_purpose) patch.purpose = String(input.new_purpose).trim();
+    if (!Object.keys(patch).length) return { ok: false, summary: humanize("Tell me what to change (the amount, currency, category, payee, or purpose).", opts) };
+    await db.from("payments").update(patch).eq("id", p.id);
+    await emit({ type: "payment.updated", source: "agent:sasa", actor: "Nur", subject_type: "payment", subject_id: p.id, payload: { before: p, patch } });
+    const cur = patch.currency || p.currency; const amt = patch.amount ?? p.amount; const pay = patch.payee || p.payee;
+    return { ok: true, summary: humanize(`Updated: now ${cur} ${Number(amt).toLocaleString()} to ${pay}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { updated_id: p.id } };
+  }
+  if (name === "delete_task") {
+    let q = db.from("tasks").select("id,title,status").order("created_at", { ascending: false }).limit(12);
+    const frag = String(input.title || "").trim().slice(0, 40);
+    if (frag) q = q.ilike("title", `%${frag}%`);
+    const { data } = await q;
+    let cands = (data || []) as any[];
+    if (!frag) cands = cands.slice(0, 1);
+    if (!cands.length) return { ok: false, summary: humanize("I could not find that task to remove.", opts) };
+    if (cands.length > 1) return { ok: false, summary: humanize(`Which task: ${cands.slice(0, 5).map((t) => `"${t.title}"`).join(", ")}?`, opts), detail: { ambiguous: true } };
+    const t = cands[0];
+    await db.from("tasks").delete().eq("id", t.id);
+    await emit({ type: "task.deleted", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: t.id, payload: t });
+    return { ok: true, summary: humanize(`Removed the task "${t.title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { deleted_id: t.id } };
   }
 
   return { ok: false, summary: "I do not have a tool for that yet.", error: "unknown action" };
