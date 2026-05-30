@@ -36,8 +36,17 @@ export async function GET(req: NextRequest) {
   if (!bySession(req) && !bySecret(req)) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const { data } = await admin().from("bot_status").select("value,updated_at").eq("key", KEY).maybeSingle();
   const v: any = data?.value || {};
-  // stale if the bot stopped pushing for >90s (QR no longer valid / bot down)
   const ageMs = data?.updated_at ? Date.now() - new Date(data.updated_at).getTime() : Infinity;
-  const status = v.status || (v.connected ? "connected" : "waiting");
-  return NextResponse.json({ ok: true, connected: !!v.connected, status, qr: v.qr || null, stale: ageMs > 90_000, updated_at: data?.updated_at || null });
+
+  // LIVENESS (#10): the bot writes a poll heartbeat every ~4s while it is running
+  // (see /api/group/outbox). If that heartbeat is fresh, the bot is ALIVE, so report
+  // connected and hide the QR, even if a stale or ghost-replica write left the flag
+  // on "waiting". The QR only returns when the bot truly stops polling.
+  const { data: hb } = await admin().from("bot_status").select("updated_at").eq("key", "group_poll").maybeSingle();
+  const pollAgeMs = hb?.updated_at ? Date.now() - new Date(hb.updated_at).getTime() : Infinity;
+  const alive = pollAgeMs < 60_000;
+
+  const connected = alive || !!v.connected;
+  const status = connected ? "connected" : (v.status || "waiting");
+  return NextResponse.json({ ok: true, connected, status, qr: connected ? null : (v.qr || null), stale: !connected && ageMs > 90_000, alive, updated_at: data?.updated_at || null });
 }
