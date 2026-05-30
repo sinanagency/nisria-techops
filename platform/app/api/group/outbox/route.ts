@@ -27,6 +27,17 @@ function authed(req: NextRequest) {
 export async function GET(req: NextRequest) {
   if (!authed(req)) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const db = admin();
+  // HEARTBEAT (#10): the bot polls this every ~4s while it is alive, so a fresh poll
+  // is proof the bot is running. /api/group/link reads it to report "connected",
+  // which can't be clobbered by a stale or ghost-replica "waiting" QR flag. Throttled
+  // so we only touch the row a couple times a minute.
+  try {
+    const { data: hb } = await db.from("bot_status").select("updated_at").eq("key", "group_poll").maybeSingle();
+    const hbAge = hb?.updated_at ? Date.now() - new Date(hb.updated_at).getTime() : Infinity;
+    if (hbAge > 25_000) {
+      await db.from("bot_status").upsert({ key: "group_poll", value: { ts: new Date().toISOString() }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    }
+  } catch {}
   // self-heal: if the bot claimed sends ('sending') then died before acking, those
   // jobs would hang forever. Re-queue any 'sending' older than 5 minutes so the
   // next poll re-serves them. (Inbound dedupe at send time prevents real dupes.)
