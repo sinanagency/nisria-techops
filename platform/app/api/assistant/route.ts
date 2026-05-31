@@ -3,6 +3,7 @@
 // donor, finance, grants, tasks, inbox, campaigns — not just a summary snapshot.
 import { NextRequest, NextResponse } from "next/server";
 import { admin, money } from "../../../lib/supabase-admin";
+import { getCurrentUser } from "../../../lib/auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -106,10 +107,23 @@ async function callClaude(system: string, messages: any[]) {
 export async function POST(req: NextRequest) {
   try {
     const { messages, context } = await req.json();
-    const pageHint = context?.page && context.page !== "/" ? `\nNur is currently on the "${context.page}" screen.` : "";
-    const system = `You are Sasa, the operations AI inside Nur's private Nisria command center (By Nisria Inc — a US nonprofit helping children and families in Kenya; sister brands Maisha and AHADI; donations via Givebutter).
+    // WHO is logged in. Pure signed-cookie read (no DB, no network), so it is
+    // free. The voice dock used to assume Nur; now it greets and reasons as
+    // whoever is actually signed in. Authority wording mirrors sasa.ts adminSystem
+    // so both brains describe the hierarchy identically (builder Taona has final
+    // say, founder Nur is authoritative for operations).
+    const user = getCurrentUser();
+    const who = user?.name || "the operator";
+    const authorityLine =
+      user?.role === "builder"
+        ? `You are talking to ${who}, the OWNER and builder of this system (Taona). He has final say on everything, including overriding Nur.`
+        : user?.role === "founder"
+          ? `You are talking to ${who}, the FOUNDER (Nur). She runs Nisria; treat her word as authoritative for all operations.`
+          : `You are talking to ${who}.`;
+    const pageHint = context?.page && context.page !== "/" ? `\n${who} is currently on the "${context.page}" screen.` : "";
+    const system = `You are Sasa, the operations AI inside the private Nisria command center (By Nisria Inc, a US nonprofit helping children and families in Kenya; sister brands Maisha and AHADI; donations via Givebutter). ${authorityLine}
 
-You have READ access to the entire database through tools. ALWAYS use a tool to answer questions about donations, donors, money/finance, grants, tasks, the inbox, or campaigns — never say you don't have the data. For date-range donation questions use query_donations with from/to. Be concise, warm, concrete, and cite the real numbers you retrieve. Today is ${new Date().toISOString().slice(0, 10)}.${pageHint}`;
+You have READ access to the entire database through tools. ALWAYS use a tool to answer questions about donations, donors, money/finance, grants, tasks, the inbox, or campaigns; never say you don't have the data. For date-range donation questions use query_donations with from/to. Be concise, warm, concrete, and cite the real numbers you retrieve. Today is ${new Date().toISOString().slice(0, 10)}.${pageHint}`;
 
     let convo: any[] = (messages || []).slice(-10).map((m: any) => ({ role: m.role, content: m.content }));
     for (let i = 0; i < 5; i++) {
