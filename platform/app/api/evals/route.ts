@@ -303,7 +303,7 @@ export async function GET(req: NextRequest) {
     const checks: { label: string; pass: boolean }[] = [];
     const add: any = await runSmartTool("add_contact", { name: NAME, phone: "+254700000001" });
     checks.push({ label: "add_contact created the row", pass: add?.ok === true && !!add?.detail?.contact_id });
-    const upd: any = await runSmartTool("update_contact", { name: NAME, phone: "0700000002" });
+    const upd: any = await runSmartTool("update_contact", { name: NAME, phone: "+254700000002" });
     checks.push({ label: "update_contact returned ok", pass: upd?.ok === true });
     const { data: back } = await db.from("contacts").select("phone").ilike("name", NAME).limit(1);
     checks.push({ label: "phone persisted as the updated value", pass: (back || [])[0]?.phone === "254700000002" });
