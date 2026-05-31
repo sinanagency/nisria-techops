@@ -23,6 +23,29 @@ export default async function Library() {
   }
   const totalSize = list.reduce((s, a) => s + Number(a.size_bytes || 0), 0);
 
+  // GROUP BY SHELF: ingest tags each asset with where it matches (finance,
+  // programs, reports, ...). Show the Library organized by that shelf instead of
+  // one flat pile, so a filed doc sits with its kind. Untagged/older assets fall
+  // back to media (images) or general.
+  const CATS: { key: string; label: string }[] = [
+    { key: "finance", label: "Finance" },
+    { key: "programs", label: "Programs" },
+    { key: "events", label: "Events" },
+    { key: "reports", label: "Reports" },
+    { key: "branding", label: "Branding" },
+    { key: "people", label: "People" },
+    { key: "legal", label: "Legal" },
+    { key: "media", label: "Media" },
+    { key: "general", label: "General" },
+  ];
+  const catOf = (a: any): string => {
+    const tags: string[] = Array.isArray(a.tags) ? a.tags : [];
+    const hit = CATS.find((c) => tags.includes(c.key));
+    if (hit) return hit.key;
+    return a.type === "image" ? "media" : "general";
+  };
+  const grouped = CATS.map((c) => ({ ...c, items: list.filter((a) => catOf(a) === c.key) })).filter((g) => g.items.length);
+
   return (
     <Shell title="Library" sub="Drop content here. Sasa files it, learns it, and reaches for it when writing." action={<Badge tone="teal">{list.length} assets</Badge>}>
       <div className="grid" style={{ gridTemplateColumns: "1fr 320px", marginBottom: 16 }}>
@@ -58,32 +81,40 @@ export default async function Library() {
         </div>
       </div>
 
-      {/* grid */}
-      <div className="grid cols-4">
-        {list.length === 0 && <div className="card" style={{ gridColumn: "1/-1" }}><div className="empty">Nothing yet. Drop a logo, a photo, or a brand doc above.</div></div>}
-        {list.map((a) => {
-          const I = typeIcon[a.type] || FileIcon;
-          const url = signed[a.storage_path];
-          return (
-            <div key={a.id} className="card hover" style={{ overflow: "hidden" }}>
-              <div style={{ height: 130, background: "var(--canvas)", display: "grid", placeItems: "center", borderBottom: "1px solid var(--line)" }}>
-                {url ? <img src={url} alt={a.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <I size={30} color="var(--faint)" />}
-              </div>
-              <div style={{ padding: 12 }}>
-                <div className="between">
-                  <span style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.title}</span>
-                  {a.consent_required && <Badge tone="red">Private</Badge>}
+      {/* grouped by shelf */}
+      {list.length === 0 && <div className="card"><div className="empty">Nothing yet. Drop a logo, a photo, or a brand doc above.</div></div>}
+      {grouped.map((g) => (
+        <div key={g.key} style={{ marginBottom: 22 }}>
+          <div className="flex" style={{ gap: 8, marginBottom: 10, alignItems: "center" }}>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>{g.label}</span>
+            <Badge tone="gray">{g.items.length}</Badge>
+          </div>
+          <div className="grid cols-4">
+            {g.items.map((a) => {
+              const I = typeIcon[a.type] || FileIcon;
+              const url = signed[a.storage_path];
+              return (
+                <div key={a.id} className="card hover" style={{ overflow: "hidden" }}>
+                  <div style={{ height: 130, background: "var(--canvas)", display: "grid", placeItems: "center", borderBottom: "1px solid var(--line)" }}>
+                    {url ? <img src={url} alt={a.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <I size={30} color="var(--faint)" />}
+                  </div>
+                  <div style={{ padding: 12 }}>
+                    <div className="between">
+                      <span style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.title}</span>
+                      {a.consent_required && <Badge tone="red">Private</Badge>}
+                    </div>
+                    <div className="flex" style={{ marginTop: 6, gap: 6 }}>
+                      <Badge tone="gray">{a.type}</Badge>
+                      {a.brand && <span className={`chip ${a.brand}`}><span className="bdot" /> {a.brand}</span>}
+                    </div>
+                    {a.description && <div className="faint" style={{ fontSize: 11, marginTop: 6, lineHeight: 1.4, maxHeight: 32, overflow: "hidden" }}>{a.description.replace(/^BENEFICIARY:\s*/i, "")}</div>}
+                  </div>
                 </div>
-                <div className="flex" style={{ marginTop: 6, gap: 6 }}>
-                  <Badge tone="gray">{a.type}</Badge>
-                  {a.brand && <span className={`chip ${a.brand}`}><span className="bdot" /> {a.brand}</span>}
-                </div>
-                {a.description && <div className="faint" style={{ fontSize: 11, marginTop: 6, lineHeight: 1.4, maxHeight: 32, overflow: "hidden" }}>{a.description.replace(/^BENEFICIARY:\s*/i, "")}</div>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </Shell>
   );
 }

@@ -48,7 +48,23 @@ export type Route = {
   caption?: string;        // a library caption
   reason?: string;         // one short human line explaining the choice
   confidence?: number;     // 0..1
+  brand?: string;          // which org it belongs to: nisria | maisha | ahadi
+  category?: string;       // the matching shelf when filed (programs, events, media, branding, reports, legal, people, general)
 };
+
+// The Library shelves a document can match. Keeps "library" from being one flat
+// pile: a report lands under reports, a logo under branding, a field photo under
+// media, so a filed doc is findable WHERE IT BELONGS, not in an undifferentiated heap.
+const LIBRARY_CATEGORIES = ["programs", "events", "media", "branding", "reports", "legal", "people", "general"] as const;
+const BRANDS = ["nisria", "maisha", "ahadi"] as const;
+function normBrand(b?: string): string | null {
+  const v = String(b || "").toLowerCase().trim();
+  return (BRANDS as readonly string[]).includes(v) ? v : null;
+}
+function normCategory(c?: string): string | null {
+  const v = String(c || "").toLowerCase().trim();
+  return (LIBRARY_CATEGORIES as readonly string[]).includes(v) ? v : null;
+}
 
 const BRAIN_SECTION_HINTS =
   "overview (mission/about), programs (a program or project the org runs), events (a milestone), losses (a hard lesson), assets (property/partnerships/recurring funders), people (board/donors/partners), voice (tone/wording), legal (registration/EIN/status), financials (budget/money), impact (a project + its outcomes/numbers), leadership (board/staff/founder bio), narrative (mission/need/theory of change), other (anything else).";
@@ -57,18 +73,22 @@ const BRAIN_SECTION_HINTS =
 function routerSystem(dateLong: string): string {
   return withHumanSystem(`You are the intake router inside Nur's private Nisria command center (By Nisria Inc, a US nonprofit helping children and families in Kenya; sister brands Maisha and AHADI). The current date is ${dateLong}.
 
-You are given the content of ONE dropped item (a document, photo caption, voice note, or pasted text). Decide where it belongs in the platform and return STRICT JSON.
+You are given the content of ONE dropped item (a document, photo caption, voice note, or pasted text). FILE IT WHERE IT MATCHES in the platform: send it to the specific home it belongs to, and use the Library only when nothing more specific fits. Return STRICT JSON.
 
-Targets:
+Targets (prefer the most specific one that fits; do NOT default to library when a real home exists):
 - "brain": a durable FACT about the organization. Pick the best section. Sections: ${BRAIN_SECTION_HINTS}
-- "record": a structured row. record_kind is one of donor, beneficiary, team, inventory. Use ONLY when the item clearly describes one such entity (a donor and their gift; a child/family intake; a staff/volunteer; a handmade Maisha product).
-- "finance": the item looks like an invoice, receipt, or bill (amounts, vendor, due date). We flag it for Finance rather than guessing the ledger entry.
-- "library": a photo, logo, brochure, or file that is worth keeping but is not a discrete fact or record. Provide a short caption.
+- "record": a structured row. record_kind is one of donor, beneficiary, team, inventory. Use when the item clearly describes one such entity (a donor and their gift; a child/family intake; a staff/volunteer; a handmade Maisha product).
+- "finance": the item looks like an invoice, receipt, bill, statement, or budget (amounts, vendor, due date). Flagged for Finance rather than guessing the ledger entry.
+- "library": a photo, logo, brochure, report, or file worth keeping that is not a discrete fact or record. Provide a short caption AND a category (see below).
 - "skip": there is nothing useful to file.
 
-Return JSON exactly: { "target": "...", "section": "<brain section key if brain>", "record_kind": "<if record>", "title": "<short human title>", "content": "<the distilled fact or note, in plain words>", "caption": "<library caption if library>", "reason": "<one short human sentence on why>", "confidence": 0.0 }.
+Also identify, on EVERY item:
+- "brand": which org it belongs to, one of nisria, maisha, ahadi. Omit if genuinely unclear.
+- "category" (REQUIRED when target is library): the matching shelf, one of ${LIBRARY_CATEGORIES.join(", ")}. Pick the closest (a field photo -> media, a logo/brand kit -> branding, a program report -> reports or programs, a registration/policy -> legal, a staff/volunteer photo -> people).
 
-Rules: choose the single best target. Keep title short. content is the clean fact to store (no markdown). Never invent details not present. For a beneficiary (a child/family) prefer record so it lands PRIVATE.`);
+Return JSON exactly: { "target": "...", "section": "<brain section key if brain>", "record_kind": "<if record>", "brand": "<nisria|maisha|ahadi or omit>", "category": "<library shelf if library>", "title": "<short human title>", "content": "<the distilled fact or note, in plain words>", "caption": "<library caption if library>", "reason": "<one short human sentence on why>", "confidence": 0.0 }.
+
+Rules: choose the single best target, prefer the specific home over library. Keep title short. content is the clean fact to store (no markdown). Never invent details not present. For a beneficiary (a child/family) prefer record so it lands PRIVATE.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +354,7 @@ async function applyRoute(route: Route, it: any): Promise<void> {
   if (route.target === "finance") {
     // we do not guess a ledger entry. File the document in the Library AND record
     // a clear note + event so it surfaces as "looks like an invoice, review".
-    await fileLibrary(it, route.caption || route.title || it.filename || "Invoice or receipt", "finance");
+    await fileLibrary(it, route.caption || route.title || it.filename || "Invoice or receipt", "finance", route);
     await emit({ type: "ingest.finance_flagged", source: "ingest", actor: attribution, subject_type: "asset", subject_id: it.asset_id || null, payload: { filename: it.filename, note: route.title || route.reason } });
     return;
   }
@@ -345,7 +365,7 @@ async function applyRoute(route: Route, it: any): Promise<void> {
   }
 
   if (route.target === "library") {
-    await fileLibrary(it, route.caption || it.filename || "Imported file", "library");
+    await fileLibrary(it, route.caption || it.filename || "Imported file", "library", route);
     return;
   }
   // skip: nothing
@@ -353,24 +373,32 @@ async function applyRoute(route: Route, it: any): Promise<void> {
 
 // File an item as a Library asset (or annotate an already-uploaded asset) and
 // learn it as memory so agents can reach for it.
-async function fileLibrary(it: any, caption: string, lane: string): Promise<void> {
+async function fileLibrary(it: any, caption: string, lane: string, route?: Route): Promise<void> {
   const db = admin();
   const clean = humanize(caption || "Imported file", {});
+  // WHERE IT MATCHES: tag the asset with its shelf (the lane + the category the
+  // router picked) and its brand, so it is findable in the right place instead of
+  // a flat pile. finance items shelve under "finance"; everything else under the
+  // router's category, defaulting to "general".
+  const brand = normBrand(route?.brand);
+  const category = lane === "finance" ? "finance" : (normCategory(route?.category) || "general");
+  const tags = Array.from(new Set([lane, category].filter(Boolean)));
+  const extra: Record<string, any> = { tags, ...(brand ? { brand } : {}) };
   if (it.asset_id) {
-    await db.from("assets").update({ description: clean }).eq("id", it.asset_id);
+    await db.from("assets").update({ description: clean, ...extra }).eq("id", it.asset_id);
     await remember({ kind: "asset", title: it.filename || "asset", content: `${it.mime || "file"} asset. ${clean}`, source_type: "asset", source_id: it.asset_id });
-    await emit({ type: "asset.ingested", source: "ingest", actor: "Nur", subject_type: "asset", subject_id: it.asset_id, payload: { title: it.filename, via: "ingest", lane } });
+    await emit({ type: "asset.ingested", source: "ingest", actor: "Nur", subject_type: "asset", subject_id: it.asset_id, payload: { title: it.filename, via: "ingest", lane, category, brand } });
   } else if (it.storage_path) {
     const { data: asset } = await db
       .from("assets")
-      .insert({ type: it.mime?.startsWith("image/") ? "image" : "document", title: it.filename || "Imported file", description: clean, storage_path: it.storage_path, mime: it.mime, source: "ingest", created_by: "Nur" })
+      .insert({ type: it.mime?.startsWith("image/") ? "image" : "document", title: it.filename || "Imported file", description: clean, storage_path: it.storage_path, mime: it.mime, source: "ingest", created_by: "Nur", ...extra })
       .select("id")
       .single();
     if (asset?.id) {
       await db.from("ingest_items").update({ asset_id: asset.id }).eq("id", it.id);
       await remember({ kind: "asset", title: it.filename || "asset", content: `${it.mime || "file"} asset. ${clean}`, source_type: "asset", source_id: asset.id });
     }
-    await emit({ type: "asset.ingested", source: "ingest", actor: "Nur", subject_type: "asset", subject_id: asset?.id || null, payload: { title: it.filename, via: "ingest", lane } });
+    await emit({ type: "asset.ingested", source: "ingest", actor: "Nur", subject_type: "asset", subject_id: asset?.id || null, payload: { title: it.filename, via: "ingest", lane, category, brand } });
   }
 }
 
