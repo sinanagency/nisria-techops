@@ -65,6 +65,17 @@ async function findMember(db: any, nameHint?: string | null): Promise<any | null
   return rows.find((r) => r.status === "active") || rows[0] || null;
 }
 
+// Resolve a team member by their phone (digits only). This is the EXACT identity
+// path: in a group the sender's phone is known, so "who is speaking" never has to
+// be guessed from a display name. The phone<->member bridge is learned in
+// /api/group/ingest, so this fills in for more members over time.
+async function findMemberByPhone(db: any, phone?: string | null): Promise<any | null> {
+  const p = String(phone || "").replace(/[^\d]/g, "");
+  if (!p) return null;
+  const { data } = await db.from("team_members").select("id,name,role,email,status").eq("phone", p).limit(1);
+  return (data && data[0]) || null;
+}
+
 // ===========================================================================
 // TOOL SCHEMAS — the contract Claude sees. READ tools first, then ACTION tools.
 // ===========================================================================
@@ -263,7 +274,7 @@ export async function commitPaymentRow(db: any, args: any): Promise<{ id: string
   return { id: row?.id ?? null };
 }
 
-async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string } = {}): Promise<ToolResult> {
+async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?: string; senderPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string } = {}): Promise<ToolResult> {
   const n = await now();
   const opts = { now: { long: n.long, today: n.today } };
 
@@ -290,7 +301,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
 
   // ---- SAFE: complete_task ----
   if (name === "complete_task") {
-    const member = await findMember(db, input.assignee_name);
+    // "who did it" defaults to the person speaking. In a group we know their phone,
+    // so resolve them EXACTLY by phone before falling back to a name guess. This is
+    // what makes a bare "done" tick the right person's task.
+    const member = (await findMember(db, input.assignee_name)) || (input.assignee_name ? null : await findMemberByPhone(db, ctx.senderPhone));
     let q = db.from("tasks").select("id,title,assignee_id,source_group").neq("status", "done");
     if (member?.id) q = q.eq("assignee_id", member.id);
     const frag = String(input.title || "").trim().slice(0, 40);
@@ -642,7 +656,7 @@ async function queueThankYouGated(db: any, gift: any, donor: any, n: { long: str
 
 // THE TOOL RUNNER the route calls. Reads run directly; actions go through the
 // gated/safe runner. Always returns a JSON-serializable object for the next turn.
-export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string }): Promise<any> {
+export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup?: string; senderPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string }): Promise<any> {
   const db = admin();
   try {
     if (isReadTool(name)) return await runRead(db, name, input || {});

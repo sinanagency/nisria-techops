@@ -12,6 +12,7 @@ import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
 import { runSasa } from "../../../../lib/agents/sasa";
 import { operatorOf } from "../../../../lib/whatsapp";
+import { transcribeAudio } from "../../../../lib/transcribe";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -56,6 +57,25 @@ async function resolveContact(db: any, phone: string, name: string | null) {
   return ins?.id || null;
 }
 
+// IDENTITY, self-healing. A group sender is a phone; a task assignee is a
+// team_member. They must be ONE person. If this phone is not yet on any member
+// but the sender's name clearly matches exactly one active member who has no
+// phone on file, learn it. Conservative on purpose: only a single unambiguous,
+// phone-less name match is filled, so we never glue the wrong number to a person.
+// Over time every member's phone fills in and "who is speaking" becomes exact.
+async function learnMemberPhone(db: any, phone: string, name: string | null) {
+  if (!phone || !name) return;
+  const { data: byPhone } = await db.from("team_members").select("id").eq("phone", phone).limit(1);
+  if (byPhone?.[0]) return; // already known
+  const first = String(name).trim().split(/\s+/)[0];
+  if (!first || first.length < 3) return;
+  const { data: byName } = await db.from("team_members").select("id,phone,status").ilike("name", `%${first}%`);
+  const candidates = ((byName || []) as any[]).filter((m) => !m.phone && (m.status === "active" || !m.status));
+  if (candidates.length === 1) {
+    await db.from("team_members").update({ phone }).eq("id", candidates[0].id);
+  }
+}
+
 export async function POST(req: NextRequest) {
   if ((req.headers.get("x-group-secret") || "") !== (process.env.GROUP_BOT_SECRET || "\0")) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -66,19 +86,33 @@ export async function POST(req: NextRequest) {
   const group = String(body.group || "team group").slice(0, 120);
   const senderPhone = digits(body.sender_phone || "");
   const senderName = body.sender_name ? String(body.sender_name).slice(0, 120) : null;
-  const text = String(body.text || "").trim();
+  let text = String(body.text || "").trim();
   const messageId = String(body.message_id || "");
-  if (!text || !senderPhone) return NextResponse.json({ ok: true, reply: "" });
+  const audioB64 = String(body.audio_base64 || "");
+  const audioMime = String(body.audio_mime || "audio/ogg");
+  if (!senderPhone) return NextResponse.json({ ok: true, reply: "" });
 
   const db = admin();
 
-  // dedupe: never process the same wa message twice
+  // dedupe FIRST, before any transcription cost: never process the same wa
+  // message (or re-transcribe the same voice note) twice.
   if (messageId) {
     const { data: dupe } = await db.from("messages").select("id").eq("external_id", messageId).limit(1);
     if (dupe?.[0]) return NextResponse.json({ ok: true, reply: "", deduped: true });
   }
 
+  // VOICE NOTE: the bot ships audio only when there is no text. Transcribe it
+  // (OpenAI, the same path the 727 worker uses) and treat the transcript exactly
+  // like a typed message. Kenyan staff talk more than they type, so this is the
+  // difference between hearing the group and being half-deaf to it.
+  if (!text && audioB64) {
+    try { text = String(await transcribeAudio(audioB64, audioMime)).trim(); } catch { text = ""; }
+  }
+  if (!text) return NextResponse.json({ ok: true, reply: "" });
+
   const contactId = await resolveContact(db, senderPhone, senderName);
+  // learn the phone<->member bridge from live traffic (best-effort, never blocks)
+  learnMemberPhone(db, senderPhone, senderName).catch(() => {});
 
   // 1) store every message (read everything) — group tagged so it never inflates
   // the 1:1 needs-reply count; lands on the sender's profile timeline.
@@ -112,6 +146,7 @@ export async function POST(req: NextRequest) {
     surface: "group",
     groupName: group,
     operatorName: opName || senderName || undefined,
+    speakerPhone: senderPhone, // exact identity: lets the brain tick the speaker's own task
     history,
     command: text,
   });

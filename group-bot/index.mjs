@@ -17,7 +17,7 @@
 //                     originate from a datacenter IP (the main ban signal). Accepts
 //                     socks5://user:pass@host:port or http(s)://user:pass@host:port.
 //                     Empty = direct connection (current behaviour, nothing changes).
-import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from "@whiskeysockets/baileys";
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } from "@whiskeysockets/baileys";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import qrcode from "qrcode-terminal";
@@ -246,8 +246,6 @@ async function start() {
         const jid = m.key?.remoteJid || "";
         if (!jid.endsWith("@g.us")) continue;        // groups only (1:1 belongs to the Cloud API number)
         if (m.key?.fromMe) continue;                 // ignore our own posts
-        const text = textOf(m);
-        if (!text) continue;
 
         const name = await groupName(sock, jid);
         if (ALLOW.length && !ALLOW.some((a) => name.toLowerCase().includes(a))) continue; // not an allowed group
@@ -255,11 +253,31 @@ async function start() {
         const participant = (m.key?.participant || "").split("@")[0]; // sender phone in a group
         if (!participant) continue;
 
+        const text = textOf(m);
+
+        // VOICE NOTE: no text but an audio message. Download it here and let the
+        // platform transcribe (the OpenAI key lives there; the bot stays a thin
+        // transport that never holds a secret). Cap the size so a long clip can't
+        // blow up the JSON payload. Anything we can't grab is skipped, not faked.
+        let audio_base64 = "", audio_mime = "";
+        if (!text && m.message?.audioMessage) {
+          try {
+            const buf = await downloadMediaMessage(m, "buffer", {}, { logger: log, reuploadRequest: sock.updateMediaMessage });
+            if (buf?.length && buf.length < 8 * 1024 * 1024) {
+              audio_base64 = buf.toString("base64");
+              audio_mime = m.message.audioMessage.mimetype || "audio/ogg";
+            }
+          } catch (e) { log.warn({ err: e?.message }, "voice note download failed"); }
+        }
+        if (!text && !audio_base64) continue;
+
         const { reply } = await ingest({
           group: name,
           sender_phone: participant,
           sender_name: m.pushName || null,
           text,
+          audio_base64,
+          audio_mime,
           message_id: m.key?.id || "",
         });
 
