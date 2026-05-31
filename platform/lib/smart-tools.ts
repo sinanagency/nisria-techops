@@ -120,7 +120,7 @@ export const isReadTool = (name: string) => READ_TOOLS.has(name);
 // READ tools — copied from the assistant read layer so the agent answers with
 // live data. Kept here so /api/smart owns one self-contained tool runner.
 // ===========================================================================
-async function runRead(db: any, name: string, input: any): Promise<any> {
+async function runRead(db: any, name: string, input: any, tier: "admin" | "team" = "admin"): Promise<any> {
   if (name === "query_donations") {
     let q = db.from("donations").select("amount,donated_at,status,is_recurring,donor:donors(full_name),campaign:campaigns(name)").order("donated_at", { ascending: false });
     q = q.eq("status", input.status || "succeeded");
@@ -199,6 +199,9 @@ async function runRead(db: any, name: string, input: any): Promise<any> {
   }
   // ---- READ COVERAGE: eyes on the rest of the portal (admin reads). ----
   if (name === "find_beneficiary") {
+    // PII wall: beneficiary records are children's data and NEVER surface in a
+    // team group, even if the tool is somehow reached. Admin (Nur/Taona) only.
+    if (tier === "team") return { error: "not available", note: "Beneficiary records are confidential child-safeguarding data and are not available in team chat." };
     const q = String(input.query || "").trim().toLowerCase();
     const { data } = await db.from("beneficiaries").select("full_name,public_name,program,region,status,needs,story_private,goal_amount,funded_amount,contact_phone,age_at_intake,case_number").order("created_at", { ascending: false }).limit(80);
     let rows = (data || []) as any[];
@@ -210,6 +213,13 @@ async function runRead(db: any, name: string, input: any): Promise<any> {
     const q = String(input.name || "").trim();
     if (!q) return { results: [], note: "give a name to look up" };
     const like = `%${q}%`;
+    // PII wall: a team member may look up a COLLEAGUE only. Donors and
+    // beneficiaries (children) are never resolved in team chat.
+    if (tier === "team") {
+      const { data } = await db.from("team_members").select("name,phone,email,role,status").ilike("name", like).limit(8);
+      const results = ((data || []) as any[]).filter((r) => r.status === "active" || !r.status).map((r) => ({ name: r.name, phone: r.phone || null, email: r.email || null, role: r.role || null, where: "team" })).filter((r) => r.phone || r.email);
+      return { count: results.length, results };
+    }
     const [c, t, b] = await Promise.all([
       db.from("contacts").select("name,phone,email,channel").ilike("name", like).limit(8),
       db.from("team_members").select("name,phone,email,role").ilike("name", like).limit(8),
@@ -227,7 +237,10 @@ async function runRead(db: any, name: string, input: any): Promise<any> {
     let rows = (data || []).filter((t: any) => t.status === "active" || !t.status) as any[];
     const q = String(input.query || "").trim().toLowerCase();
     if (q) rows = rows.filter((t) => `${t.name || ""} ${t.role || ""}`.toLowerCase().includes(q));
-    return { count: rows.length, team: rows.map((t: any) => ({ name: t.name, role: t.role || null, phone: t.phone || null, pay: t.pay_amount ? `${t.pay_currency || "KES"} ${Number(t.pay_amount).toLocaleString()}${t.pay_type ? ` per ${t.pay_type}` : ""}` : null, does: t.responsibilities || null, location: t.location || null })) };
+    // PII wall: pay is sensitive HR data, never shown to the team. Roster, role,
+    // phone, and responsibilities help colleagues coordinate and are fine.
+    const showPay = tier !== "team";
+    return { count: rows.length, team: rows.map((t: any) => ({ name: t.name, role: t.role || null, phone: t.phone || null, pay: showPay ? (t.pay_amount ? `${t.pay_currency || "KES"} ${Number(t.pay_amount).toLocaleString()}${t.pay_type ? ` per ${t.pay_type}` : ""}` : null) : undefined, does: t.responsibilities || null, location: t.location || null })) };
   }
   if (name === "search_documents") {
     const q = String(input.query || "").trim();
@@ -238,7 +251,10 @@ async function runRead(db: any, name: string, input: any): Promise<any> {
   }
   if (name === "list_campaigns") {
     const { data } = await db.from("campaigns").select("name,type,status,goal_amount,raised_amount,starts_on,ends_on").order("created_at", { ascending: false }).limit(20);
-    return { count: (data || []).length, campaigns: ((data || []) as any[]).map((c) => ({ name: c.name, type: c.type || null, status: c.status || null, goal: money(c.goal_amount), raised: money(c.raised_amount), starts: c.starts_on || null, ends: c.ends_on || null })) };
+    // PII/finance wall: the team may know WHAT campaigns are running, but not the
+    // money figures (goal/raised). Those are admin-only.
+    const showMoney = tier !== "team";
+    return { count: (data || []).length, campaigns: ((data || []) as any[]).map((c) => ({ name: c.name, type: c.type || null, status: c.status || null, goal: showMoney ? money(c.goal_amount) : undefined, raised: showMoney ? money(c.raised_amount) : undefined, starts: c.starts_on || null, ends: c.ends_on || null })) };
   }
   return { error: "unknown read tool" };
 }
@@ -642,10 +658,10 @@ async function queueThankYouGated(db: any, gift: any, donor: any, n: { long: str
 
 // THE TOOL RUNNER the route calls. Reads run directly; actions go through the
 // gated/safe runner. Always returns a JSON-serializable object for the next turn.
-export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string }): Promise<any> {
+export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string; tier?: "admin" | "team" }): Promise<any> {
   const db = admin();
   try {
-    if (isReadTool(name)) return await runRead(db, name, input || {});
+    if (isReadTool(name)) return await runRead(db, name, input || {}, ctx?.tier || "admin");
     return await runAction(db, name, input || {}, ctx || {});
   } catch (e: any) {
     return { ok: false, summary: "", error: e?.message || "tool failed" };

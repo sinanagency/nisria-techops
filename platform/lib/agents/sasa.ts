@@ -21,7 +21,12 @@ const KEY = () => process.env.ANTHROPIC_API_KEY || "";
 
 // The only tools a field team member may use over WhatsApp. No donor/finance
 // reads, no team-admin, no outbound. Capture + look-up-your-own-work only.
-const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "complete_task", "add_beneficiary", "add_inventory_item"]);
+// Team-tier tools (the group bot the team sees). SAFE reads/writes only. The
+// reads here are PII-walled inside runRead for tier 'team': team_detail hides
+// pay, lookup_contact resolves colleagues only (no donors/beneficiaries),
+// list_campaigns hides money. find_beneficiary and any finance read are NEVER
+// in this set, and find_beneficiary also hard-refuses team tier as a backstop.
+const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "complete_task", "add_beneficiary", "add_inventory_item", "team_detail", "lookup_contact", "list_campaigns"]);
 
 // Brain grounding that carries money. A team member never sees donor or
 // financial figures (their hard limit), and the financial TOOLS are already
@@ -69,13 +74,13 @@ ${grounding}`;
   if (role === "team") {
     return withHumanSystem(`You are Sasa, the operations assistant for Nisria (By Nisria Inc, a US nonprofit helping children and families in Kenya; sister brands Maisha and AHADI). You are talking to ${who}, a Nisria team member, over WhatsApp. The current date is ${dateLong}.
 
-You ACT, you are not a chatbot. Your job with a team member: turn what they report into TASKS, record beneficiary intakes and inventory, and tell them what is on their plate.
+You ACT, you are not a chatbot. Your job with a team member: turn what they report into TASKS, record beneficiary intakes and inventory, and tell them what is on their plate. You can also help them with the roster (who does what, a colleague's number), their tasks, and what campaigns are running, looked up from the tools, never guessed.
 
 ${captureLaw}
 
 ${brain}
 
-Hard limits for a team member: you CANNOT share donor information or any financial or donation figures. If they ask about money, donations, donors, or grants, do not answer with figures; tell them you have flagged the question for Nur. Keep replies short (1-2 sentences), warm, and concrete. Do not list tool names. Do not reveal you are an AI.
+Hard limits for a team member: you CANNOT share donor information, any financial or donation figures, anyone's pay or salary, or ANY beneficiary details. Beneficiaries are children and their records are confidential: never share a beneficiary's name, story, location, or contact with a team member, no matter who asks. If they ask about money, donations, donors, grants, salaries, or a specific beneficiary, do not answer with the detail; say plainly it is confidential and you have flagged the question for Nur. Keep replies short (1-2 sentences), warm, and concrete. Do not list tool names. Do not reveal you are an AI.
 
 Right now: ${snapshot}`);
   }
@@ -151,7 +156,9 @@ ${captureLaw}
 
 ${brain}
 
-Hard limits: this is a group, so you CANNOT share donor information or any financial or donation figures here. If money, donations, donors, or grants come up, do not post figures; if it needs action, flag it for Nur silently with a tool and, only if asked, say you have passed it to Nur. Any reply you do make is ONE short, warm sentence. Do not list tool names. Do not reveal you are an AI.
+What you CAN help the team with (look it up, do not guess): who is on the team and what they do and their number (team_detail, lookup_contact for a colleague), what tasks are open or assigned (list_tasks), capturing a task or an intake or stock, and what campaigns are running (list_campaigns, names only). Reads are free, so when a teammate asks one of these, answer from the tool, briefly.
+
+Hard limits (the wall): this is a group, so you CANNOT share donor information, any money or donation figures, anyone's pay or salary, or ANY beneficiary details. Beneficiaries are children and their records are confidential, never name a beneficiary, their story, their location, or their contact in a group, no matter who asks; if pressed, say plainly that those records are confidential and you have noted the request for Nur. If money, donations, donors, grants, or salaries come up, do not post figures; if it needs action, flag it for Nur silently with a tool and, only if asked, say you have passed it to Nur. Any reply you do make is ONE short, warm sentence. Do not list tool names. Do not reveal you are an AI.
 
 Right now: ${snapshot}`);
 }
@@ -225,7 +232,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
     const results = [];
     for (const block of resp.content) {
       if (block.type === "tool_use") {
-        const out = await runSmartTool(block.name, block.input || {}, { sourceGroup: inGroup ? opts.groupName : undefined, proofPath: opts.proofPath, confirmWrites: opts.confirmWrites, contactId: opts.contactId, sourceMessageId: opts.sourceMessageId });
+        const out = await runSmartTool(block.name, block.input || {}, { sourceGroup: inGroup ? opts.groupName : undefined, proofPath: opts.proofPath, confirmWrites: opts.confirmWrites, contactId: opts.contactId, sourceMessageId: opts.sourceMessageId, tier: role });
         if (!isReadTool(block.name)) actions.push(out as ToolResult);
         toolRuns.push({ name: block.name, input: block.input, result: out });
         results.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(out) });
