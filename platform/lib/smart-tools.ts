@@ -216,7 +216,16 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
       .slice(0, 12);
     return {
       count: scored.length,
-      results: scored.map(({ m }: any) => ({ when: String(m.created_at || "").slice(0, 16), who: m.direction === "out" ? "Sasa" : "the operator", channel: m.channel, text: String(m.body || "").slice(0, 280) })),
+      // Return the FULL message body (capped only as a context safety valve), and
+      // when the cap actually bites, say so with `truncated`. A short result is the
+      // real message in full, NOT a cut-off. The model must never read an abrupt end
+      // here as proof the original message was truncated. That confabulation (a hard
+      // 280-char slice misread as "cut off mid-sentence") produced the fabricated
+      // "I hit a usage limit" apology to Nur. Honesty law.
+      results: scored.map(({ m }: any) => {
+        const full = String(m.body || "");
+        return { when: String(m.created_at || "").slice(0, 16), who: m.direction === "out" ? "Sasa" : "the operator", channel: m.channel, text: full.slice(0, 2000), truncated: full.length > 2000 };
+      }),
     };
   }
   // ---- READ COVERAGE: eyes on the rest of the portal (admin reads). ----
