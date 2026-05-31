@@ -15,11 +15,13 @@
 // so the future WhatsApp bot is just another caller of createBatch() with a team
 // member's name as the attribution. Non-blocking: dropping 20 files returns
 // instantly; the worker drains the queue with live status.
+import { createHash } from "crypto";
 import { admin } from "./supabase-admin";
 import { emit } from "./events";
 import { now } from "./now";
 import { humanize, withHumanSystem } from "./humanize";
-import { claudeJSON } from "./anthropic";
+import { claudeJSON, HAIKU } from "./anthropic";
+import { extractTextFromBuffer } from "./extract-text";
 import { enqueueJob, triggerWorker } from "./jobs";
 import { upsertEntry, appendToSection } from "./brain-store";
 import { remember } from "./memory";
@@ -123,15 +125,30 @@ export async function createBatch(args: {
   return { batchId };
 }
 
+// FOCUSED GATE (the doctrine, sharpened). The review gate exists to protect MONEY
+// and TRUTH, not to make Nur a file clerk. So obvious, zero-risk items auto-file;
+// anything touching money, people/records, or with low confidence still routes to
+// her review. A 'skip'/duplicate auto-clears (nothing to file). Result: she
+// reviews fewer items, and the ones she sees are the ones that actually matter.
+function canAutoApply(route: Route): boolean {
+  const c = typeof route.confidence === "number" ? route.confidence : 0;
+  if (route.target === "skip") return true;                       // nothing to file, clear it
+  if (route.target === "library") return c >= 0.7;                // a captioned asset, low risk
+  if (route.target === "brain") return c >= 0.8 && String(route.section || "") !== "financials";
+  return false;                                                   // finance + record (people/donor/$) -> Nur
+}
+
 // ---------------------------------------------------------------------------
-// WORKER step: process every queued item in a batch (classify + route, store the
-// PROPOSAL). Caption images via vision; text via the router. Idempotent per item.
+// WORKER step: process every queued item in a batch (classify + route). Reads the
+// text locally (free) where possible, classifies on Haiku, dedups by content hash,
+// then either AUTO-FILES safe items (focused gate) or holds them for Nur's review.
+// Idempotent per item.
 // ---------------------------------------------------------------------------
 export async function processBatch(batchId: string): Promise<{ done: number }> {
   const db = admin();
   const { data: items } = await db
     .from("ingest_items")
-    .select("id,channel,filename,mime,storage_path,route,status")
+    .select("id,channel,attribution,filename,mime,storage_path,asset_id,route,status")
     .eq("batch_id", batchId)
     .eq("status", "queued");
   const list = (items || []) as any[];
@@ -140,11 +157,21 @@ export async function processBatch(batchId: string): Promise<{ done: number }> {
 
   for (const it of list) {
     try {
-      const route = await classifyItem(it, n.long);
-      await db
-        .from("ingest_items")
-        .update({ status: "routed", routed_to: route.target, route: { ...(it.route || {}), ...route }, updated_at: new Date().toISOString() })
-        .eq("id", it.id);
+      const { route, hash } = await classifyItem(it, n.long);
+      const storedRoute = { ...(it.route || {}), ...route, ...(hash ? { _hash: hash } : {}) };
+      const ts = new Date().toISOString();
+      if (canAutoApply(route)) {
+        // auto-file the obvious. If the write throws, fall back to review so
+        // nothing is silently lost.
+        try {
+          await applyRoute(route, it);
+          await db.from("ingest_items").update({ status: "applied", applied: true, routed_to: route.target, route: storedRoute, updated_at: ts }).eq("id", it.id);
+        } catch (e: any) {
+          await db.from("ingest_items").update({ status: "routed", routed_to: route.target, route: storedRoute, error: String(e?.message || "auto-apply failed").slice(0, 300), updated_at: ts }).eq("id", it.id);
+        }
+      } else {
+        await db.from("ingest_items").update({ status: "routed", routed_to: route.target, route: storedRoute, updated_at: ts }).eq("id", it.id);
+      }
       done++;
     } catch (e: any) {
       await db
@@ -160,68 +187,100 @@ export async function processBatch(batchId: string): Promise<{ done: number }> {
     .select("id", { count: "exact", head: true })
     .eq("batch_id", batchId)
     .in("status", ["routed", "applied", "error"]);
+  const { count: needsReview } = await db
+    .from("ingest_items")
+    .select("id", { count: "exact", head: true })
+    .eq("batch_id", batchId)
+    .eq("status", "routed");
   const { count: total } = await db.from("ingest_items").select("id", { count: "exact", head: true }).eq("batch_id", batchId);
   const allDone = (doneCount || 0) >= (total || 0);
   await db
     .from("ingest_batches")
     .update({ done_count: doneCount || 0, status: allDone ? "ready" : "processing" })
     .eq("id", batchId);
-  if (allDone) await emit({ type: "ingest.batch_ready", source: "ingest", actor: "Sasa", subject_type: "ingest_batch", subject_id: batchId, payload: { items: total || 0 } });
+  if (allDone) await emit({ type: "ingest.batch_ready", source: "ingest", actor: "Sasa", subject_type: "ingest_batch", subject_id: batchId, payload: { items: total || 0, needs_review: needsReview || 0, auto_filed: (total || 0) - (needsReview || 0) } });
   return { done };
 }
 
-// Classify ONE item. Images/PDF use vision (caption-then-route); text uses the
-// router directly. Returns a Route the review UI shows.
-async function classifyItem(it: any, dateLong: string): Promise<Route> {
+// Classify ONE item, and return a content hash for dedup. Order of preference for
+// what we feed the router: inline text > LOCAL text extraction (free: unpdf /
+// mammoth / SheetJS) > vision caption (images only, on Haiku) > filename. Most
+// team docs are text-layer PDFs/Word, so we rarely pay for vision at all. The
+// router itself runs on Haiku (cheap, separate rate pool). Dedup: if the same
+// bytes/text were filed before, short-circuit to skip so we never reprocess or
+// double-file a re-sent document.
+async function classifyItem(it: any, dateLong: string): Promise<{ route: Route; hash: string | null }> {
+  const db = admin();
   const inlineText = it?.route?._text ? String(it.route._text) : "";
-  const isImage = (it.mime || "").startsWith("image/");
-  const isPdf = (it.mime || "").includes("pdf");
+  const mime = it.mime || "";
+  const isImage = mime.startsWith("image/");
 
+  // Pull the bytes ONCE (used for both hashing and local text extraction).
+  let bytes: Buffer | null = null;
+  if (it.storage_path) {
+    try {
+      const { data: blob } = await db.storage.from("assets").download(it.storage_path);
+      if (blob) bytes = Buffer.from(await blob.arrayBuffer());
+    } catch {}
+  }
+
+  // Content hash: file bytes if present, else the normalized inline text.
+  let hash: string | null = null;
+  if (bytes) hash = createHash("sha256").update(bytes).digest("hex");
+  else if (inlineText.trim()) hash = createHash("sha256").update(inlineText.trim().toLowerCase()).digest("hex");
+
+  // DEDUP: was an item with this exact hash already filed (or already awaiting
+  // review)? If so, do not process it again. Matches the @> jsonb containment on
+  // the stored route._hash.
+  if (hash) {
+    const { data: prior } = await db
+      .from("ingest_items")
+      .select("id")
+      .contains("route", { _hash: hash })
+      .in("status", ["routed", "applied"])
+      .neq("id", it.id)
+      .limit(1);
+    if (prior?.[0]) return { route: { target: "skip", reason: "Duplicate of an item already filed.", confidence: 0.96 }, hash };
+  }
+
+  // Assemble the text the router will classify.
   let contentForRouter = inlineText;
   let visionCaption = "";
-
-  // For an image/PDF with no inline text, read the bytes and describe with vision
-  // so the router has something to classify. Capped by the vision byte budget.
-  if (!contentForRouter && it.storage_path && (isImage || isPdf)) {
-    visionCaption = await describeAsset(it.storage_path, it.mime || "image/jpeg");
+  if (!contentForRouter && bytes) {
+    const extracted = await extractTextFromBuffer(bytes, mime);
+    if (extracted) contentForRouter = extracted;
+  }
+  if (!contentForRouter && bytes && isImage && bytes.length < 4_500_000) {
+    try {
+      const { captionImage } = await import("./anthropic");
+      visionCaption = await captionImage(bytes.toString("base64"), mime, HAIKU);
+    } catch {}
     contentForRouter = visionCaption;
   }
   if (!contentForRouter && it.filename) contentForRouter = `A file named ${it.filename}.`;
-  if (!contentForRouter) return { target: "skip", reason: "Nothing readable in this item.", confidence: 0.2 };
+  if (!contentForRouter) return { route: { target: "skip", reason: "Nothing readable in this item.", confidence: 0.2 }, hash };
 
-  const route = await claudeJSON<Route>(routerSystem(dateLong), contentForRouter.slice(0, 14000), 700);
+  const route = await claudeJSON<Route>(routerSystem(dateLong), contentForRouter.slice(0, 14000), 700, HAIKU);
   if (!route || !route.target) {
     // default: a file goes to the Library, a note goes to the Brain "other"
-    return it.storage_path
-      ? { target: "library", caption: visionCaption || it.filename || "Imported file", reason: "Filed in the Library.", confidence: 0.4 }
-      : { target: "brain", section: "other", title: "Imported note", content: contentForRouter.slice(0, 2000), reason: "Kept as org context.", confidence: 0.4 };
+    return {
+      route: it.storage_path
+        ? { target: "library", caption: visionCaption || it.filename || "Imported file", reason: "Filed in the Library.", confidence: 0.4 }
+        : { target: "brain", section: "other", title: "Imported note", content: contentForRouter.slice(0, 2000), reason: "Kept as org context.", confidence: 0.4 },
+      hash,
+    };
   }
   // carry the vision caption through for a library route if the model omitted one
   if (route.target === "library" && !route.caption) route.caption = visionCaption || it.filename || "Imported file";
-  return route;
-}
-
-// Vision describe for an asset already in the private bucket. Downloads bytes
-// server-side; returns a short caption. Images only for now (PDF vision needs the
-// document block; we fall back to filename for PDFs to stay within the budget).
-async function describeAsset(storagePath: string, mime: string): Promise<string> {
-  const db = admin();
-  try {
-    const { data: blob } = await db.storage.from("assets").download(storagePath);
-    if (!blob) return "";
-    const buf = Buffer.from(await blob.arrayBuffer());
-    if (mime.startsWith("image/") && buf.length < 4_500_000) {
-      const { captionImage } = await import("./anthropic");
-      return await captionImage(buf.toString("base64"), mime);
-    }
-  } catch {}
-  return "";
+  return { route, hash };
 }
 
 // ---------------------------------------------------------------------------
 // APPLY: the founder confirmed the review (optionally with adjusted routes). For
-// each routed item, actually write it where it belongs and mark applied. This is
-// the ONLY place ingestion mutates the platform, so review is a real gate.
+// each item STILL pending review (status "routed"), write it where it belongs and
+// mark applied. Safe items were already auto-filed in processBatch (focused gate);
+// this handles everything that was held for her: money, people/records, low
+// confidence. So the gate still governs every item that actually matters.
 // ---------------------------------------------------------------------------
 export async function applyBatch(batchId: string, overrides: Record<string, Partial<Route>> = {}): Promise<{ applied: number }> {
   const db = admin();

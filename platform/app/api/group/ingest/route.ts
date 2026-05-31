@@ -90,6 +90,9 @@ export async function POST(req: NextRequest) {
   const messageId = String(body.message_id || "");
   const audioB64 = String(body.audio_base64 || "");
   const audioMime = String(body.audio_mime || "audio/ogg");
+  const mediaB64 = String(body.media_base64 || "");
+  const mediaMime = String(body.media_mime || "");
+  const mediaName = body.media_name ? String(body.media_name).slice(0, 200) : null;
   if (!senderPhone) return NextResponse.json({ ok: true, reply: "" });
 
   const db = admin();
@@ -99,6 +102,40 @@ export async function POST(req: NextRequest) {
   if (messageId) {
     const { data: dupe } = await db.from("messages").select("id").eq("external_id", messageId).limit(1);
     if (dupe?.[0]) return NextResponse.json({ ok: true, reply: "", deduped: true });
+  }
+
+  // MEDIA DROP: an image or document posted in the group (the userbot downloaded
+  // the bytes and shipped them here). Store it to the assets bucket and hand it to
+  // the SAME ingest pipeline the 727 + uploads use, so a team member dropping a PDF
+  // in the group populates the platform. The focused gate auto-files the obvious;
+  // anything money/records goes to Nur. We ingest the file and stay quiet (no brain
+  // run, no in-group reply). A caption, if any, rides along as the item's text.
+  if (mediaB64 && mediaMime) {
+    const buf = Buffer.from(mediaB64, "base64");
+    if (buf.length > 0 && buf.length <= 15_000_000) {
+      const contactId = await resolveContact(db, senderPhone, senderName);
+      learnMemberPhone(db, senderPhone, senderName).catch(() => {});
+      const safeName = (mediaName || `file-${messageId || "drop"}`).replace(/[^\w.\-]+/g, "_").slice(0, 80);
+      const path = `group-ingest/${contactId || senderPhone}/${Date.now().toString(36)}-${safeName}`;
+      try {
+        await db.storage.from("assets").upload(path, buf, { contentType: mediaMime, upsert: true });
+        const label = mediaMime.startsWith("image/") ? "image" : "document";
+        await db.from("messages").insert({
+          contact_id: contactId, channel: "whatsapp", direction: "in",
+          body: `[${label}] ${mediaName || ""}`.trim().slice(0, 6000),
+          handled_by: "group-bot", status: "seen", sender_type: "group",
+          account: group, external_id: messageId || null,
+        });
+        const { createBatch } = await import("../../../../lib/ingest");
+        await createBatch({
+          source: "whatsapp",
+          attribution: senderName || senderPhone,
+          inputs: [{ channel: "whatsapp", attribution: senderName || senderPhone, filename: mediaName || safeName, mime: mediaMime, storage_path: path, text: text || null }],
+        });
+        await emit({ type: "whatsapp.group_media_in", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, payload: { group, from: senderPhone, mime: mediaMime, name: mediaName } });
+      } catch { /* best-effort: never crash the bot loop on an ingest hiccup */ }
+    }
+    return NextResponse.json({ ok: true, reply: "", ingested: true });
   }
 
   // VOICE NOTE: the bot ships audio only when there is no text. Transcribe it

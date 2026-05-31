@@ -2,6 +2,10 @@
 // dispatch, inbox auto-reply, newsletter/content drafting).
 const KEY = () => process.env.ANTHROPIC_API_KEY || "";
 const MODEL = "claude-sonnet-4-5";
+// Cheap, fast model for simple structured work (intake classification/routing).
+// Sits on a SEPARATE rate-limit pool from Sonnet, so bulk document processing
+// never starves the live Sasa bot of Sonnet tokens. Pass as the `model` arg.
+export const HAIKU = "claude-haiku-4-5-20251001";
 
 // BRAND VOICE / OUTPUT CONTRACT (R3-2 / P3). The single AI-output contract now
 // lives in lib/humanize.ts: ONE cleaner (humanize) every generated string passes
@@ -73,9 +77,10 @@ export async function askClaude(opts: {
   system: string;
   messages: Msg[];
   maxTokens?: number;
+  model?: string;
 }): Promise<string> {
   const j = await anthropicPOST({
-    model: MODEL,
+    model: opts.model || MODEL,
     max_tokens: opts.maxTokens ?? 1024,
     system: opts.system,
     messages: opts.messages,
@@ -84,13 +89,13 @@ export async function askClaude(opts: {
 }
 
 // Convenience for a single-shot prompt.
-export const claude = (system: string, user: string, maxTokens = 1024) =>
-  askClaude({ system, messages: [{ role: "user", content: user }], maxTokens });
+export const claude = (system: string, user: string, maxTokens = 1024, model?: string) =>
+  askClaude({ system, messages: [{ role: "user", content: user }], maxTokens, model });
 
 // Vision: caption an image for the asset library (also flags possible beneficiary photos).
-export async function captionImage(base64: string, mediaType: string): Promise<string> {
+export async function captionImage(base64: string, mediaType: string, model?: string): Promise<string> {
   const j = await anthropicPOST({
-    model: MODEL, max_tokens: 220,
+    model: model || MODEL, max_tokens: 220,
     messages: [{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
       { type: "text", text: "In 1-2 sentences, describe this image for a nonprofit's asset library: what it shows, the mood, and any visible text or logos. If it appears to show identifiable children or beneficiaries, start with 'BENEFICIARY:'." },
@@ -148,8 +153,8 @@ export async function claudeVisionJSON<T = any>(system: string, text: string, im
 }
 
 // Ask Claude for JSON; strips code fences and parses. Returns null on failure.
-export async function claudeJSON<T = any>(system: string, user: string, maxTokens = 1500): Promise<T | null> {
-  const raw = await claude(system + "\n\nRespond with ONLY valid JSON, no prose, no code fences.", user, maxTokens);
+export async function claudeJSON<T = any>(system: string, user: string, maxTokens = 1500, model?: string): Promise<T | null> {
+  const raw = await claude(system + "\n\nRespond with ONLY valid JSON, no prose, no code fences.", user, maxTokens, model);
   try {
     const cleaned = raw.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
     return JSON.parse(cleaned) as T;

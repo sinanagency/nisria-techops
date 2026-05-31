@@ -269,7 +269,23 @@ async function start() {
             }
           } catch (e) { log.warn({ err: e?.message }, "voice note download failed"); }
         }
-        if (!text && !audio_base64) continue;
+        // MEDIA: an image or document dropped in the group. Download the bytes and
+        // ship them to the platform's ingest pipeline (the bot stays a thin
+        // transport, the platform stores + classifies + files). Cap the size so a
+        // big file can't blow up the JSON payload. A caption rides along as `text`.
+        let media_base64 = "", media_mime = "", media_name = "";
+        const im = m.message?.imageMessage, doc = m.message?.documentMessage;
+        if (im || doc) {
+          try {
+            const buf = await downloadMediaMessage(m, "buffer", {}, { logger: log, reuploadRequest: sock.updateMediaMessage });
+            if (buf?.length && buf.length <= 15 * 1024 * 1024) {
+              media_base64 = buf.toString("base64");
+              media_mime = im?.mimetype || doc?.mimetype || "application/octet-stream";
+              media_name = doc?.fileName || im?.caption || "";
+            }
+          } catch (e) { log.warn({ err: e?.message }, "media download failed"); }
+        }
+        if (!text && !audio_base64 && !media_base64) continue;
 
         const { reply } = await ingest({
           group: name,
@@ -278,6 +294,9 @@ async function start() {
           text,
           audio_base64,
           audio_mime,
+          media_base64,
+          media_mime,
+          media_name,
           message_id: m.key?.id || "",
         });
 

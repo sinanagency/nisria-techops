@@ -41,6 +41,39 @@ export async function extractText(fileId: string, mime: string): Promise<string 
   }
 }
 
+// Same parsers, but from RAW BYTES already in hand (a WhatsApp attachment, an
+// uploaded file), not a Drive fileId. Used by the ingest pipeline so a PDF/Word/
+// sheet is read into cheap TEXT locally (free) instead of paying Claude vision.
+// Returns clean text, or null when the type has no text layer (images, scans).
+export async function extractTextFromBuffer(buf: Buffer | Uint8Array, mime: string): Promise<string | null> {
+  try {
+    const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+    if (mime === "application/pdf") {
+      const { extractText: ex, getDocumentProxy } = await import("unpdf");
+      const pdf = await getDocumentProxy(new Uint8Array(b));
+      const { text } = await ex(pdf, { mergePages: true });
+      return clean(Array.isArray(text) ? text.join("\n") : text);
+    }
+    if (mime === DOCX || mime === "application/msword") {
+      const mammoth = (await import("mammoth")).default || (await import("mammoth"));
+      const { value } = await (mammoth as any).extractRawText({ buffer: b });
+      return clean(value);
+    }
+    if (mime === XLSX_MIME || mime === "application/vnd.ms-excel" || mime === "text/csv") {
+      const XLSX = await import("xlsx");
+      const wb = XLSX.read(b, { type: "buffer" });
+      const txt = wb.SheetNames.map((n) => `# ${n}\n` + XLSX.utils.sheet_to_csv(wb.Sheets[n])).join("\n\n");
+      return clean(txt);
+    }
+    if (mime.startsWith("text/") || mime === "application/json") {
+      return clean(b.toString("utf8"));
+    }
+    return null; // images / scans / unsupported: no text layer to read
+  } catch {
+    return null;
+  }
+}
+
 function clean(s: string): string {
   const t = (s || "").replace(/\r/g, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   return t.length > MAX ? t.slice(0, MAX) + "\n\n[…truncated]" : t;
