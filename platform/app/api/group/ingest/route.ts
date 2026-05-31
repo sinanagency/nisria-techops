@@ -93,6 +93,10 @@ export async function POST(req: NextRequest) {
   const mediaB64 = String(body.media_base64 || "");
   const mediaMime = String(body.media_mime || "");
   const mediaName = body.media_name ? String(body.media_name).slice(0, 200) : null;
+  const reactionEmoji = String(body.reaction_emoji || "");
+  const reactionTargetId = String(body.reaction_target_id || "");
+  const quotedText = String(body.quoted_text || "").trim();
+  const mentionedPhones: string[] = Array.isArray(body.mentioned_phones) ? body.mentioned_phones.map((p: any) => digits(String(p))).filter(Boolean) : [];
   if (!senderPhone) return NextResponse.json({ ok: true, reply: "" });
 
   const db = admin();
@@ -102,6 +106,25 @@ export async function POST(req: NextRequest) {
   if (messageId) {
     const { data: dupe } = await db.from("messages").select("id").eq("external_id", messageId).limit(1);
     if (dupe?.[0]) return NextResponse.json({ ok: true, reply: "", deduped: true });
+  }
+
+  // REACTION SIGNAL: a positive reaction (check / thumbs-up) on a message means
+  // "this is done". Look up the message that was reacted to and let the SAME brain
+  // tick the matching task via complete_task. We do NOT constrain by the reactor,
+  // the reaction confirms the referenced task whoever tapped it, so no speakerPhone
+  // is passed (match by the task's words, not by who reacted). Reuses the existing
+  // tool, so this adds a signal with zero new tool surface. Always silent.
+  if (reactionTargetId && reactionEmoji) {
+    const { data: tgt } = await db.from("messages").select("body").eq("external_id", reactionTargetId).limit(1);
+    const targetBody = tgt?.[0]?.body ? String(tgt[0].body) : "";
+    if (!targetBody) return NextResponse.json({ ok: true, reply: "", reaction: "no_target" });
+    await runSasa({
+      surface: "group",
+      groupName: group,
+      operatorName: senderName || undefined,
+      command: `A teammate marked this message done with a ${reactionEmoji} reaction: "${targetBody.slice(0, 300)}". If that message describes a task, request, or assignment, call complete_task with a fragment of it to mark the matching task complete. If nothing clearly matches an open task, do nothing.`,
+    });
+    return NextResponse.json({ ok: true, reply: "", reaction: "processed" });
   }
 
   // MEDIA DROP: an image or document posted in the group (the userbot downloaded
@@ -166,8 +189,10 @@ export async function POST(req: NextRequest) {
   });
   await emit({ type: "whatsapp.group_in", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, payload: { group, from: senderPhone, text: text.slice(0, 300) } });
 
-  // 2) only wake the brain for substantive messages
-  if (!substantive(text)) return NextResponse.json({ ok: true, reply: "" });
+  // 2) wake the brain for substantive messages. A quoted reply (e.g. a bare "done"
+  // on a specific task) or an @mention is intentful even when short, so those wake
+  // it too.
+  if (!substantive(text) && !quotedText && !mentionedPhones.length) return NextResponse.json({ ok: true, reply: "" });
 
   // who is speaking (for the prompt + so the brain knows the team member)
   const { name: opName } = await operatorOf(db, senderPhone).catch(() => ({ name: null as any }));
@@ -179,13 +204,24 @@ export async function POST(req: NextRequest) {
     .order("created_at", { ascending: false }).limit(8);
   const history = (hist || []).reverse().map((m: any) => ({ role: m.direction === "out" ? "assistant" : "user", content: String(m.body || "") } as const));
 
+  // enrich the command with precise context: what a reply is quoting (so "done"
+  // hits the right task) and who was @mentioned, resolved to real member names (so
+  // an assignment lands on the right person). Both reuse the existing brain.
+  let command = text;
+  if (quotedText) command = `[replying to: "${quotedText.slice(0, 240)}"]\n${command}`;
+  if (mentionedPhones.length) {
+    const { data: mem } = await db.from("team_members").select("name,phone").in("phone", mentionedPhones);
+    const names = ((mem || []) as any[]).map((x) => x.name).filter(Boolean);
+    if (names.length) command = `${command}\n(this message @mentions: ${names.join(", ")})`;
+  }
+
   const { reply } = await runSasa({
     surface: "group",
     groupName: group,
     operatorName: opName || senderName || undefined,
     speakerPhone: senderPhone, // exact identity: lets the brain tick the speaker's own task
     history,
-    command: text,
+    command,
   });
 
   // LISTEN-ONLY: brain still ran (tasks/intakes captured above), but say nothing

@@ -92,6 +92,24 @@ function textOf(m) {
   ).trim();
 }
 
+// The contextInfo of whatever message subtype this is. Carries quoted replies
+// and @mentions, which is how a team signals "done on THIS" or "this is for X".
+function contextOf(m) {
+  const mm = m.message || {};
+  return mm.extendedTextMessage?.contextInfo || mm.imageMessage?.contextInfo || mm.videoMessage?.contextInfo || mm.documentMessage?.contextInfo || null;
+}
+// The text of the message a reply is quoting (so a bare "done" reply still tells
+// the brain WHAT was done).
+function quotedTextOf(ctx) {
+  const q = ctx?.quotedMessage;
+  if (!q) return "";
+  return (q.conversation || q.extendedTextMessage?.text || q.imageMessage?.caption || q.videoMessage?.caption || q.documentMessage?.caption || "").trim();
+}
+// Reactions the team uses to mean "done / approved": check, thumbs-up, 100,
+// raised hands, OK hand, party. Anything else (or an empty text = un-react) is
+// not a completion signal.
+const DONE_EMOJI = /[✅✔\u{1F44D}\u{1F4AF}\u{1F64C}\u{1F44C}\u{1F389}]/u;
+
 function remember(jid, subject) {
   subjectCache.set(jid, subject || jid);
   if (subject) nameToJid.set(subject.toLowerCase(), jid);
@@ -253,7 +271,33 @@ async function start() {
         const participant = (m.key?.participant || "").split("@")[0]; // sender phone in a group
         if (!participant) continue;
 
+        // REACTION as a completion signal. A check / thumbs-up on a message is how
+        // the team marks something done without typing. Ship the emoji + the id of
+        // the message it targets; the platform looks that message up and lets the
+        // brain tick the matching task. An empty reaction text is an un-react, skip.
+        const reaction = m.message?.reactionMessage;
+        if (reaction) {
+          const emoji = (reaction.text || "").trim();
+          const targetId = reaction.key?.id || "";
+          if (emoji && targetId && DONE_EMOJI.test(emoji)) {
+            await ingest({
+              group: name,
+              sender_phone: participant,
+              sender_name: m.pushName || null,
+              reaction_emoji: emoji,
+              reaction_target_id: targetId,
+              message_id: m.key?.id || "",
+            });
+          }
+          continue; // a reaction is never also text or media
+        }
+
         const text = textOf(m);
+        // quoted reply + @mentions: precise context so "done" hits the right task
+        // and an assignment lands on the right person.
+        const mctx = contextOf(m);
+        const quoted_text = quotedTextOf(mctx);
+        const mentioned_phones = (mctx?.mentionedJid || []).map((j) => String(j).split("@")[0]).filter(Boolean);
 
         // VOICE NOTE: no text but an audio message. Download it here and let the
         // platform transcribe (the OpenAI key lives there; the bot stays a thin
@@ -297,6 +341,8 @@ async function start() {
           media_base64,
           media_mime,
           media_name,
+          quoted_text,
+          mentioned_phones,
           message_id: m.key?.id || "",
         });
 
