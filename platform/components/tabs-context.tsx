@@ -44,6 +44,7 @@ const NAV_SECTIONS = new Set(["/", "/launchpad", "/workspace", "/login"]);
 // Top-level module roots → tab title + icon (so an opened app reads "Finance", not "finance").
 const ROOT_SECTION: Record<string, { icon: string; label: string }> = {
   "/inbox": { icon: "inbox", label: "Inbox" },
+  "/calendar": { icon: "calendar", label: "Calendar" },
   "/tasks": { icon: "check", label: "Tasks" },
   "/donors": { icon: "heart", label: "Donors" },
   "/donations": { icon: "dollar", label: "Donations" },

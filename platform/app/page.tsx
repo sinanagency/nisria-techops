@@ -11,6 +11,7 @@ import { getBrief, fallbackPoints } from "../lib/brief";
 import { cleanEmail } from "../lib/email-render";
 import ApprovalCard from "../components/ApprovalCard";
 import { getCurrentUser } from "../lib/auth";
+import CalendarWidget from "../components/CalendarWidget";
 import { Sparkles, ChevronRight, Bot } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -125,6 +126,11 @@ export default async function MissionControl() {
               const sibs = (approvals || []).map((a: any) => ({ a, original: origFor(a) }));
               return <div className="hscroll">{(approvals || []).map((a: any) => <ApprovalCard key={a.id} a={a} original={origFor(a)} siblings={sibs} />)}</div>;
             })()}
+      </div>
+
+      {/* Coming up — the unified calendar's next 7 days, one glance */}
+      <div style={{ marginBottom: 16 }}>
+        <CalendarWidget />
       </div>
 
       {/* Tasks */}

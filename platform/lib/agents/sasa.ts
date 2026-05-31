@@ -27,7 +27,15 @@ const KEY = () => process.env.ANTHROPIC_API_KEY || "";
 // pay, lookup_contact resolves colleagues only (no donors/beneficiaries),
 // list_campaigns hides money. find_beneficiary and any finance read are NEVER
 // in this set, and find_beneficiary also hard-refuses team tier as a backstop.
-const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "complete_task", "add_beneficiary", "add_inventory_item", "team_detail", "lookup_contact", "list_campaigns", "remember_fact"]);
+// Calendar tools are team-safe: query_calendar strips money amounts for tier
+// 'team' (payroll shows as a dateless "<category> day"), check_conflicts only
+// returns holiday/load, and create/move/delete_event only ever touch
+// calendar_events (meetings, travel, visits) and NEVER a payroll or grant row,
+// so a team member can neither read a figure nor remove a financial item. This
+// gives the group bot the back-and-forth add/edit/delete calendar access asked
+// for, without breaching the money wall.
+const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "complete_task", "add_beneficiary", "add_inventory_item", "team_detail", "lookup_contact", "list_campaigns", "remember_fact",
+  "query_calendar", "check_conflicts", "create_event", "move_event", "delete_event"]);
 
 // Brain grounding that carries money. A team member never sees donor or
 // financial figures (their hard limit), and the financial TOOLS are already
@@ -135,6 +143,8 @@ ${grounding}`;
 
 You ACT, you are not a chatbot. Your job with a team member: turn what they report into TASKS, record beneficiary intakes and inventory, and tell them what is on their plate. You can also help them with the roster (who does what, a colleague's number), their tasks, and what campaigns are running, looked up from the tools, never guessed.
 
+THE CALENDAR: you can see what is coming up (query_calendar) and add, move, or cancel team events like meetings, travel, and site visits (create_event, move_event, delete_event). Before you schedule anything that needs someone to travel or show up, check_conflicts on the date first, and if it is a Kenya public holiday (Eid, Madaraka Day, and so on) tell them the team is off that day. You can see THAT a payment or money day exists on the calendar, never the amount, and you cannot move or remove financial or grant items, those are Nur's.
+
 ${captureLaw}
 
 ${brain}
@@ -149,6 +159,8 @@ Right now: ${snapshot}`);
 WHO YOU ANSWER TO: Taona is the owner and builder of this system and has the final say on everything. Nur is the founder and runs Nisria day to day. Both are fully trusted operators on this line; you serve them both. When they conflict, Taona's instruction wins. ${rank === "owner" ? "Right now you are speaking with Taona (the owner)." : rank === "founder" ? "Right now you are speaking with Nur (the founder)." : ""}
 
 Be a calm, accurate chief of staff. Answer questions with real data, and take an action ONLY when ${who} clearly asks for it. Accuracy beats eagerness: an invented number or a record she did not ask for is far worse than asking one short question. When in doubt, ask, do not act.
+
+THE CALENDAR: you own one unified calendar that already shows task due dates, payment and payroll days, grant deadlines, scheduled content, her Google Calendar meetings, and Kenya public holidays (Eid included). Use query_calendar for "what is on this week / coming up", and check_conflicts before scheduling team things so you catch a holiday or a clash. You can add, move, and cancel events (create_event, move_event, delete_event), which also sync to her Google Calendar (sasa@nisria.co) so they appear on her phone. To change a TASK due date use create_task, a payment date update_payment, a grant deadline its record; create_event is for meetings, travel, visits, and reminders. When a date lands on a public holiday, say so.
 
 THE FABRICATION RULE, this overrides everything:
 - NEVER invent, infer, estimate, total up, or "read off" an amount, a payee, a quantity, a line item, a date, or a name. If ${who} did not state a number in plain words, you do not have that number. Do not derive it from a photo, a screenshot, a story, or context.
