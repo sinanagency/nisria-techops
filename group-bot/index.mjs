@@ -299,6 +299,21 @@ async function start() {
         const quoted_text = quotedTextOf(mctx);
         const mentioned_phones = (mctx?.mentionedJid || []).map((j) => String(j).split("@")[0]).filter(Boolean);
 
+        // SHARED LINK: a URL posted in the group. WhatsApp already resolved a
+        // preview (title/description/canonicalUrl) on the message, so we capture
+        // that for free, no fetching, no "I can't open it". The platform stores it
+        // as an attributed link on the person's timeline. The forwarded flag biases
+        // FYI vs action. We do not ship the binary thumbnail (keeps the payload light).
+        const et = m.message?.extendedTextMessage;
+        const urlInText = (text.match(/https?:\/\/[^\s]+/i) || [])[0] || "";
+        const linkUrl = (et?.canonicalUrl || et?.matchedText || urlInText || "").trim();
+        const link = linkUrl ? {
+          url: linkUrl,
+          title: (et?.title || "").trim(),
+          description: (et?.description || "").trim(),
+          forwarded: !!(mctx?.isForwarded || mctx?.forwardingScore),
+        } : null;
+
         // VOICE NOTE: no text but an audio message. Download it here and let the
         // platform transcribe (the OpenAI key lives there; the bot stays a thin
         // transport that never holds a secret). Cap the size so a long clip can't
@@ -343,6 +358,7 @@ async function start() {
           media_name,
           quoted_text,
           mentioned_phones,
+          link,
           message_id: m.key?.id || "",
         });
 

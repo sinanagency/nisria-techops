@@ -97,6 +97,12 @@ export async function POST(req: NextRequest) {
   const reactionTargetId = String(body.reaction_target_id || "");
   const quotedText = String(body.quoted_text || "").trim();
   const mentionedPhones: string[] = Array.isArray(body.mentioned_phones) ? body.mentioned_phones.map((p: any) => digits(String(p))).filter(Boolean) : [];
+  const link = body.link && typeof body.link === "object" && body.link.url ? {
+    url: String(body.link.url).slice(0, 1000),
+    title: String(body.link.title || "").slice(0, 300),
+    description: String(body.link.description || "").slice(0, 600),
+    forwarded: !!body.link.forwarded,
+  } : null;
   if (!senderPhone) return NextResponse.json({ ok: true, reply: "" });
 
   const db = admin();
@@ -168,7 +174,16 @@ export async function POST(req: NextRequest) {
   if (!text && audioB64) {
     try { text = String(await transcribeAudio(audioB64, audioMime)).trim(); } catch { text = ""; }
   }
-  if (!text) return NextResponse.json({ ok: true, reply: "" });
+
+  // SHARED LINK: fold WhatsApp's own preview (title/description) into the text so
+  // the stored message and the brain both read what the link IS (e.g. an org reel
+  // about a fire), not a bare URL. Capture is unconditional; opening is not needed.
+  if (link && (link.title || link.description)) {
+    const bits = [link.title, link.description].filter(Boolean).join(" — ");
+    text = `${text}\n[shared link: ${bits}${link.forwarded ? " (forwarded)" : ""}]`.trim();
+  }
+  if (!text && !link) return NextResponse.json({ ok: true, reply: "" });
+  if (!text && link) text = `[shared link: ${link.url}${link.forwarded ? " (forwarded)" : ""}]`;
 
   const contactId = await resolveContact(db, senderPhone, senderName);
   // learn the phone<->member bridge from live traffic (best-effort, never blocks)
@@ -188,6 +203,13 @@ export async function POST(req: NextRequest) {
     external_id: messageId || null,
   });
   await emit({ type: "whatsapp.group_in", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, payload: { group, from: senderPhone, text: text.slice(0, 300) } });
+
+  // a shared link is captured as a distinct, attributed event so it lands on the
+  // person's timeline and is queryable as a link (comms can see what the field is
+  // sharing). The forwarded flag biases FYI vs action downstream.
+  if (link) {
+    await emit({ type: "whatsapp.group_link_in", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, payload: { group, from: senderPhone, url: link.url, title: link.title || null, description: link.description || null, forwarded: link.forwarded } });
+  }
 
   // 2) wake the brain for substantive messages. A quoted reply (e.g. a bare "done"
   // on a specific task) or an @mention is intentful even when short, so those wake
