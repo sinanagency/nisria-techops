@@ -271,6 +271,10 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
 
   const actions: ToolResult[] = [];
   const toolRuns: { name: string; input: any; result: any }[] = [];
+  // True if any model call this turn was served by the OpenAI BACKUP (Anthropic
+  // down: rate-limited, overloaded, or out of credits). A weaker model can lose
+  // the thread, so we tell the operator rather than mislead them silently.
+  let viaFallback = false;
 
   // Independent verification before any reply leaves the agent. A second model
   // (OpenAI, via verifyReply) confirms every money amount, name, and claim-of-action
@@ -286,12 +290,18 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
           { now: { long: n.long, today: n.today } },
         );
       }
+      // HONESTY in degraded mode: if this turn ran on the OpenAI backup (Claude
+      // unavailable), say so. The empty-credits incident showed a silent backup
+      // contradicting itself with full confidence, which is worse than an honest
+      // "I am degraded". So the operator always knows when not to fully trust it.
+      if (viaFallback) reply = `${reply}\n\n(Note: I am on backup AI right now, Claude is unavailable, so please double check anything important.)`;
     }
     return { reply, actions: serialize(actions) };
   }
 
   for (let i = 0; i < 6; i++) {
     const resp = await callClaude(system, convo, tools);
+    if (resp?._via === "openai") viaFallback = true;
     if (resp.stop_reason !== "tool_use") {
       const modelText = (resp.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
       // group reply gate: if the model chose silence, send nothing (tools still ran)
