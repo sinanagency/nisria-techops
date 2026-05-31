@@ -10,12 +10,16 @@ import { getMonthlyGoal } from "../lib/org-settings";
 import { getBrief, fallbackPoints } from "../lib/brief";
 import { cleanEmail } from "../lib/email-render";
 import ApprovalCard from "../components/ApprovalCard";
+import { getCurrentUser } from "../lib/auth";
 import { Sparkles, ChevronRight, Bot } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function MissionControl() {
   const db = admin();
+  // Greet whoever actually logged in (Nur or Taona), not a hardcoded name. The
+  // signed identity cookie carries WHO; fall back gracefully if it is absent.
+  const firstName = getCurrentUser()?.name?.split(" ")[0] || "there";
   const [
     { data: don }, { data: approvals }, { data: tasks }, counts, cached, { data: events }, MONTHLY_GOAL,
   ] = await Promise.all([
@@ -67,7 +71,7 @@ export default async function MissionControl() {
     <div className="pagewrap rise">
       <div className="hero">
         <div>
-          <div className="eyebrow">Welcome back, Nur</div>
+          <div className="eyebrow">Welcome back, {firstName}</div>
           <h1>Let's do some good today.</h1>
         </div>
       </div>
