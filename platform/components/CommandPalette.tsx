@@ -18,7 +18,7 @@ const DESTS = [
   { href: "/content", label: "Content", icon: PenLine },
   { href: "/tasks", label: "Tasks", icon: ListChecks },
   { href: "/team", label: "Team", icon: Users },
-  { href: "/newsletter", label: "Newsletter", icon: Send },
+  { href: "/outreach", label: "Outreach", icon: Send },
   { href: "/donors", label: "Donors", icon: HeartHandshake },
   { href: "/donations", label: "Donations", icon: DollarSign },
   { href: "/campaigns", label: "Campaigns", icon: Target },

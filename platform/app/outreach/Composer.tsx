@@ -15,10 +15,12 @@ export default function Composer({
   orgName,
   userEmail,
   counts,
+  cap,
 }: {
   orgName: string;
   userEmail: string;
   counts: RecipientCounts;
+  cap: number;
 }) {
   const [audience, setAudience] = useState<Audience>("all");
   const [subject, setSubject] = useState("");
@@ -35,6 +37,9 @@ export default function Composer({
     return counts.donors + counts.contacts;
   }, [audience, counts]);
 
+  // What this click will actually mail (honest about the per-blast cap).
+  const willSend = Math.min(audienceCount, cap);
+  const overCap = audienceCount > cap;
   const ready = subject.trim().length > 0 && body.trim().length > 0;
 
   function buildForm() {
@@ -47,10 +52,7 @@ export default function Composer({
 
   function handleTest() {
     setTestResult(null);
-    startTest(async () => {
-      const r = await sendTest(null, buildForm());
-      setTestResult(r);
-    });
+    startTest(async () => setTestResult(await sendTest(null, buildForm())));
   }
 
   function handleSend() {
@@ -71,7 +73,8 @@ export default function Composer({
       <header className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">Outreach</h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Send a newsletter or email blast to your donors and contacts. Write once, reach everyone.
+          Send a newsletter or email blast to your donors and contacts. Each greeting personalizes to
+          the recipient's first name. Write once, reach everyone.
         </p>
       </header>
 
@@ -111,8 +114,20 @@ export default function Composer({
               })}
             </div>
             <p className="mt-2 text-xs text-neutral-500">
-              This send will reach <span className="font-semibold text-neutral-700">{audienceCount}</span>{" "}
-              {audienceCount === 1 ? "recipient" : "recipients"} (duplicates removed).
+              {overCap ? (
+                <>
+                  This audience has{" "}
+                  <span className="font-semibold text-neutral-700">{audienceCount}</span> recipients.
+                  This blast sends to the first{" "}
+                  <span className="font-semibold text-neutral-700">{cap}</span> (per-send cap).
+                </>
+              ) : (
+                <>
+                  This send will reach{" "}
+                  <span className="font-semibold text-neutral-700">{willSend}</span>{" "}
+                  {willSend === 1 ? "recipient" : "recipients"} (duplicates removed).
+                </>
+              )}
             </p>
           </div>
 
@@ -124,7 +139,7 @@ export default function Composer({
               onChange={(e) => setSubject(e.target.value)}
               type="text"
               className="mt-1 w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-900"
-              placeholder="Subject line"
+              placeholder="Subject line — you can use {{first_name}}"
             />
           </div>
 
@@ -136,8 +151,12 @@ export default function Composer({
               onChange={(e) => setBody(e.target.value)}
               rows={12}
               className="mt-1 w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-900"
-              placeholder="Write your message... line breaks are preserved."
+              placeholder={"Hi {{first_name}},\n\nWrite your update. {{first_name}} becomes each recipient's first name on send."}
             />
+            <p className="mt-1 text-xs text-neutral-400">
+              Use <code className="rounded bg-neutral-100 px-1 py-0.5">{"{{first_name}}"}</code> anywhere.
+              Line breaks are preserved.
+            </p>
           </div>
 
           {/* Actions */}
@@ -145,16 +164,16 @@ export default function Composer({
             {!confirming ? (
               <button
                 type="button"
-                disabled={!ready || pending}
+                disabled={!ready || pending || willSend === 0}
                 onClick={() => setConfirming(true)}
                 className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:opacity-40"
               >
-                {pending ? "Sending..." : `Send to ${audienceCount}`}
+                {pending ? "Sending..." : `Send to ${willSend}`}
               </button>
             ) : (
               <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
                 <span className="text-sm text-amber-900">
-                  Send to {audienceCount} {audienceCount === 1 ? "person" : "people"}?
+                  Send to {willSend} {willSend === 1 ? "person" : "people"}?
                 </span>
                 <button
                   type="button"
@@ -189,9 +208,7 @@ export default function Composer({
             </p>
           )}
           {result && (
-            <p className={`text-sm ${result.ok ? "text-green-600" : "text-red-600"}`}>
-              {result.message}
-            </p>
+            <p className={`text-sm ${result.ok ? "text-green-600" : "text-red-600"}`}>{result.message}</p>
           )}
         </div>
 
@@ -202,19 +219,23 @@ export default function Composer({
             <div className="border-b border-neutral-100 px-5 py-3">
               <div className="text-xs text-neutral-400">Subject</div>
               <div className="text-sm font-medium text-neutral-900">
-                {subject || <span className="text-neutral-300">No subject yet</span>}
+                {subject ? subject.replace(/\{\{\s*first_name\s*\}\}/gi, "Amina") : (
+                  <span className="text-neutral-300">No subject yet</span>
+                )}
               </div>
             </div>
             <div className="px-5 py-5">
               <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-neutral-800">
-                {body || <span className="text-neutral-300">Your message will appear here.</span>}
+                {body ? body.replace(/\{\{\s*first_name\s*\}\}/gi, "Amina") : (
+                  <span className="text-neutral-300">Your message will appear here.</span>
+                )}
               </div>
               <hr className="my-5 border-neutral-100" />
-              <p className="text-xs text-neutral-400">Sent by {orgName} via Nisria</p>
+              <p className="text-xs text-neutral-400">Sent by {orgName} via Sasa</p>
             </div>
           </div>
           <p className="mt-3 text-xs text-neutral-400">
-            Tip: send a test to {userEmail || "yourself"} before the full blast.
+            Preview shows a sample name. Send a test to {userEmail || "yourself"} before the full blast.
           </p>
         </div>
       </div>

@@ -51,7 +51,7 @@ const MENU = [
     { href: "/filing", label: "Filing", icon: "file" },
     { href: "/content", label: "Content", icon: "pen" },
     { href: "/library", label: "Library", icon: "folder" },
-    { href: "/newsletter", label: "Newsletter", icon: "send" },
+    { href: "/outreach", label: "Outreach", icon: "send" },
     { href: "/inventory", label: "Inventory", icon: "box" },
   ]},
   { group: "People", short: "People", items: [

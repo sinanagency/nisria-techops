@@ -1,6 +1,6 @@
-import { getOrgContext } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { getRecipientCounts } from "./actions";
+import { getOrgContext } from "../../lib/auth";
+import { getRecipientCounts, SEND_CAP } from "./actions";
 import Composer from "./Composer";
 
 export const dynamic = "force-dynamic";
@@ -14,8 +14,9 @@ export default async function OutreachPage() {
   return (
     <Composer
       orgName={ctx.orgName}
-      userEmail={ctx.userEmail || ""}
+      userEmail={ctx.email || ""}
       counts={counts}
+      cap={SEND_CAP}
     />
   );
 }

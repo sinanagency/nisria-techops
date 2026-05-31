@@ -47,7 +47,7 @@ export const TOUR_STOPS: TourStop[] = [
   {
     route: "/content",
     here: "Content and story",
-    say: "Content is where we tell the story. Draft a post or let me write one, and it queues for Instagram and Facebook. Your photos and documents live next door in the Library, and the Newsletter writes itself from what has been happening.",
+    say: "Content is where we tell the story. Draft a post or let me write one, and it queues for Instagram and Facebook. Your photos and documents live next door in the Library, and Outreach sends a newsletter or email blast to your donors and contacts.",
   },
   {
     route: "/team",

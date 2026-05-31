@@ -27,7 +27,7 @@ const APPS: App[] = [
   { label: "Filing", href: "/filing", icon: FolderOpen, tone: "teal" },
   { label: "Content", href: "/content", icon: PenLine, tone: "gold" },
   { label: "Library", href: "/library", icon: FolderOpen, tone: "peri" },
-  { label: "Newsletter", href: "/newsletter", icon: Send, tone: "teal" },
+  { label: "Outreach", href: "/outreach", icon: Send, tone: "teal" },
   { label: "Inventory", href: "/inventory", icon: Package, tone: "gold" },
   { label: "Beneficiaries", href: "/beneficiaries", icon: Heart, tone: "teal" },
   { label: "Team", href: "/team", icon: Users, tone: "peri" },
