@@ -47,6 +47,15 @@ const COLOR: Record<string, string> = {
 
 const isAdmin = (tier: "admin" | "team") => tier === "admin";
 
+// Doctrine (hard rule): no em-dashes / en-dashes in any output, commas / colons
+// / periods only. Titles here come STRAIGHT from source rows (a grant program
+// name, an imported task), so a dash can slip onto the grid. Strip it once at
+// this single source, so the month grid, the home "Coming up" widget, and every
+// Sasa calendar answer all read clean. Cheap deterministic pass, not the heavy
+// humanize() (which fills placeholders / org facts the calendar never needs).
+const noDash = (s: string): string =>
+  String(s || "").replace(/\s*[—–]\s*/g, ", ").replace(/\s+-{2,}\s+/g, ", ").trim();
+
 // Grant statuses still "live" on the calendar (a deadline only matters until the
 // thing is in/decided). Submitted/won/lost/rejected drop off.
 const OPEN_GRANT = new Set(["researching", "drafting", "review"]);
@@ -71,7 +80,7 @@ export async function getCalendar({ from, to, tier = "admin" }: Range & { tier?:
   ]);
 
   for (const t of (tasksR.data || []) as any[]) {
-    out.push({ id: `task:${t.id}`, source: "task", type: "Task", title: t.title, date: t.due_on, allDay: true,
+    out.push({ id: `task:${t.id}`, source: "task", type: "Task", title: noDash(t.title), date: t.due_on, allDay: true,
       color: COLOR.task, link: "/tasks", editable: true, meta: { priority: t.priority, assignee: t.assignee?.name || null } });
   }
 
@@ -81,7 +90,7 @@ export async function getCalendar({ from, to, tier = "admin" }: Range & { tier?:
     // it read-only — they SEE that a payment day exists, not what it is worth.
     const ev: CalEvent = {
       id: `payment:${p.id}`, source: "payment", type: label,
-      title: admin_ ? `${label}${p.payee ? ` · ${p.payee}` : ""}` : `${label} day`,
+      title: noDash(admin_ ? `${label}${p.payee ? ` · ${p.payee}` : ""}` : `${label} day`),
       date: p.due_on, allDay: true, color: COLOR.payment, link: admin_ ? "/finance" : undefined,
       editable: admin_, meta: { status: p.status },
     };
@@ -92,7 +101,7 @@ export async function getCalendar({ from, to, tier = "admin" }: Range & { tier?:
   for (const g of (grantsR.data || []) as any[]) {
     if (!OPEN_GRANT.has(g.status)) continue;
     out.push({ id: `grant:${g.id}`, source: "grant", type: "Grant deadline",
-      title: `${g.funder}${g.program ? ` — ${g.program}` : ""}`, date: g.deadline, allDay: true,
+      title: noDash(g.program ? `${g.funder}: ${g.program}` : g.funder), date: g.deadline, allDay: true,
       color: COLOR.grant, link: admin_ ? "/grants" : undefined, editable: admin_, meta: { status: g.status } });
   }
 
@@ -100,7 +109,7 @@ export async function getCalendar({ from, to, tier = "admin" }: Range & { tier?:
     const d = String(c.scheduled_for).slice(0, 10);
     const time = String(c.scheduled_for).slice(11, 16);
     out.push({ id: `content:${c.id}`, source: "content", type: "Content",
-      title: c.title || (c.channels?.length ? c.channels.join(", ") : "Scheduled post"),
+      title: noDash(c.title || (c.channels?.length ? c.channels.join(", ") : "Scheduled post")),
       date: d, time: time && time !== "00:00" ? time : undefined, allDay: !time || time === "00:00",
       color: COLOR.content, link: "/content", editable: true, meta: { status: c.status } });
   }
@@ -109,7 +118,7 @@ export async function getCalendar({ from, to, tier = "admin" }: Range & { tier?:
     // Native events: team may freely manage their OWN (manual/ai), but a native
     // row Sasa minted from a finance/grant context is admin-only by source.
     const editable = admin_ || e.source !== "gcal";
-    out.push({ id: `event:${e.id}`, source: "event", type: e.kind || "event", title: e.title,
+    out.push({ id: `event:${e.id}`, source: "event", type: e.kind || "event", title: noDash(e.title),
       date: e.starts_on, end: e.ends_on || undefined, time: e.start_time ? String(e.start_time).slice(0, 5) : undefined,
       allDay: !!e.all_day, color: COLOR.event, editable, meta: { location: e.location, brand: e.brand, gcal: !!e.gcal_event_id, native: true } });
   }
@@ -125,12 +134,12 @@ export async function getCalendar({ from, to, tier = "admin" }: Range & { tier?:
     ]);
     for (const m of meetings) {
       if (mirrored.has(m.id)) continue; // already shown as a native row
-      out.push({ id: `gcal:${m.id}`, source: "gcal", type: "Meeting", title: m.title, date: m.starts_on,
+      out.push({ id: `gcal:${m.id}`, source: "gcal", type: "Meeting", title: noDash(m.title), date: m.starts_on,
         end: m.ends_on, time: m.start_time, allDay: m.all_day, color: COLOR.gcal, link: m.htmlLink,
         editable: admin_, meta: { location: m.location, google: true } });
     }
     for (const [date, name] of Object.entries(holidays)) {
-      out.push({ id: `holiday:${date}`, source: "holiday", type: "Holiday", title: name, date, allDay: true,
+      out.push({ id: `holiday:${date}`, source: "holiday", type: "Holiday", title: noDash(name), date, allDay: true,
         color: COLOR.holiday, editable: false, meta: { kenya: true } });
     }
   } catch {

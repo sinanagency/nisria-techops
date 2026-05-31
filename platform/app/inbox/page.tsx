@@ -6,7 +6,9 @@ import { getCurrentUser } from "../../lib/auth";
 import { ownerContactIds } from "../../lib/privacy";
 import { cleanEmail, snippet, isIndividual } from "../../lib/email-render";
 import { sendReply } from "./actions";
-import { decideApproval } from "../approvals/actions";
+import { decideApprovalAction } from "../approvals/actions";
+import ActionForm from "../../components/ActionForm";
+import { SubmitButton } from "../../components/SubmitButton";
 import AiComposer from "../../components/AiComposer";
 import { Sparkles, Send, Mail, MessageCircle, Hash } from "lucide-react";
 
@@ -141,8 +143,9 @@ export default async function Inbox({ searchParams }: { searchParams: { c?: stri
               </div>
 
               {draft && (
-                <form action={decideApproval} className="card" style={{ padding: 16, background: "var(--peri-50)", border: "1px solid var(--peri-100)", marginBottom: 14 }}>
+                <ActionForm action={decideApprovalAction} className="card" style={{ padding: 16, background: "var(--peri-50)", border: "1px solid var(--peri-100)", marginBottom: 14 }}>
                   <input type="hidden" name="id" value={draft.id} />
+                  <input type="hidden" name="confirm_label" value={draft.proposed?.to || ""} />
                   <div className="flex" style={{ marginBottom: 8 }}>
                     <Sparkles size={15} color="var(--peri-700)" />
                     <span style={{ fontWeight: 600, fontSize: 13, color: "var(--peri-700)" }}>Sasa drafted a reply</span>
@@ -151,10 +154,10 @@ export default async function Inbox({ searchParams }: { searchParams: { c?: stri
                   <input name="subject" defaultValue={draft.proposed?.subject || ""} style={{ marginBottom: 8, fontSize: 13 }} />
                   <textarea name="body" defaultValue={draft.proposed?.body || ""} rows={6} style={{ fontSize: 13, lineHeight: 1.6 }} />
                   <div className="flex" style={{ marginTop: 10 }}>
-                    <button className="btn sm teal" name="decision" value="approve" type="submit"><Send size={13} /> Approve &amp; send</button>
-                    <button className="btn sm ghost" name="decision" value="reject" type="submit" formNoValidate>Decline</button>
+                    <SubmitButton className="btn sm teal" name="decision" value="approve" pendingLabel="Sending…"><Send size={13} /> Approve &amp; send</SubmitButton>
+                    <SubmitButton className="btn sm ghost" name="decision" value="reject" formNoValidate pendingLabel="Declining…">Decline</SubmitButton>
                   </div>
-                </form>
+                </ActionForm>
               )}
 
               {!draft && individual && toAddr && (

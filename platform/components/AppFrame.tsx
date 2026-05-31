@@ -13,6 +13,7 @@ import FocusSheetHost from "./FocusSheet";
 import SasaTour from "./SasaTour";
 import { logout } from "../app/login/actions";
 import { TabsProvider, useTabs } from "./tabs-context";
+import ToastProvider from "./Toast";
 import {
   Home, Inbox, PenLine, ListChecks, Users, Send, FolderOpen, Bot, Activity,
   HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, File,
@@ -201,10 +202,15 @@ function Chrome({ children, user }: { children: React.ReactNode; user: NavUser }
 
 export default function AppFrame({ children, user = null }: { children: React.ReactNode; user?: NavUser }) {
   const path = usePathname();
-  if (path === "/login") return <>{children}</>;
+  // ToastProvider wraps everything (including /login) so any action anywhere can
+  // confirm itself (Law 6). It lives above the routed content, so it survives
+  // the route refresh that clears a resolved card.
+  if (path === "/login") return <ToastProvider>{children}</ToastProvider>;
   return (
-    <TabsProvider>
-      <Chrome user={user}>{children}</Chrome>
-    </TabsProvider>
+    <ToastProvider>
+      <TabsProvider>
+        <Chrome user={user}>{children}</Chrome>
+      </TabsProvider>
+    </ToastProvider>
   );
 }

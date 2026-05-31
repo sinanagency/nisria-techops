@@ -12,15 +12,34 @@ export function SubmitButton({
   pendingLabel,
   children,
   style,
+  name,
+  value,
+  formNoValidate,
 }: {
   className?: string;
   pendingLabel?: string;
   children: React.ReactNode;
   style?: React.CSSProperties;
+  // name/value let several SubmitButtons share one form (e.g. Approve vs
+  // Decline, distinguished by decision=approve|reject). formNoValidate skips
+  // HTML validation for destructive/secondary actions (Decline shouldn't be
+  // blocked by an empty subject field).
+  name?: string;
+  value?: string;
+  formNoValidate?: boolean;
 }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className={className} disabled={pending} aria-busy={pending} style={style}>
+    <button
+      type="submit"
+      name={name}
+      value={value}
+      formNoValidate={formNoValidate}
+      className={className}
+      disabled={pending}
+      aria-busy={pending}
+      style={style}
+    >
       {pending ? (
         <>
           <Loader2 size={14} className="spin" /> {pendingLabel || "Working…"}

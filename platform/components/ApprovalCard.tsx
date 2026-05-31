@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { Badge } from "./ui";
 import { useTabs, type OpenSheet, type Sibling } from "./tabs-context";
-import { decideApproval } from "../app/approvals/actions";
+import { decideApprovalAction } from "../app/approvals/actions";
 import { stripDashes } from "../lib/humanize";
 import AttachPicker from "./AttachPicker";
+import ActionForm from "./ActionForm";
+import { SubmitButton } from "./SubmitButton";
 import { Send, Sparkles, Maximize2 } from "lucide-react";
 
 function ago(iso: string) {
@@ -53,9 +55,10 @@ function ReplyEditor({ a, original }: { a: any; original?: { subject?: string; b
         </div>
       )}
       {editable ? (
-        <form action={decideApproval}>
+        <ActionForm action={decideApprovalAction}>
           <input type="hidden" name="id" value={a.id} />
           <input type="hidden" name="attach_refs" value={attachRefs.join(",")} />
+          <input type="hidden" name="confirm_label" value={a.proposed?.to || ""} />
           <div className="faint" style={{ fontSize: 12.5, marginBottom: 6 }}>To {a.proposed?.to || "—"}</div>
           {/* Which account this reply sends from (P14/168). The branded signature
               for that account is appended automatically on send. */}
@@ -65,21 +68,21 @@ function ReplyEditor({ a, original }: { a: any; original?: { subject?: string; b
           <input name="subject" value={subject} onChange={(e) => setSubject(e.target.value)} style={{ marginBottom: 10, fontSize: 14 }} />
           <textarea name="body" value={body} onChange={(e) => setBody(e.target.value)} rows={16} style={{ fontSize: 14, lineHeight: 1.6 }} />
           <div className="flex wrap" style={{ marginTop: 10 }}>
-            <button className="btn sm teal" name="decision" value="approve" type="submit"><Send size={13} /> Approve &amp; send</button>
+            <SubmitButton className="btn sm teal" name="decision" value="approve" pendingLabel="Sending…"><Send size={13} /> Approve &amp; send</SubmitButton>
             <button className="btn sm ghost" type="button" onClick={improve} disabled={busy}><Sparkles size={13} /> {busy ? "Improving…" : "Improve with AI"}</button>
             <AttachPicker selected={attachRefs} onChange={setAttachRefs} size="sm" />
-            <button className="btn sm ghost" name="decision" value="reject" type="submit" formNoValidate>Decline</button>
+            <SubmitButton className="btn sm ghost" name="decision" value="reject" formNoValidate pendingLabel="Declining…">Decline</SubmitButton>
           </div>
-        </form>
+        </ActionForm>
       ) : (
-        <form action={decideApproval}>
+        <ActionForm action={decideApprovalAction}>
           <input type="hidden" name="id" value={a.id} />
           {a.summary && <div style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.6, marginBottom: 12 }}>{a.summary}</div>}
           <div className="flex" style={{ marginTop: 4 }}>
-            <button className="btn sm teal" name="decision" value="approve" type="submit">Approve</button>
-            <button className="btn sm ghost" name="decision" value="reject" type="submit">Decline</button>
+            <SubmitButton className="btn sm teal" name="decision" value="approve" pendingLabel="Approving…">Approve</SubmitButton>
+            <SubmitButton className="btn sm ghost" name="decision" value="reject" pendingLabel="Declining…">Decline</SubmitButton>
           </div>
-        </form>
+        </ActionForm>
       )}
     </>
   );
@@ -151,8 +154,9 @@ export default function ApprovalCard({
     // action (Approve & send / Approve) + the expand affordance — NO Attach /
     // Decline clutter. The full action set lives inside the Focus Tab the expand
     // button opens (truly centered, blurred backdrop, prev/next, minimizable).
-    <form action={decideApproval} className="card" style={{ padding: 14, boxShadow: "none", background: "var(--surface-2)", height: "fit-content" }}>
+    <ActionForm action={decideApprovalAction} className="card" style={{ padding: 14, boxShadow: "none", background: "var(--surface-2)", height: "fit-content" }}>
       <input type="hidden" name="id" value={a.id} />
+      <input type="hidden" name="confirm_label" value={a.proposed?.to || ""} />
       <div className="between" style={{ marginBottom: 8 }}>
         <div className="flex">
           <span className="strong" style={{ fontSize: 13.5 }}>{a.title}</span>
@@ -173,7 +177,7 @@ export default function ApprovalCard({
           </div>
           {/* compact: primary only + open-to-edit. Editing/Improve/Attach/Decline live in the Focus Tab. */}
           <div className="flex wrap">
-            <button className="btn sm teal" name="decision" value="approve" type="submit"><Send size={13} /> Approve &amp; send</button>
+            <SubmitButton className="btn sm teal" name="decision" value="approve" pendingLabel="Sending…"><Send size={13} /> Approve &amp; send</SubmitButton>
             <button type="button" className="btn sm ghost" onClick={expand}><Maximize2 size={13} /> Open &amp; edit</button>
           </div>
         </>
@@ -184,11 +188,11 @@ export default function ApprovalCard({
           )}
           {/* compact: approve only. Decline lives in the Focus Tab. */}
           <div className="flex wrap">
-            <button className="btn sm teal" name="decision" value="approve" type="submit">Approve</button>
+            <SubmitButton className="btn sm teal" name="decision" value="approve" pendingLabel="Approving…">Approve</SubmitButton>
             <button type="button" className="btn sm ghost" onClick={expand}><Maximize2 size={13} /> Open</button>
           </div>
         </>
       )}
-    </form>
+    </ActionForm>
   );
 }
