@@ -15,6 +15,39 @@ export { SYSTEM_HUMAN, withHumanSystem, humanize, stripDashes } from "./humanize
 export const NO_DASHES =
   "Never use em-dashes (—) or en-dashes (–). Use a comma, period, or colon instead. This is a hard brand rule.";
 
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
+
+// Single hardened POST to the Messages API. A 429 (rate limit) or 529 (overloaded)
+// is transient, so we respect the retry-after header (or back off exponentially)
+// and retry: a momentary input-tokens-per-minute spike becomes a short pause, not
+// a thrown error. Any other non-2xx is a real failure, surfaced immediately. Every
+// Claude call in this file routes through here, so the whole app (assistant,
+// captioning, media reads, JSON intakes) shares one resilient path against the limit.
+async function anthropicPOST(payload: Record<string, any>): Promise<any> {
+  const body = JSON.stringify(payload);
+  let lastErr = "Claude request failed";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const r = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: { "x-api-key": KEY(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body,
+      cache: "no-store",
+    });
+    if (r.ok) return await r.json();
+    const j = await r.json().catch(() => ({} as any));
+    lastErr = j?.error?.message || `Claude request failed (${r.status})`;
+    if (r.status !== 429 && r.status !== 529) throw new Error(lastErr);
+    if (attempt === 3) break;
+    const retryAfter = Number(r.headers.get("retry-after"));
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(retryAfter * 1000, 30000)
+      : Math.min(1500 * 2 ** attempt, 12000); // 1.5s, 3s, 6s, 12s
+    await sleep(waitMs);
+  }
+  throw new Error(lastErr);
+}
+
 type Msg = { role: "user" | "assistant"; content: string };
 
 export async function askClaude(opts: {
@@ -22,23 +55,12 @@ export async function askClaude(opts: {
   messages: Msg[];
   maxTokens?: number;
 }): Promise<string> {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": KEY(),
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: opts.maxTokens ?? 1024,
-      system: opts.system,
-      messages: opts.messages,
-    }),
-    cache: "no-store",
+  const j = await anthropicPOST({
+    model: MODEL,
+    max_tokens: opts.maxTokens ?? 1024,
+    system: opts.system,
+    messages: opts.messages,
   });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j?.error?.message || "Claude request failed");
   return j?.content?.[0]?.text ?? "";
 }
 
@@ -48,20 +70,13 @@ export const claude = (system: string, user: string, maxTokens = 1024) =>
 
 // Vision: caption an image for the asset library (also flags possible beneficiary photos).
 export async function captionImage(base64: string, mediaType: string): Promise<string> {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": KEY(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({
-      model: MODEL, max_tokens: 220,
-      messages: [{ role: "user", content: [
-        { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
-        { type: "text", text: "In 1-2 sentences, describe this image for a nonprofit's asset library: what it shows, the mood, and any visible text or logos. If it appears to show identifiable children or beneficiaries, start with 'BENEFICIARY:'." },
-      ] }],
-    }),
-    cache: "no-store",
+  const j = await anthropicPOST({
+    model: MODEL, max_tokens: 220,
+    messages: [{ role: "user", content: [
+      { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+      { type: "text", text: "In 1-2 sentences, describe this image for a nonprofit's asset library: what it shows, the mood, and any visible text or logos. If it appears to show identifiable children or beneficiaries, start with 'BENEFICIARY:'." },
+    ] }],
   });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j?.error?.message || "vision failed");
   return j?.content?.[0]?.text ?? "";
 }
 
@@ -80,14 +95,7 @@ export async function askClaudeVision(opts: {
     content.push({ type: "image", source: { type: "base64", media_type: img.media, data: img.data } });
   }
   content.push({ type: "text", text: opts.text });
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": KEY(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model: MODEL, max_tokens: opts.maxTokens ?? 1500, system: opts.system, messages: [{ role: "user", content }] }),
-    cache: "no-store",
-  });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j?.error?.message || "Claude vision request failed");
+  const j = await anthropicPOST({ model: MODEL, max_tokens: opts.maxTokens ?? 1500, system: opts.system, messages: [{ role: "user", content }] });
   return j?.content?.[0]?.text ?? "";
 }
 
@@ -105,14 +113,7 @@ export async function readMedia(base64: string, mime: string, prompt: string, ma
   } else {
     return "";
   }
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": KEY(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, messages: [{ role: "user", content: [block, { type: "text", text: prompt }] }] }),
-    cache: "no-store",
-  });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j?.error?.message || "media read failed");
+  const j = await anthropicPOST({ model: MODEL, max_tokens: maxTokens, messages: [{ role: "user", content: [block, { type: "text", text: prompt }] }] });
   return j?.content?.[0]?.text ?? "";
 }
 

@@ -41,16 +41,51 @@ const carriesMoney = (m: { title?: string | null; content?: string | null }) => 
   return FINANCE_GROUNDING.test(t) || MONEY_FIGURE.test(t);
 };
 
+const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
+
+// One model call, hardened against the input-tokens-per-minute (ITPM) rate limit.
+//
+// PROMPT CACHING. The system prompt and the tools schema are byte-identical on
+// every call of a turn, yet the agent loops up to 6 times (tool use), re-sending
+// that ~4-6k-token prefix each time. That repetition is the single biggest source
+// of ITPM pressure (the 429 the bot kept surfacing). Marking the prefix with
+// cache_control means iterations 2..n READ it from cache (counted at a fraction)
+// instead of re-submitting it as fresh input. One breakpoint on the last tool
+// caches the whole tools array; one on the system block caches the system text.
+// Cache lives ~5 min, so back-to-back turns share it too. Under the 1024-token
+// minimum the breakpoint is ignored gracefully (no error), so this is no-regret.
+//
+// BACKOFF. A 429 (rate limit) or 529 (overloaded) is transient. We respect the
+// retry-after header (or back off exponentially) and retry, so a momentary spike
+// becomes a short pause, not a visible error. Any other non-2xx is a real failure
+// and is surfaced immediately (which the worker turns into "tripped me up").
 async function callClaude(system: string, messages: any[], tools: any[]) {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": KEY(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model: MODEL, max_tokens: 1400, system, tools, messages }),
-    cache: "no-store",
-  });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j?.error?.message || "Claude failed");
-  return j;
+  const cachedTools = Array.isArray(tools) && tools.length
+    ? tools.map((t, i) => (i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t))
+    : tools;
+  const cachedSystem = [{ type: "text", text: system, cache_control: { type: "ephemeral" } }];
+  const body = JSON.stringify({ model: MODEL, max_tokens: 1400, system: cachedSystem, tools: cachedTools, messages });
+
+  let lastErr = "Claude failed";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": KEY(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body,
+      cache: "no-store",
+    });
+    if (r.ok) return await r.json();
+    const j = await r.json().catch(() => ({} as any));
+    lastErr = j?.error?.message || `Claude failed (${r.status})`;
+    if (r.status !== 429 && r.status !== 529) throw new Error(lastErr);
+    if (attempt === 3) break;
+    const retryAfter = Number(r.headers.get("retry-after"));
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(retryAfter * 1000, 30000)
+      : Math.min(1500 * 2 ** attempt, 12000); // 1.5s, 3s, 6s, 12s
+    await sleep(waitMs);
+  }
+  throw new Error(lastErr);
 }
 
 export type SasaTurn = { role: "user" | "assistant"; content: string };
@@ -153,6 +188,8 @@ ${brain}
 
 Hard limits: this is a group, so you CANNOT share donor information or any financial or donation figures here. If money, donations, donors, or grants come up, do not post figures; if it needs action, flag it for Nur silently with a tool and, only if asked, say you have passed it to Nur. Any reply you do make is ONE short, warm sentence. Do not list tool names. Do not reveal you are an AI.
 
+Never break character. NEVER tell the group you cannot open, view, read, or access a link, photo, video, or file, and NEVER ask the team to describe or do something so that you can act. You are the team's quiet assistant, not a limited tool. When something arrives that you cannot act on (a shared link, an image, a forwarded post), you still CAPTURE it by staying ${GROUP_SILENT}, the platform keeps the record either way. If it clearly matters and you are genuinely unsure whether it needs action, flag it for Nur with a tool rather than speaking. Your only outward moves are three: stay ${GROUP_SILENT}, give one brief warm confirmation, or flag Nur with a tool. Apologising for not being able to open something is never one of them.
+
 Right now: ${snapshot}`);
 }
 
@@ -161,7 +198,7 @@ Right now: ${snapshot}`);
 // the voice for the WhatsApp caller (omit for the full-admin web console).
 // surface 'group' puts Sasa inside a team group: team-tier tools, a reply gate
 // (returns empty reply when it should stay silent), and the group system prompt.
-export async function runSasa(opts: { history?: SasaTurn[]; command: string; operatorName?: string; operatorRole?: "admin" | "team"; operatorRank?: "owner" | "founder" | "member" | null; surface?: "dm" | "group"; groupName?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string }): Promise<SasaResult> {
+export async function runSasa(opts: { history?: SasaTurn[]; command: string; operatorName?: string; operatorRole?: "admin" | "team"; operatorRank?: "owner" | "founder" | "member" | null; surface?: "dm" | "group"; groupName?: string; speakerPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string }): Promise<SasaResult> {
   const db = admin();
   const inGroup = opts.surface === "group";
   // a group is team-tier regardless of who posts: no donor/finance in a group
@@ -225,7 +262,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
     const results = [];
     for (const block of resp.content) {
       if (block.type === "tool_use") {
-        const out = await runSmartTool(block.name, block.input || {}, { sourceGroup: inGroup ? opts.groupName : undefined, proofPath: opts.proofPath, confirmWrites: opts.confirmWrites, contactId: opts.contactId, sourceMessageId: opts.sourceMessageId });
+        const out = await runSmartTool(block.name, block.input || {}, { sourceGroup: inGroup ? opts.groupName : undefined, senderPhone: inGroup ? opts.speakerPhone : undefined, proofPath: opts.proofPath, confirmWrites: opts.confirmWrites, contactId: opts.contactId, sourceMessageId: opts.sourceMessageId });
         if (!isReadTool(block.name)) actions.push(out as ToolResult);
         toolRuns.push({ name: block.name, input: block.input, result: out });
         results.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(out) });
