@@ -177,15 +177,23 @@ CREATE TABLE public.beneficiaries (
   "contact_phone" text,
   "age_at_intake" integer,
   "photo_source" text,
+  -- intake pipeline: NULL means an accepted beneficiary; non-null means a case
+  -- (a potential beneficiary still being triaged). See migrations/0002_cases_intake.sql.
+  "intake_stage" text,
+  "referred_by" text,
+  "case_channel" text,
+  "triage_notes" text,
   CONSTRAINT "beneficiaries_pkey" PRIMARY KEY (id),
   CONSTRAINT "beneficiaries_ref_code_key" UNIQUE (ref_code),
   CONSTRAINT "beneficiaries_brand_id_fkey" FOREIGN KEY (brand_id) REFERENCES brands(id),
   CONSTRAINT "beneficiaries_photo_asset_fk" FOREIGN KEY (photo_asset_id) REFERENCES assets(id) ON DELETE SET NULL,
   CONSTRAINT "beneficiaries_program_check" CHECK (((program IS NULL) OR (program = ANY (ARRAY['safe_house'::text, 'education'::text, 'rescue'::text, 'nutrition'::text, 'other'::text])))),
-  CONSTRAINT "beneficiaries_status_check" CHECK ((status = ANY (ARRAY['active'::text, 'graduated'::text, 'transitioned'::text, 'paused'::text, 'exited'::text, 'inactive'::text])))
+  CONSTRAINT "beneficiaries_status_check" CHECK ((status = ANY (ARRAY['active'::text, 'graduated'::text, 'transitioned'::text, 'paused'::text, 'exited'::text, 'inactive'::text]))),
+  CONSTRAINT "beneficiaries_intake_stage_check" CHECK (((intake_stage IS NULL) OR (intake_stage = ANY (ARRAY['prospect'::text, 'under_review'::text, 'pending_funds'::text, 'declined'::text]))))
 );
 CREATE INDEX idx_beneficiaries_program ON public.beneficiaries USING btree (program);
 CREATE INDEX idx_beneficiaries_status ON public.beneficiaries USING btree (status);
+CREATE INDEX idx_beneficiaries_intake_stage ON public.beneficiaries USING btree (intake_stage);
 
 -- ===== table: brain_entries =====
 CREATE TABLE public.brain_entries (

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Home, Inbox, HeartHandshake, DollarSign, Target, Award, FileText, ShieldCheck,
   Sparkles, FolderOpen, PenLine, Send, Package, Heart, Users, ListChecks,
-  Wand2, Bot, Settings, Search,
+  Wand2, Bot, Settings, Search, LifeBuoy,
 } from "lucide-react";
 
 // Launchpad: one flat, alphabetical, searchable grid of every place in the command
@@ -30,6 +30,7 @@ const APPS: App[] = [
   { label: "Outreach", href: "/outreach", icon: Send, tone: "teal" },
   { label: "Inventory", href: "/inventory", icon: Package, tone: "gold" },
   { label: "Beneficiaries", href: "/beneficiaries", icon: Heart, tone: "teal" },
+  { label: "Cases", href: "/cases", icon: LifeBuoy, tone: "teal" },
   { label: "Team", href: "/team", icon: Users, tone: "peri" },
   { label: "Tasks", href: "/tasks", icon: ListChecks, tone: "gold" },
   { label: "Smart Mode", href: "/smart", icon: Wand2, tone: "teal" },

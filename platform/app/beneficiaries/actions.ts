@@ -287,13 +287,14 @@ export async function extractBeneficiaryFromText(text: string): Promise<Benefici
   return { ok: true, lowConfidence: !out.profile.full_name, profile: out.profile, raw: out.raw };
 }
 
-// ACTION: human-confirmed profile -> write a beneficiary row. The ONLY intake
-// path that touches the DB. Gated by an explicit click. Re-validates every field
-// server-side. PII stays private: consent_public is hard-set false here, so a new
-// record is NEVER donor-facing until Nur publishes it via the consent toggle.
-export async function confirmBeneficiary(fd: FormData) {
+// Shared parse for the gated confirm step. Turns the reviewed form into the common
+// beneficiary columns and stages the photo asset. Used by BOTH confirmBeneficiary
+// (an accepted child) and confirmCase (a potential beneficiary still in intake) so
+// the PII handling lives in exactly one place. Returns null if there is no name.
+type ParsedIntake = { full_name: string; source: string; columns: Record<string, any> };
+async function parseIntakeForm(fd: FormData, db: any): Promise<ParsedIntake | null> {
   const full_name = String(fd.get("full_name") || "").trim();
-  if (!full_name) return;
+  if (!full_name) return null;
 
   let program = String(fd.get("program") || "other").toLowerCase();
   if (!PROGRAMS.includes(program)) program = "other";
@@ -329,8 +330,6 @@ export async function confirmBeneficiary(fd: FormData) {
   // fold school-fees into the private case notes so nothing is dropped
   const story_private = [story, schoolFees ? `School fees: ${schoolFees}` : ""].filter(Boolean).join("\n\n") || null;
 
-  const db = admin();
-
   // If a photo was staged, register it as an assets row (consent_required) so the
   // 360 view can resolve a signed URL via photo_asset_id. PII bucket stays private.
   let photo_asset_id: string | null = null;
@@ -351,12 +350,10 @@ export async function confirmBeneficiary(fd: FormData) {
     photo_asset_id = asset?.id ?? null;
   }
 
-  const ref_code = `NB-${Date.now().toString(36).toUpperCase()}`;
-
-  const { data: row } = await db
-    .from("beneficiaries")
-    .insert({
-      ref_code,
+  return {
+    full_name,
+    source,
+    columns: {
       full_name,
       program,
       gender,
@@ -368,19 +365,35 @@ export async function confirmBeneficiary(fd: FormData) {
       needs,
       tags,
       photo_asset_id,
-      status: "active",
       consent_public: false, // PII: never donor-facing until Nur consents
       intake_date: new Date().toISOString().slice(0, 10),
-    })
+    },
+  };
+}
+
+// ACTION: human-confirmed profile -> write a beneficiary row. The ONLY intake
+// path that touches the DB. Gated by an explicit click. Re-validates every field
+// server-side. PII stays private: consent_public is hard-set false here, so a new
+// record is NEVER donor-facing until Nur publishes it via the consent toggle.
+export async function confirmBeneficiary(fd: FormData) {
+  const db = admin();
+  const parsed = await parseIntakeForm(fd, db);
+  if (!parsed) return;
+
+  const ref_code = `NB-${Date.now().toString(36).toUpperCase()}`;
+  const { data: row } = await db
+    .from("beneficiaries")
+    .insert({ ref_code, ...parsed.columns, status: "active" })
     .select()
     .single();
 
-  // learn the intake (private case context) so agents have grounding — no PII to
+  // learn the intake (private case context) so agents have grounding. No PII to
   // the public view, this stays in the service-role brain only.
+  const c = parsed.columns;
   await remember({
     kind: "org_fact",
     title: `Beneficiary intake: ${ref_code}`,
-    content: `A child entered the ${program} program${gender ? `, ${gender}` : ""}${region ? `, from ${region}` : ""}.${needs ? ` Needs: ${needs}.` : ""}`,
+    content: `A child entered the ${c.program} program${c.gender ? `, ${c.gender}` : ""}${c.region ? `, from ${c.region}` : ""}.${c.needs ? ` Needs: ${c.needs}.` : ""}`,
     source_type: "beneficiary",
     source_id: row?.id,
   });
@@ -391,10 +404,55 @@ export async function confirmBeneficiary(fd: FormData) {
     actor: "Nur",
     subject_type: "beneficiary",
     subject_id: row?.id ?? null,
-    payload: { ref: ref_code, program, intake: source, ai: true, photo: !!photo_asset_id },
+    payload: { ref: ref_code, program: c.program, intake: parsed.source, ai: true, photo: !!c.photo_asset_id },
   });
 
   revalidatePath("/beneficiaries");
+}
+
+// ACTION: human-confirmed CASE -> write a potential beneficiary still in intake.
+// Same gated, server-validated path as confirmBeneficiary, but the row lands with
+// intake_stage set and status='inactive' so it surfaces only on /cases and is
+// excluded from every "active beneficiary" count and the donor-facing view.
+// Deliberately does NOT fire remember(): a not-yet-accepted person's PII must not
+// enter the broadly-recallable brain until Nur approves them.
+const CASE_STAGES = ["prospect", "under_review", "pending_funds", "declined"];
+export async function confirmCase(fd: FormData) {
+  const db = admin();
+  const parsed = await parseIntakeForm(fd, db);
+  if (!parsed) return;
+
+  let intake_stage = String(fd.get("intake_stage") || "under_review").toLowerCase();
+  if (!CASE_STAGES.includes(intake_stage)) intake_stage = "under_review";
+  const referred_by = String(fd.get("referred_by") || "").trim() || null;
+  const case_channel = String(fd.get("case_channel") || "").trim() || null;
+  const triage_notes = String(fd.get("triage_notes") || "").trim() || null;
+
+  const ref_code = `NC-${Date.now().toString(36).toUpperCase()}`;
+  const { data: row } = await db
+    .from("beneficiaries")
+    .insert({
+      ref_code,
+      ...parsed.columns,
+      status: "inactive",
+      intake_stage,
+      referred_by,
+      case_channel,
+      triage_notes,
+    })
+    .select()
+    .single();
+
+  await emit({
+    type: "beneficiary.case_logged",
+    source: "cases",
+    actor: "Nur",
+    subject_type: "beneficiary",
+    subject_id: row?.id ?? null,
+    payload: { ref: ref_code, stage: intake_stage, channel: case_channel, intake: parsed.source, ai: true },
+  });
+
+  revalidatePath("/cases");
 }
 
 // Move a beneficiary through the program lifecycle from the 360 view.

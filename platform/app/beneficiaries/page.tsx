@@ -43,9 +43,12 @@ export default async function Beneficiaries({
   if (photo) active.photo = photo;
 
   const db = admin();
+  // Accepted beneficiaries only. Potential people still in intake (intake_stage
+  // set) live on the Cases board, never in this list or its cohort counts.
   const { data } = await db
     .from("beneficiaries")
     .select("*")
+    .is("intake_stage", null)
     .order("intake_date", { ascending: false, nullsFirst: false })
     .limit(500);
 

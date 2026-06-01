@@ -8,7 +8,7 @@ import { DocReaderBody } from "./DocReader";
 import {
   LayoutDashboard, Sparkles, Inbox, PenLine, ListChecks, Users, Send,
   HeartHandshake, DollarSign, Target, Heart, Package, Award,
-  FileText, ShieldCheck, FolderOpen,
+  FileText, ShieldCheck, FolderOpen, LifeBuoy,
 } from "lucide-react";
 
 const DESTS = [
@@ -23,6 +23,7 @@ const DESTS = [
   { href: "/donations", label: "Donations", icon: DollarSign },
   { href: "/campaigns", label: "Campaigns", icon: Target },
   { href: "/beneficiaries", label: "Beneficiaries", icon: Heart },
+  { href: "/cases", label: "Cases", icon: LifeBuoy },
   { href: "/inventory", label: "Inventory", icon: Package },
   { href: "/grants", label: "Grants", icon: Award },
 ];

@@ -6,17 +6,60 @@ import {
   extractBeneficiaryFromImages,
   extractBeneficiaryFromText,
   confirmBeneficiary,
+  confirmCase,
   type ExtractedBeneficiary,
   type BeneficiaryExtractResult,
 } from "../app/beneficiaries/actions";
 import { Sparkles, Mic, UploadCloud, Send, ImageIcon, Square, AlertTriangle, Lock } from "lucide-react";
 
-// AI beneficiary intake. Three inputs into ONE confirm step (mirrors ExpenseIntake):
-//   1) drop photos        -> Claude vision   -> pre-filled child profile draft
+// AI intake. Three inputs into ONE gated confirm step (mirrors ExpenseIntake):
+//   1) drop photos        -> Claude vision   -> pre-filled profile draft
 //   2) voice note         -> Web Speech      -> Claude parse of the transcript
 //   3) plain text         -> Claude parse
-// CRITICAL PII: a child's data. Nothing is saved until Nur reviews + taps confirm,
-// and a new record is private (consent_public=false) until she publishes it later.
+// CRITICAL PII. Nothing is saved until Nur reviews + taps confirm, and a new
+// record is private (consent_public=false) until she publishes it later.
+//
+// One component, two modes. mode="beneficiary" logs an accepted child;
+// mode="case" logs a potential person still in intake (writes via confirmCase,
+// lands on the Cases board, never a beneficiary until approved). The AI extract
+// pipeline is identical; only the gated write target and the copy differ.
+type IntakeMode = "beneficiary" | "case";
+const COPY: Record<IntakeMode, {
+  title: string; blurb: string; voicePlaceholder: string; modalTitle: string;
+  privacyNote: string; confirmBtn: string; footer: string;
+}> = {
+  beneficiary: {
+    title: "Add a child with AI",
+    blurb:
+      "Drop photos, talk, or type. Sasa builds the profile and shows you a draft to review. Nothing is saved until you confirm, and it stays private until you publish it.",
+    voicePlaceholder:
+      "Tell me about the child. e.g. 'Amani, 9, rescued from Kibera, staying at the safe house, needs school fees'",
+    modalTitle: "Confirm this child's profile",
+    privacyNote:
+      "This is a child's private record. It stays admin-only until you choose to publish a consented profile.",
+    confirmBtn: "Confirm & save",
+    footer:
+      "Saved as a private, active beneficiary. Nothing is shown to donors until you publish a consented profile.",
+  },
+  case: {
+    title: "Log a case with AI",
+    blurb:
+      "Someone the team flagged who is not a beneficiary yet. Drop photos, talk, or type. Sasa builds the case and shows you a draft to review. Nothing is saved until you confirm, and it is never a beneficiary until you approve it.",
+    voicePlaceholder:
+      "Tell me about the case. e.g. 'A lady Mark found living in poor conditions in Kibera, single mother, no income, needs support'",
+    modalTitle: "Confirm this case",
+    privacyNote:
+      "This is a private case record. It stays admin-only and is never shown to donors. Approve it later to make them a beneficiary.",
+    confirmBtn: "Confirm & log case",
+    footer:
+      "Saved as a private case under review. Review it on the Cases board, then approve to make them a beneficiary, or decline.",
+  },
+};
+const CASE_STAGE_OPTS: { v: string; l: string }[] = [
+  { v: "under_review", l: "Under review" },
+  { v: "pending_funds", l: "Pending funds" },
+  { v: "prospect", l: "New / prospect" },
+];
 
 type Draft = ExtractedBeneficiary & { photo_path?: string | null; source: "image" | "voice" | "text" };
 
@@ -34,7 +77,10 @@ const GENDERS: { v: string; l: string }[] = [
   { v: "other", l: "Other" },
 ];
 
-export default function BeneficiaryIntake() {
+export default function BeneficiaryIntake({ mode = "beneficiary" }: { mode?: IntakeMode }) {
+  const isCase = mode === "case";
+  const copy = COPY[mode];
+  const confirmAction = isCase ? confirmCase : confirmBeneficiary;
   const [drag, setDrag] = useState(false);
   const [busy, setBusy] = useState<null | "image" | "voice" | "text">(null);
   const [listening, setListening] = useState(false);
@@ -124,16 +170,16 @@ export default function BeneficiaryIntake() {
         onDragLeave={() => setDrag(false)}
         onDrop={onDrop}
       >
-        {drag && <div className="drop-hint"><UploadCloud size={26} /> Drop the photos — Sasa reads them privately</div>}
+        {drag && <div className="drop-hint"><UploadCloud size={26} /> Drop the photos. Sasa reads them privately</div>}
 
         <div className="flex" style={{ gap: 11, marginBottom: 4 }}>
           <span className="aico teal" style={{ width: 38, height: 38, borderRadius: 12 }}><Sparkles size={18} /></span>
           <div>
             <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, letterSpacing: "-0.01em" }}>
-              Add a child with AI
+              {copy.title}
             </div>
             <div className="muted" style={{ fontSize: 12.5 }}>
-              Drop photos, talk, or type. Sasa builds the profile and shows you a draft to review. Nothing is saved until you confirm, and it stays private until you publish it.
+              {copy.blurb}
             </div>
           </div>
         </div>
@@ -174,7 +220,7 @@ export default function BeneficiaryIntake() {
               </button>
               <textarea
                 value={text}
-                placeholder={listening ? "Listening… say e.g. ‘Amani is 9, came from Kibera, needs school fees, lives with her grandmother’" : "Tell me about the child… e.g. ‘Amani, 9, rescued from Kibera, staying at the safe house, needs school fees’"}
+                placeholder={listening ? "Listening…" : copy.voicePlaceholder}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleText(); } }}
                 rows={2}
@@ -200,7 +246,7 @@ export default function BeneficiaryIntake() {
         open={!!draft}
         onClose={() => setDraft(null)}
         width={560}
-        title="Confirm this child's profile"
+        title={copy.modalTitle}
         titleExtra={
           <span className="flex" style={{ gap: 6 }}>
             <span className="badge red" style={{ fontSize: 10 }}><Lock size={9} /> PII</span>
@@ -211,13 +257,13 @@ export default function BeneficiaryIntake() {
         }
       >
         {draft && (
-          <form action={confirmBeneficiary} onSubmit={() => setTimeout(() => setDraft(null), 50)} className="stack" style={{ gap: 13 }}>
+          <form action={confirmAction} onSubmit={() => setTimeout(() => setDraft(null), 50)} className="stack" style={{ gap: 13 }}>
             <input type="hidden" name="source" value={draft.source} />
             {draft.photo_path && <input type="hidden" name="photo_path" value={draft.photo_path} />}
             <input type="hidden" name="tags" value={JSON.stringify(draft.tags || [])} />
 
             <div className="flex" style={{ gap: 8, fontSize: 12, color: "var(--muted)", background: "var(--surface-2)", padding: "9px 12px", borderRadius: 10 }}>
-              <Lock size={14} /> This is a child's private record. It stays admin-only until you choose to publish a consented profile.
+              <Lock size={14} /> {copy.privacyNote}
             </div>
 
             {lowConfidence && (
@@ -290,12 +336,41 @@ export default function BeneficiaryIntake() {
               </div>
             )}
 
+            {/* CASE-ONLY: pipeline stage + who flagged it + where it came from.
+                These drive the Cases board and the audit trail. */}
+            {isCase && (
+              <>
+                <div className="grid cols-2" style={{ gap: 12 }}>
+                  <div>
+                    <label>Stage</label>
+                    <select name="intake_stage" defaultValue="under_review" style={{ marginTop: 5 }}>
+                      {CASE_STAGE_OPTS.map((s) => <option key={s.v} value={s.v}>{s.l}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label>Referred by</label>
+                    <input name="referred_by" placeholder="e.g. Mark" style={{ marginTop: 5 }} />
+                  </div>
+                </div>
+                <div className="grid cols-2" style={{ gap: 12 }}>
+                  <div>
+                    <label>Channel</label>
+                    <input name="case_channel" placeholder="e.g. Rescue & Rehab group" style={{ marginTop: 5 }} />
+                  </div>
+                  <div>
+                    <label>Triage note</label>
+                    <input name="triage_notes" placeholder="Anything to flag for review" style={{ marginTop: 5 }} />
+                  </div>
+                </div>
+              </>
+            )}
+
             <div className="flex" style={{ gap: 10, justifyContent: "flex-end", marginTop: 2 }}>
               <button type="button" className="btn ghost sm" onClick={() => setDraft(null)}>Cancel</button>
-              <button type="submit" className="btn teal sm">Confirm &amp; save</button>
+              <button type="submit" className="btn teal sm">{copy.confirmBtn}</button>
             </div>
             <div className="faint" style={{ fontSize: 11 }}>
-              Saved as a private, active beneficiary. Nothing is shown to donors until you publish a consented profile.
+              {copy.footer}
             </div>
           </form>
         )}

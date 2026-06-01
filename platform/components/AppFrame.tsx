@@ -17,7 +17,7 @@ import ToastProvider from "./Toast";
 import {
   Home, Inbox, PenLine, ListChecks, Users, Send, FolderOpen, Bot, Activity,
   HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, File,
-  X, Plus, Search, Sparkles, ChevronDown, ChevronLeft, Wand2, Settings, ShieldCheck, LayoutGrid, Layers, HelpCircle, Compass, User, CalendarDays,
+  X, Plus, Search, Sparkles, ChevronDown, ChevronLeft, Wand2, Settings, ShieldCheck, LayoutGrid, Layers, HelpCircle, Compass, User, CalendarDays, LifeBuoy,
 } from "lucide-react";
 
 export type NavUser = { name: string; org: string; initials: string; role: string } | null;
@@ -26,7 +26,7 @@ const ICONS: Record<string, any> = {
   home: Home, inbox: Inbox, pen: PenLine, check: ListChecks, users: Users, send: Send,
   folder: FolderOpen, bot: Bot, activity: Activity, heart: HeartHandshake, dollar: DollarSign,
   target: Target, life: Heart, box: Package, award: Award, mega: Megaphone, file: File, spark: Sparkles,
-  shield: ShieldCheck, calendar: CalendarDays,
+  shield: ShieldCheck, calendar: CalendarDays, lifebuoy: LifeBuoy,
 };
 const Icon = ({ name, size = 16 }: { name: string; size?: number }) => { const C = ICONS[name] || File; return <C size={size} />; };
 const BRAND_DOT: Record<string, string> = { nisria: "var(--nisria)", maisha: "var(--maisha)", ahadi: "var(--ahadi)" };
@@ -56,6 +56,7 @@ const MENU = [
   ]},
   { group: "People", short: "People", items: [
     { href: "/beneficiaries", label: "Beneficiaries", icon: "life" },
+    { href: "/cases", label: "Cases", icon: "lifebuoy" },
     { href: "/team", label: "Team", icon: "users" },
     { href: "/groups", label: "Groups", icon: "bot" },
   ]},
