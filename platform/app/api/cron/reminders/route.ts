@@ -19,7 +19,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
-import { sendText, phoneKey } from "../../../../lib/whatsapp";
+import { sendTextAndLog, phoneKey } from "../../../../lib/whatsapp";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -102,7 +102,9 @@ async function run(force: boolean) {
     // Nothing to say to this operator: skip.
     if (!mine.length && !(isNur && (unassigned.length || teamOverdue.length || needsYou))) continue;
     body += `\n\nReply "done" on anything handled.`;
-    const r: any = await sendText(phoneKey(m.phone), body);
+    // Through the chokepoint so the morning brief lands in the bot's memory:
+    // a follow-up "done" or "what was on my list?" now has the brief in history.
+    const r: any = await sendTextAndLog(db, phoneKey(m.phone), body);
     results.push({ to: phoneKey(m.phone).slice(-4), via: "text", ok: !!r?.id, tasks: mine.length });
   }
 

@@ -15,7 +15,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
 import { claimJobs, markJobDone, markJobError } from "../../../../lib/jobs";
-import { sendText, operatorOf, downloadMedia, sendTypingIndicator } from "../../../../lib/whatsapp";
+import { sendText, sendTextAndLog, operatorOf, downloadMedia, sendTypingIndicator } from "../../../../lib/whatsapp";
+import { commitBankImport } from "../../../../lib/bank-import";
 import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
 import { autoCapture } from "../../../../lib/memory-extract";
 import { pushIncident } from "../../../../lib/notify";
@@ -194,16 +195,24 @@ async function processJob(db: any, job: any): Promise<void> {
       const yes = /^(y|yes|yep|yeah|yup|confirm(ed)?|correct|go ahead|do it|please do|ok(ay)?|sawa|ndio|ndiyo|approved?)\b/.test(t);
       const no = /^(n|no|nope|cancel|don'?t|do not|stop|wrong|nah|hapana)\b/.test(t);
       if (yes) {
+        // The resolver now serves more than one kind. Payments commit to a row
+        // and read back as "Logged X"; a bank_import reads its ledger and hands
+        // back a Nur draft for the owner to review. Keep the two streams apart
+        // so a bank confirmation never gets miscounted as "N payments logged".
         const done: string[] = [];
+        const notes: string[] = [];
         for (const p of pend) {
-          if (p.kind === "record_payment") await commitPaymentRow(db, p.payload);
-          done.push(p.summary || "payment");
+          if (p.kind === "record_payment") { await commitPaymentRow(db, p.payload); done.push(p.summary || "payment"); }
+          else if (p.kind === "bank_import") { const r = await commitBankImport(db, p.payload); notes.push(r.summary); }
+          else { done.push(p.summary || "item"); }
           await db.from("pending_actions").update({ status: "committed", resolved_at: new Date().toISOString() }).eq("id", p.id);
         }
-        const msg = done.length === 1 ? `Done. Logged ${done[0]}.` : `Done. Logged ${done.length} payments: ${done.join("; ")}.`;
-        const r2 = await sendText(from, msg);
-        await db.from("messages").insert({ channel: "whatsapp", direction: "out", body: msg, handled_by: "sasa", status: r2.id ? "sent" : "failed", account: "whatsapp", external_id: r2.id || null, contact_id: contactId });
-        await emit({ type: "payment.confirmed", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, payload: { committed: done.length } });
+        const parts: string[] = [];
+        if (done.length) parts.push(done.length === 1 ? `Done. Logged ${done[0]}.` : `Done. Logged ${done.length} payments: ${done.join("; ")}.`);
+        if (notes.length) parts.push(notes.join("\n\n"));
+        const msg = parts.join("\n\n") || "Done.";
+        await sendTextAndLog(db, from, msg, { contactId });
+        await emit({ type: "payment.confirmed", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, payload: { committed: done.length, bank_imports: notes.length } });
         await markJobDone(job.id); return;
       }
       if (no) {

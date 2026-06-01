@@ -16,6 +16,7 @@ import crypto from "crypto";
 import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
 import { enqueueJob, triggerWorker } from "../../../../lib/jobs";
+import { resolveContact } from "../../../../lib/whatsapp";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -43,20 +44,8 @@ function safeEqual(a: string, b: string): boolean {
 
 const digits = (s: string) => (s || "").replace(/\D/g, "");
 
-// Resolve (or create) the contact row for a WhatsApp sender, so the conversation
-// threads by contact_id across messages. Returns the contact id or null.
-async function resolveContact(db: any, waId: string, name: string | null): Promise<string | null> {
-  const phone = digits(waId);
-  if (!phone) return null;
-  const { data: found } = await db.from("contacts").select("id").eq("phone", phone).eq("channel", "whatsapp").limit(1);
-  if (found && found.length) return found[0].id;
-  const { data: made } = await db
-    .from("contacts")
-    .insert({ name: name || phone, phone, channel: "whatsapp" })
-    .select("id")
-    .single();
-  return made?.id ?? null;
-}
+// resolveContact now lives in lib/whatsapp.ts so the webhook (ingress) and the
+// send chokepoint (egress) thread by the SAME contact_id. (One-brain law.)
 
 // --- POST: inbound messages + statuses -------------------------------------
 export async function POST(req: NextRequest) {

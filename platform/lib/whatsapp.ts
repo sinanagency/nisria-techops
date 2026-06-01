@@ -137,3 +137,75 @@ export async function operatorOf(db: any, waId: string): Promise<{ role: Operato
   if (member && (member.status === "active" || !member.status)) return { role: "team", name: member.name, rank: "member" };
   return { role: null, name: null, rank: null };
 }
+
+// Resolve a wa_id to its contacts.id, creating the contact on first contact.
+// Moved here from the webhook (was a private copy) so EVERY send path resolves
+// the SAME conversation thread the brain replays. `phone` is computed the exact
+// way the webhook stored it (bare digits) so it matches existing contact rows.
+// (One-brain law: one resolver, one thread.)
+export async function resolveContact(db: any, waId: string, name?: string | null): Promise<string | null> {
+  const phone = (waId || "").replace(/\D/g, "");
+  if (!phone) return null;
+  const { data: found } = await db.from("contacts").select("id").eq("phone", phone).eq("channel", "whatsapp").limit(1);
+  if (found && found.length) return found[0].id;
+  const { data: made } = await db
+    .from("contacts")
+    .insert({ name: name || phone, phone, channel: "whatsapp" })
+    .select("id")
+    .single();
+  return made?.id ?? null;
+}
+
+// THE OUTBOUND CHOKEPOINT (Field-nervous-system + One-brain laws). Send free
+// form text AND persist it to `messages` in one call, so the bot's own proactive
+// voice (notifications, reminders, the bank summary) lands in historyFor()'s
+// short-term window. Before this, only the live reply path logged, so the agent
+// had no memory of anything it pushed and would contradict itself the moment the
+// user referenced it. The message log IS the agent's reality: nothing may speak
+// to a user without leaving a trace here. Logging is best-effort relative to the
+// send: a log failure must never swallow the actual delivery.
+export async function sendTextAndLog(
+  db: any,
+  to: string,
+  body: string,
+  opts?: { contactId?: string | null },
+): Promise<{ id: string | null; error?: string }> {
+  const res = await sendText(to, body);
+  try {
+    const contactId = opts?.contactId ?? (await resolveContact(db, to));
+    await db.from("messages").insert({
+      channel: "whatsapp", direction: "out", body, handled_by: "sasa",
+      status: res.id ? "sent" : "failed", account: "whatsapp",
+      external_id: res.id || null, contact_id: contactId, sender_type: "individual",
+    });
+  } catch (err) {
+    console.error("sendTextAndLog: message log failed (send still happened)", err);
+  }
+  return res;
+}
+
+// Template variant of the chokepoint. WhatsApp renders the approved template, so
+// the caller passes `logBody`, the human readable line the recipient actually
+// sees, for the brain log (separate from the template `params`). Same best
+// effort logging contract as sendTextAndLog.
+export async function sendTemplateAndLog(
+  db: any,
+  to: string,
+  name: string,
+  params: string[],
+  logBody: string,
+  opts?: { contactId?: string | null; lang?: string },
+): Promise<{ id: string | null; error?: string }> {
+  const res = await sendTemplate(to, name, params, opts?.lang || "en_US");
+  try {
+    const contactId = opts?.contactId ?? (await resolveContact(db, to));
+    await db.from("messages").insert({
+      channel: "whatsapp", direction: "out", body: logBody, handled_by: "sasa",
+      status: res.id ? "sent" : "failed", account: "whatsapp",
+      external_id: res.id || null, contact_id: contactId, sender_type: "individual",
+    });
+  } catch (err) {
+    console.error("sendTemplateAndLog: message log failed (send still happened)", err);
+  }
+  return res;
+}
