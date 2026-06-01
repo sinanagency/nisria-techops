@@ -22,7 +22,7 @@
 // All generated text passes through humanize() before it is stored or shown.
 
 import { admin, money } from "./supabase-admin";
-import { sendText, phoneKey } from "./whatsapp";
+import { sendText, phoneKey, operatorOf } from "./whatsapp";
 import { emit } from "./events";
 import { now } from "./now";
 import { humanize, withHumanSystem } from "./humanize";
@@ -32,7 +32,7 @@ import { recall, groundingText, remember, rememberUpsert } from "./memory";
 import { ownerContactIds, OWNER_PRIVATE_KIND } from "./privacy";
 import { draftThankYou } from "./agents/steward";
 import { enqueueJob, triggerWorker } from "./jobs";
-import { pushTaskAlert } from "./notify";
+import { pushTaskAlert, pushOperatorUpdate } from "./notify";
 import { getCalendar, holidayOn, type CalEvent } from "./calendar";
 import { createEvent as gcalCreate, patchEvent as gcalPatch, deleteEvent as gcalDelete, gcalConfigured } from "./gcal";
 
@@ -548,6 +548,18 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
 
     const res: any = await sendText(number, text);
     if (!res?.id) {
+      // Free-form send failed. If the recipient is an OPERATOR (Nur / the
+      // builder), this is almost always WhatsApp's 24h window, so fall back to
+      // the approved operator_update template, which reaches them off-window.
+      // (Team members are not on the 727, so no template fallback for them.)
+      const { role } = await operatorOf(db, number);
+      if (role === "admin") {
+        const up = await pushOperatorUpdate(db, number, toName, text);
+        if (up.ok) {
+          await emit({ type: "whatsapp.message_out", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: text.slice(0, 300), via: "operator_template" } });
+          return { ok: true, summary: humanize(`${toName} is outside the 24-hour window, so I delivered it as an update notification instead. Sent.`, opts), detail: { delivered: true, via: "template" } };
+        }
+      }
       const why = /re-?engag|24|window|outside/i.test(String(res?.error || "")) ? `${toName} has not messaged us in the last 24 hours, so WhatsApp will not let me reach them directly right now.` : `I could not deliver that to ${toName}.${res?.error ? ` (${res.error})` : ""}`;
       return { ok: false, summary: humanize(why, opts), error: res?.error || "send failed", detail: { delivered: false } };
     }

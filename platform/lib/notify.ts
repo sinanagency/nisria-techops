@@ -178,6 +178,35 @@ export async function pushApprovalRequest(
   }
 }
 
+// OPERATOR UPDATE (the 24h-window escape hatch). A plain sendText silently fails
+// once an operator has not messaged the line in 24 hours; an approved template
+// never does. This reaches Nur or the builder with a FREE-FORM update at any
+// time via the `operator_update` template ({{1}}=first name, {{2}}=the body), or
+// `operator_request` when a reply is wanted. Logs through the chokepoint so the
+// bot remembers it said this. Returns ok=false (with the error) if the template
+// is not yet Meta-approved, so callers can fall back gracefully.
+export async function pushOperatorUpdate(
+  db: any,
+  toWa: string,
+  name: string | null,
+  text: string,
+  opts?: { needsReply?: boolean },
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const first = (name || "there").trim().split(/\s+/)[0] || "there";
+    const body = String(text).replace(/\s+/g, " ").trim().slice(0, 900);
+    const tmpl = opts?.needsReply ? "operator_request" : "operator_update";
+    const logBody = opts?.needsReply
+      ? `Hi ${first}, from Nisria:\n\n${body}\n\nReply here when you're ready.`
+      : `Hi ${first}, an update from Nisria:\n\n${body}\n\nOpen the dashboard at command.nisria.co for the details.`;
+    const r = await sendTemplateAndLog(db, phoneKey(toWa), tmpl, [first, body], logBody);
+    return { ok: !!r.id, error: r.error };
+  } catch (err: any) {
+    console.error("pushOperatorUpdate failed", err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+}
+
 // ----------------------------------------------------------------------------
 // TASK COMPLETION (Field-nervous-system law). When a task is marked done, the
 // people who care must hear it. The routing, agreed with the operators:
