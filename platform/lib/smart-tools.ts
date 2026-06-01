@@ -99,6 +99,7 @@ export const SMART_TOOLS = [
   { name: "lookup_contact", description: "Find a person's contact details (phone, email) by name. Searches contacts, the team roster, and beneficiary records. Use for 'what is X's number', 'how do I reach X', 'what's her email'. You CAN look this up, do not say you have no number.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "team_detail", description: "The team roster with each person's role, phone number, pay (salary or stipend), responsibilities, and status. Use for 'their salaries', 'what does X earn', 'X's number', 'who does what', 'the full team'. Answer directly from this.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional name or role to filter by" } } } },
   { name: "search_documents", description: "Search the filed documents (reports, bank statements, letters, forms, returns) by title or content. Use for 'find the X document', 'do we have a doc about Y', 'pull up the Z report or statement'. Returns titles, summaries, and dates.", input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+  { name: "list_learned", description: "Show what you have LEARNED and remembered: the durable facts in your memory (the Brain), both what the operator explicitly taught you and what you quietly picked up on your own. Use for 'what have you learned', 'what do you remember', 'what's in your memory', 'what have you picked up lately', or 'what do you know about <topic>'. Optionally filter by a topic word. Returns each fact with how you learned it (taught vs picked up) and when, so the operator can see and correct your memory.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional topic word to filter by, omit for the most recent" } } } },
   { name: "list_campaigns", description: "The fundraising campaigns with goal, amount raised, status, and dates. Use for 'how are our campaigns doing', 'what campaigns do we have', 'how much has X raised'.", input_schema: { type: "object", properties: {} } },
   { name: "group_activity", description: "What is happening in the team WhatsApp groups: recent messages and the open or overdue tasks born in a group. Use for 'what is happening in the Field Team group', 'any updates from the groups', 'what is pending in <group>', 'is anything overdue in the groups'. Optionally narrow to one group by name.", input_schema: { type: "object", properties: { group: { type: "string", description: "optional group name to narrow to, omit for all groups" } } } },
   { name: "member_activity", description: "What a specific team member has been doing: their open, overdue, and recently completed tasks plus their recent group messages. Use for 'what has Cynthia done this week', 'is X keeping up', 'what is on Grace plate', 'how active is X lately'.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
@@ -146,6 +147,7 @@ const READ_TOOLS = new Set([
   "search_documents", "list_campaigns",
   "group_activity", "member_activity",
   "query_calendar", "check_conflicts",
+  "list_learned",
 ]);
 export const isReadTool = (name: string) => READ_TOOLS.has(name);
 
@@ -303,6 +305,31 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     const like = `%${q.replace(/[,()*%]/g, "")}%`;
     const { data } = await db.from("documents").select("title,doc_type,folder,doc_date,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`).order("doc_date", { ascending: false }).limit(12);
     return { count: (data || []).length, results: ((data || []) as any[]).map((d) => ({ title: d.title, type: d.doc_type || null, folder: d.folder || null, date: d.doc_date || null, summary: String(d.summary || "").slice(0, 160) || null })) };
+  }
+  if (name === "list_learned") {
+    // Observability for the memory the bot is accumulating: curated facts the
+    // operator taught (org_fact) PLUS the auto-captured lane (auto_fact), newest
+    // first, with provenance so a bad auto-fact is easy to spot and correct.
+    // PRIVACY WALL: the owner also sees owner-private notes; a non-owner never
+    // does. Operator-only tool (not in the team toolset).
+    if (tier === "team") return { error: "not available here" };
+    const kinds = ["org_fact", "auto_fact"];
+    if (viewerIsOwner) kinds.push(OWNER_PRIVATE_KIND);
+    const q = String(input.query || "").trim().toLowerCase();
+    const { data } = await db
+      .from("agent_memory")
+      .select("kind,title,content,source_type,created_at,metadata")
+      .in("kind", kinds)
+      .order("created_at", { ascending: false })
+      .limit(q ? 80 : 25);
+    let rows = (data || []) as any[];
+    if (q) rows = rows.filter((r) => `${r.title || ""} ${r.content || ""}`.toLowerCase().includes(q));
+    rows = rows.slice(0, q ? 20 : 25);
+    const how = (r: any) => r.metadata?.provenance === "auto" ? "picked up on my own" : (r.source_type === "chat" ? "you taught me" : "from the org records");
+    return {
+      count: rows.length,
+      learned: rows.map((r) => ({ topic: r.title || null, fact: String(r.content || ""), how: how(r), private: r.kind === OWNER_PRIVATE_KIND, when: String(r.created_at || "").slice(0, 10) })),
+    };
   }
   if (name === "list_campaigns") {
     const { data } = await db.from("campaigns").select("name,type,status,goal_amount,raised_amount,starts_on,ends_on").order("created_at", { ascending: false }).limit(20);
