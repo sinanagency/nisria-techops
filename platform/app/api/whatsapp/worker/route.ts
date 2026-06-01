@@ -192,7 +192,10 @@ async function processJob(db: any, job: any): Promise<void> {
       .gte("created_at", recentCut).order("created_at", { ascending: true });
     if (pend && pend.length) {
       const t = command.trim().toLowerCase();
-      const yes = /^(y|yes|yep|yeah|yup|confirm(ed)?|correct|go ahead|do it|please do|ok(ay)?|sawa|ndio|ndiyo|approved?)\b/.test(t);
+      // "verif(y|ied)" MUST be here: the bank_import summary instructs the owner
+      // to reply "verified", and without it that word falls through to the brain
+      // and the staged action never commits (caught in the live replay).
+      const yes = /^(y|yes|yep|yeah|yup|confirm(ed)?|verif(y|ied)|correct|go ahead|do it|please do|ok(ay)?|sawa|ndio|ndiyo|approved?)\b/.test(t);
       const no = /^(n|no|nope|cancel|don'?t|do not|stop|wrong|nah|hapana)\b/.test(t);
       if (yes) {
         // The resolver now serves more than one kind. Payments commit to a row
