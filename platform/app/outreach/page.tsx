@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "../../lib/auth";
-import { getRecipientCounts, SEND_CAP } from "./actions";
+import { getRecipientCounts } from "./actions";
+import { SEND_CAP } from "./config";
 import Composer from "./Composer";
 
 export const dynamic = "force-dynamic";
