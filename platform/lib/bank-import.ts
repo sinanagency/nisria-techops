@@ -77,8 +77,18 @@ export async function stageBankImport(
       .eq("status", "awaiting_confirm")
       .limit(1);
     if (open && open.length) {
+      // Refresh in place AND restart the freshness clock: re-sending the summary
+      // is a new ask, so the 20 min window the worker resolver enforces must
+      // begin again. Without resetting created_at a re-fire would inherit the
+      // old (possibly already expired) window and "verified" would never bind.
       await db.from("pending_actions")
-        .update({ payload: scope, summary: `import ${scope.account || "bank"} history + inform Nur` })
+        .update({
+          payload: scope,
+          summary: `import ${scope.account || "bank"} history + inform Nur`,
+          status: "awaiting_confirm",
+          created_at: new Date().toISOString(),
+          resolved_at: null,
+        })
         .eq("id", open[0].id);
       return { staged: true };
     }
