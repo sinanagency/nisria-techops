@@ -54,17 +54,21 @@ export default async function Treasury() {
   // USD pool we can reason about: raised in USD minus what was bridged to Kenya
   const usdHeld = donUSD + grantUSD - bridgeUSD;
 
-  // last reconciled KES bank balance: closing balance per account at its latest statement date
+  // last reconciled bank balance PER CURRENCY: closing balance per account at its
+  // latest statement date, then grouped by currency. KES and USD are NEVER summed
+  // into one figure (Currency Law) now that the ledger holds both.
   const lastByAccount = new Map<string, any>();
   for (const b of banks) {
     const prev = lastByAccount.get(b.account);
-    if (!prev || String(b.txn_date) > String(prev.txn_date) || (String(b.txn_date) === String(prev.txn_date))) {
-      // keep the row at the latest date (the last seen at that date is the running closing balance)
-      if (!prev || String(b.txn_date) >= String(prev.txn_date)) lastByAccount.set(b.account, b);
-    }
+    if (!prev || String(b.txn_date) >= String(prev.txn_date)) lastByAccount.set(b.account, b);
   }
   const bankRows = [...lastByAccount.values()];
-  const bankAnchorKES = bankRows.reduce((s, b) => s + Number(b.balance || 0), 0);
+  const bankByCcy = new Map<string, number>();
+  for (const b of bankRows) {
+    const c = (b.currency || "KES").toUpperCase();
+    bankByCcy.set(c, (bankByCcy.get(c) || 0) + Number(b.balance || 0));
+  }
+  const bankCcyLines = [...bankByCcy.entries()].sort(); // [[ccy, total], ...], KES before USD
   const bankAsOf = bankRows.map((b) => String(b.txn_date)).sort().pop() || null;
   const fmtMonth = (ym: string | null) => {
     if (!ym) return "";
@@ -138,9 +142,13 @@ export default async function Treasury() {
               <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>USD donations + grants, less Givebutter payouts moved to Kenya</div>
             </div>
             <Link href="/finance#banking" className="card card-pad" style={{ display: "block", textDecoration: "none", color: "inherit" }}>
-              <div className="flex" style={{ gap: 7, alignItems: "center", marginBottom: 6 }}><Landmark size={13} color="var(--faint)" /><span className="faint" style={{ fontSize: 11.5, fontWeight: 600 }}>Last reconciled bank balance (KES)</span></div>
-              <div className="strong" style={{ fontSize: 18, fontWeight: 700 }}><Money amount={Math.round(bankAnchorKES)} currency="KES" /></div>
-              <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>{bankRows.length} Absa accounts, as of {fmtMonth(bankAsOf ? bankAsOf.slice(0, 7) : null)}. Stale.</div>
+              <div className="flex" style={{ gap: 7, alignItems: "center", marginBottom: 6 }}><Landmark size={13} color="var(--faint)" /><span className="faint" style={{ fontSize: 11.5, fontWeight: 600 }}>Last reconciled bank balance</span></div>
+              <div className="stack" style={{ gap: 2 }}>
+                {bankCcyLines.map(([ccy, amt]) => (
+                  <div key={ccy} className="strong" style={{ fontSize: 18, fontWeight: 700 }}><Money amount={Math.round(amt)} currency={ccy} /></div>
+                ))}
+              </div>
+              <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>{bankRows.length} accounts, latest {fmtMonth(bankAsOf ? bankAsOf.slice(0, 7) : null)}. Stale.</div>
             </Link>
           </div>
           <div className="flex" style={{ gap: 8, alignItems: "flex-start", background: "var(--glass)", borderRadius: 10, padding: "10px 12px" }}>

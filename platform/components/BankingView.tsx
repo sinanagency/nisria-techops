@@ -5,7 +5,10 @@ import { Landmark, ArrowDownLeft, ArrowUpRight, ShieldCheck } from "lucide-react
 // VERIFIED — the running balance chains unbroken from opening to closing, so every
 // shilling is accounted for. Per account: a summary (period, opening->closing, in/out,
 // reconciliation badge) over a scrollable transaction ledger. Read-only.
-const KES = (n: number) => "KES " + Math.round(n).toLocaleString();
+// Per-account money formatter. The account is the currency boundary (every row in
+// an account shares one currency), so we label each account in ITS currency and
+// never assume KES (Currency Law). USD accounts (Relay, Stanbic USD) now read USD.
+const fmtMoney = (n: number, ccy: string) => `${(ccy || "KES").toUpperCase()} ` + Math.round(n).toLocaleString();
 const fmtDate = (d: string) => d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" }) : "";
 
 export default async function BankingView() {
@@ -26,10 +29,11 @@ export default async function BankingView() {
   // statement history stays tucked away until you open it.
   return (
     <>
-      <div className="faint" style={{ fontSize: 11.5, padding: "12px 22px 0" }}>Scanned bank statements (Oct 2021 – Nov 2022). Historical reference; current spend lives in This-month spend above.</div>
+      <div className="faint" style={{ fontSize: 11.5, padding: "12px 22px 0" }}>Reconciled bank statements per account, each in its own currency. Historical reference; current spend lives in This-month spend above.</div>
       {Object.entries(accounts).map(([acct, txns]) => {
         const sigN = (s: string) => parseInt(String(s || "").split("#")[1] || "0", 10);
         txns.sort((a, b) => sigN(a.signature) - sigN(b.signature)); // statement order
+        const ccy = (txns[0]?.currency || "KES").toUpperCase(); // one currency per account
         const totalOut = txns.filter((t) => t.direction === "out").reduce((s, t) => s + Number(t.amount || 0), 0);
         const totalIn = txns.filter((t) => t.direction === "in").reduce((s, t) => s + Number(t.amount || 0), 0);
         const closing = Number(txns[txns.length - 1]?.balance || 0);
@@ -50,10 +54,10 @@ export default async function BankingView() {
                 <div className="faint" style={{ fontSize: 11.5 }}>{period} · {txns.length} transactions</div>
               </div>
               <div className="bank-stats">
-                <div><div className="faint bank-lbl">Opening</div><div className="money bank-num">{KES(opening)}</div></div>
-                <div><div className="faint bank-lbl flex" style={{ gap: 4 }}><ArrowDownLeft size={11} color="var(--green)" /> In</div><div className="money bank-num" style={{ color: "var(--green)" }}>{KES(totalIn)}</div></div>
-                <div><div className="faint bank-lbl flex" style={{ gap: 4 }}><ArrowUpRight size={11} color="var(--red)" /> Out</div><div className="money bank-num" style={{ color: "var(--red)" }}>{KES(totalOut)}</div></div>
-                <div><div className="faint bank-lbl">Closing</div><div className="money bank-num strong">{KES(closing)}</div></div>
+                <div><div className="faint bank-lbl">Opening</div><div className="money bank-num">{fmtMoney(opening, ccy)}</div></div>
+                <div><div className="faint bank-lbl flex" style={{ gap: 4 }}><ArrowDownLeft size={11} color="var(--green)" /> In</div><div className="money bank-num" style={{ color: "var(--green)" }}>{fmtMoney(totalIn, ccy)}</div></div>
+                <div><div className="faint bank-lbl flex" style={{ gap: 4 }}><ArrowUpRight size={11} color="var(--red)" /> Out</div><div className="money bank-num" style={{ color: "var(--red)" }}>{fmtMoney(totalOut, ccy)}</div></div>
+                <div><div className="faint bank-lbl">Closing</div><div className="money bank-num strong">{fmtMoney(closing, ccy)}</div></div>
               </div>
             </div>
             <div style={{ maxHeight: "52vh", overflowY: "auto", borderTop: "1px solid var(--line)" }}>

@@ -17,7 +17,10 @@
 
 type BankScope = { account?: string | null; months?: string[]; doc_ids?: string[]; summary_text?: string | null };
 
-const KES = (n: number) => `KES ${Math.round(n).toLocaleString("en-US")}`;
+// Currency-aware money formatter. composeBankSummary works one account at a time,
+// and an account has a single currency, so we label totals in that account's real
+// currency, never assume KES (Currency Law). USD accounts now report USD.
+const money = (n: number, ccy: string) => `${(ccy || "KES").toUpperCase()} ${Math.round(n).toLocaleString("en-US")}`;
 const monthOf = (d: string | null) => (d ? String(d).slice(0, 7) : "unknown");
 
 // Read the real rows for an account and build a per-month in/out summary. No
@@ -26,14 +29,15 @@ const monthOf = (d: string | null) => (d ? String(d).slice(0, 7) : "unknown");
 export async function composeBankSummary(
   db: any,
   scope: { account: string },
-): Promise<{ text: string; months: string[]; outTotal: number; outCount: number; account: string } | null> {
+): Promise<{ text: string; months: string[]; outTotal: number; outCount: number; account: string; currency: string } | null> {
   const { data, error } = await db
     .from("bank_transactions")
-    .select("txn_date,amount,direction")
+    .select("txn_date,amount,direction,currency")
     .eq("account", scope.account)
     .limit(5000);
   if (error || !data || !data.length) return null;
 
+  const ccy = ((data as any[]).find((r) => r.currency)?.currency || "KES").toUpperCase();
   const byMonth = new Map<string, { inSum: number; outSum: number; outCount: number }>();
   let outTotal = 0, outCount = 0;
   for (const r of data as any[]) {
@@ -47,15 +51,15 @@ export async function composeBankSummary(
   const months = Array.from(byMonth.keys()).filter((m) => m !== "unknown").sort();
   const lines = months.map((m) => {
     const c = byMonth.get(m)!;
-    return `- ${m}: ${KES(c.outSum)} out (${c.outCount}), ${KES(c.inSum)} in`;
+    return `- ${m}: ${money(c.outSum, ccy)} out (${c.outCount}), ${money(c.inSum, ccy)} in`;
   });
   const text =
     `Bank extraction, account ${scope.account}.\n` +
     `${data.length} transactions across ${months.length} months.\n\n` +
     `${lines.join("\n")}\n\n` +
-    `Total out: ${KES(outTotal)} across ${outCount} payments.\n` +
+    `Total out: ${money(outTotal, ccy)} across ${outCount} payments.\n` +
     `Reply "verified" and I record this against the platform and draft the note to Nur.`;
-  return { text, months, outTotal, outCount, account: scope.account };
+  return { text, months, outTotal, outCount, account: scope.account, currency: ccy };
 }
 
 // Record the intent token. Thin by design (Option R): the rows already live in
@@ -116,7 +120,7 @@ export async function commitBankImport(
 ): Promise<{ summary: string; draft: string }> {
   const account = payload.account || "";
   const live = account ? await composeBankSummary(db, { account }) : null;
-  const outLine = live ? `${KES(live.outTotal)} across ${live.outCount} payments` : "the extracted totals";
+  const outLine = live ? `${money(live.outTotal, live.currency)} across ${live.outCount} payments` : "the extracted totals";
 
   const draft =
     `Hi Nur. I have pulled the ${account || "bank"} statements automatically, ` +
