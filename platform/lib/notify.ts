@@ -13,7 +13,7 @@
 // for a recent matching event so a burst never spams. Every send is best-effort
 // and NEVER throws into its caller — a failed ping must not break task creation.
 import { admin } from "./supabase-admin";
-import { sendTemplate, phoneKey } from "./whatsapp";
+import { sendTemplate, sendTemplateAndLog, phoneKey } from "./whatsapp";
 import { emit } from "./events";
 import { sendEmail } from "./email";
 
@@ -81,9 +81,13 @@ export async function pushTaskAlert(
     const due = task.due_on || "ASAP";
     const title = String(task.title || "a task").slice(0, 200);
 
+    // Log line mirrors what the recipient actually sees, so the proactive ping
+    // lands in the bot's own memory (the agent can answer "what did you just
+    // tell me?"). Chokepoint logging is best-effort and never blocks the send.
+    const logBody = `Heads up, ${adj} task for you: ${title}. Due ${due}. Reply DONE when it is handled, or open the Nisria portal.`;
     const pinged: string[] = [];
     for (const to of recipients) {
-      const r = await sendTemplate(to, "task_alert", [adj, title, due]);
+      const r = await sendTemplateAndLog(db, to, "task_alert", [adj, title, due], logBody);
       if (r.id) pinged.push(to);
     }
     await emit({
@@ -99,9 +103,10 @@ export async function pushTaskAlert(
 
 // Send the daily_brief template (count only) to one off-window recipient. The
 // rich itemised list is what they get back when they reply LIST (in-window).
-export async function pushDailyBrief(to: string, count: number): Promise<boolean> {
+export async function pushDailyBrief(db: any, to: string, count: number): Promise<boolean> {
   try {
-    const r = await sendTemplate(phoneKey(to), "daily_brief", [String(count)]);
+    const logBody = `Morning brief: you have ${count} due today. Reply LIST for the items.`;
+    const r = await sendTemplateAndLog(db, phoneKey(to), "daily_brief", [String(count)], logBody);
     return Boolean(r.id);
   } catch (err) {
     console.error("pushDailyBrief failed", err);
@@ -112,6 +117,9 @@ export async function pushDailyBrief(to: string, count: number): Promise<boolean
 // Send the system_alert template to every operator. `component` is the failing
 // part ("WhatsApp worker"), `detail` is what happened. Deduped 30min per
 // component so a flapping failure does not machine-gun the operators.
+// NOT routed through the chokepoint on purpose: an incident alert is bot to
+// operator system meta, not part of the user <-> Sasa conversation. Logging it
+// into `messages` would pollute the brain's view of the thread, so it stays raw.
 export async function pushIncident(component: string, detail: string): Promise<{ sent: number; deduped?: boolean }> {
   try {
     const db = admin();
@@ -157,7 +165,8 @@ export async function pushApprovalRequest(
     const nurWa = opsKeys.find((k) => !owners.includes(k)) || opsKeys[0] || null;
     if (!nurWa) return { pinged: false };
     const label = String(approval.title || approval.kind || "an item").replace(/\s+/g, " ").slice(0, 150);
-    const r = await sendTemplate(nurWa, "approval_request", [label]);
+    const logBody = `Something needs your decision: ${label}. Open the portal to approve or decline.`;
+    const r = await sendTemplateAndLog(db, nurWa, "approval_request", [label], logBody);
     await emit({
       type: "approval.ping_sent", source: "notify", actor: "system", subject_type: "approval", subject_id: approval.id,
       payload: { title: label, kind: approval.kind || null, ok: !!r.id },

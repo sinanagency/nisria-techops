@@ -18,7 +18,8 @@ export function middleware(req: NextRequest) {
     pathname.startsWith("/api/drive") ||
     pathname.startsWith("/api/group") ||
     pathname.startsWith("/api/evals") ||
-    pathname.startsWith("/api/cron")
+    pathname.startsWith("/api/cron") ||
+    pathname.startsWith("/api/bank")
   )
     return NextResponse.next();
   const isLogin = pathname === "/login";
