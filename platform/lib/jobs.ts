@@ -147,11 +147,19 @@ export async function reclaimStuckJobs(kind?: JobKind): Promise<{ requeued: numb
   return { requeued: requeueIds.length, parked: parkIds.length };
 }
 
-// Claim up to `limit` queued jobs of a kind and flip them to running in one
-// pass. Not a hard distributed lock (single worker, low volume), but the
-// status flip + skip-running in enqueue keeps double-processing rare and the
-// downstream write is idempotent regardless. Bumps each claimed job's attempts
-// so the stuck-job reclaim can eventually park a poisoned payload.
+// Claim up to `limit` queued jobs of a kind and flip them to running. ATOMIC: the
+// status flip carries its OWN guard (.eq("status","queued")) and returns only the
+// rows this caller actually flipped (.select()). Postgres takes a row lock for the
+// UPDATE, so when two worker invocations race the same queued job, exactly one
+// UPDATE matches status='queued' and returns the row; the loser re-reads 'running'
+// under the lock, matches zero rows, and returns []. Only the winner processes it.
+//
+// This is the fix for the duplicate-reply bug (one inbound message answered up to
+// six times): the old code did SELECT-then-blind-UPDATE, so two concurrent drains
+// (the webhook fires triggerWorker on every inbound, and Nur sends bursts of media)
+// both selected the same queued row and both replied. The guarded update closes
+// that race. Attempts is incremented per row so stuck-job reclaim can park a
+// poisoned payload.
 export async function claimJobs(kind: JobKind, limit: number): Promise<Job[]> {
   const db = admin();
   const { data } = await db
@@ -161,19 +169,22 @@ export async function claimJobs(kind: JobKind, limit: number): Promise<Job[]> {
     .eq("status", "queued")
     .order("created_at", { ascending: true })
     .limit(limit);
-  const jobs = (data || []) as Job[];
-  if (!jobs.length) return [];
-  // Flip each claimed job to running, incrementing ITS OWN attempts (the old
-  // code stamped every claimed row with jobs[0].attempts+1, which under-counted
-  // retries on a mixed batch). One update per row keeps the count honest; the
-  // batch is capped small so this stays a handful of writes.
+  const candidates = (data || []) as Job[];
+  if (!candidates.length) return [];
   const now = new Date().toISOString();
+  const claimed: Job[] = [];
   await Promise.all(
-    jobs.map((j) =>
-      db.from("jobs").update({ status: "running", started_at: now, attempts: (j.attempts || 0) + 1 }).eq("id", j.id)
-    )
+    candidates.map(async (j) => {
+      const { data: won } = await db
+        .from("jobs")
+        .update({ status: "running", started_at: now, attempts: (j.attempts || 0) + 1 })
+        .eq("id", j.id)
+        .eq("status", "queued")
+        .select("*");
+      if (won && won.length) claimed.push(won[0] as Job);
+    })
   );
-  return jobs;
+  return claimed;
 }
 
 export async function markJobDone(id: string): Promise<void> {
