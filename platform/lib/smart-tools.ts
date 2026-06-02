@@ -118,6 +118,7 @@ export const SMART_TOOLS = [
   { name: "prepare_grants", description: "Trigger the Grant agent to prepare all un-prepared applications in the background. SAFE: enqueues jobs, nothing is submitted. Use for 'prepare the grants'.", input_schema: { type: "object", properties: {} } },
   { name: "record_payment", description: "Log a payment Nur has ALREADY MADE into the finance ledger as paid. SAFE: records internal finance state (it does NOT move money, she already paid it). Call ONCE PER payment when she reports payments she made, whether typed or read from a screenshot/receipt/PDF. currency is KES or USD only, NEVER mix them, default KES if she does not say (and state the currency back so she can correct). category one of: payroll, rent, utilities, stipend, upkeep, petty cash, health, legal, payout, other. If a payee or amount is unclear, ASK rather than guess.", input_schema: { type: "object", properties: { payee: { type: "string" }, amount: { type: "number" }, currency: { type: "string", enum: ["KES", "USD"] }, category: { type: "string" }, purpose: { type: "string", description: "what it was for" }, method: { type: "string", description: "mpesa, bank, cash, etc" }, date: { type: "string", description: "YYYY-MM-DD, defaults to today" } }, required: ["payee", "amount"] } },
   { name: "complete_task", description: "Mark a task DONE. SAFE: internal state. Use when someone reports they finished something (e.g. 'done with the stall map'). Resolve the task by who reported it and/or a fragment of the title. If more than one open task matches, ask which one rather than guessing.", input_schema: { type: "object", properties: { assignee_name: { type: "string", description: "who did it, defaults to the person speaking" }, title: { type: "string", description: "a fragment of the task title to match" } } } },
+  { name: "reopen_task", description: "Reopen a COMPLETED task, moving it from done back to to-do (the inverse of complete_task). SAFE: internal state. Use when someone says a task is not actually finished, was ticked by mistake, or needs doing again (e.g. 'the canva task is not done', 'reopen the KRA filing', 'mark the stall map as not done', 'undo that, it is not finished'). Match a fragment of the title against DONE tasks; if more than one matches, ask which.", input_schema: { type: "object", properties: { assignee_name: { type: "string", description: "whose task, defaults to the person speaking" }, title: { type: "string", description: "a fragment of the completed task's title" } } } },
   { name: "delete_payment", description: "Undo a payment YOU logged that was wrong. Removes it from the ledger and records what was removed (recoverable). Use when Nur says a logged payment is wrong ('delete that', 'remove the Linda payment', 'undo that payment'). If she does not say which, target the most recent one you logged. If several match, list them and ask which. Only affects payments logged from chat, never her bank-statement history.", input_schema: { type: "object", properties: { payee: { type: "string", description: "payee to match, optional" }, amount: { type: "number", description: "amount to match, optional" } } } },
   { name: "update_payment", description: "Correct a payment YOU logged with a wrong amount, currency, category, payee, or purpose. Use for 'change that to KES 12,000', 'that was rent not salary', 'the payee was Mark'. Target the most recent logged payment unless she names which (match_payee / match_amount). Provide only the fields to change.", input_schema: { type: "object", properties: { match_payee: { type: "string" }, match_amount: { type: "number" }, new_amount: { type: "number" }, new_currency: { type: "string", enum: ["KES", "USD"] }, new_category: { type: "string" }, new_payee: { type: "string" }, new_purpose: { type: "string" } } } },
   { name: "delete_task", description: "Remove a task created in error. Use for 'delete that task', 'remove the task about X'. Match by a fragment of the title, or the most recent if she does not say. If several match, ask which.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the task title to match" } } } },
@@ -550,6 +551,55 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       await emit({ type: "team.task_done", source: "agent:sasa", actor: member?.name || "team", subject_type: "team_member", subject_id: creditId, payload: { task_id: task.id, title: task.title, group: task.source_group } });
     }
     return { ok: true, summary: humanize(`Marked "${task.title}" done.`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: task.id } };
+  }
+
+  // ---- SAFE: reopen_task (the inverse of complete_task: done -> todo) ----
+  if (name === "reopen_task") {
+    // Same speaker resolution as complete_task (phone-exact, name as fallback), so
+    // "reopen the canva one" or a bare "that is not actually done" can scope to the
+    // right person's work. Mirrors complete_task, but over the DONE column.
+    const member = (await findMember(db, input.assignee_name)) || (input.assignee_name ? null : await findMemberByPhone(db, ctx.senderPhone));
+    const frag = String(input.title || "").trim().slice(0, 60);
+    // Look at DONE tasks only (the board's done column), most recently completed first.
+    const { data: doneRows } = await db
+      .from("tasks").select("id,title,assignee_id,source_group")
+      .eq("status", "done").order("updated_at", { ascending: false }).limit(60);
+    const done = (doneRows || []) as any[];
+    if (!done.length) return { ok: false, summary: humanize("There are no completed tasks to reopen right now.", opts) };
+
+    let list: any[];
+    if (frag) {
+      const f = frag.toLowerCase();
+      let hits = done.filter((t) => String(t.title || "").toLowerCase().includes(f));
+      if (!hits.length) {
+        const words = f.split(/\s+/).filter((w) => w.length >= 3);
+        const scored = done
+          .map((t) => ({ t, score: words.filter((w) => String(t.title || "").toLowerCase().includes(w)).length }))
+          .filter((x) => x.score > 0)
+          .sort((a, b) => b.score - a.score);
+        const best = scored.length ? scored[0].score : 0;
+        if (best >= 2 || (best >= 1 && words.length === 1)) hits = scored.filter((x) => x.score === best).map((x) => x.t);
+      }
+      list = hits;
+    } else {
+      // bare "reopen that" / "it is not done": scope to the speaker's own done tasks.
+      list = member?.id ? done.filter((t) => t.assignee_id === member.id) : done;
+    }
+
+    if (!list.length) {
+      const titles = done.slice(0, 12).map((t) => `"${t.title}"`).join(", ");
+      const what = frag ? ` matching "${frag}"` : "";
+      return { ok: false, summary: humanize(`I do not see a completed task${what}. Recently completed: ${titles}. Tell me which one to reopen.`, opts) };
+    }
+    if (list.length > 1) {
+      const owned = member?.id ? list.filter((t) => t.assignee_id === member.id) : [];
+      if (owned.length === 1) list = owned;
+      else return { ok: false, summary: humanize(`More than one completed task could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) };
+    }
+    const task = list[0];
+    await db.from("tasks").update({ status: "todo", updated_at: new Date().toISOString() }).eq("id", task.id);
+    await emit({ type: "task.reopened", source: "agent:sasa", actor: member?.name || "team", subject_type: "task", subject_id: task.id, payload: { title: task.title, group: task.source_group } });
+    return { ok: true, summary: humanize(`Reopened "${task.title}", it is back on the board as to-do.`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: task.id } };
   }
 
   // ---- SAFE: post_to_group (queues the group bot to deliver into a group) ----
