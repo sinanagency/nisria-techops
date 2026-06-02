@@ -34,7 +34,7 @@ const KEY = () => process.env.ANTHROPIC_API_KEY || "";
 // so a team member can neither read a figure nor remove a financial item. This
 // gives the group bot the back-and-forth add/edit/delete calendar access asked
 // for, without breaching the money wall.
-const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "complete_task", "add_beneficiary", "add_inventory_item", "team_detail", "lookup_contact", "list_campaigns", "remember_fact",
+const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "complete_task", "reopen_task", "add_beneficiary", "add_inventory_item", "team_detail", "lookup_contact", "list_campaigns", "remember_fact",
   "query_calendar", "check_conflicts", "create_event", "move_event", "delete_event"]);
 
 // Brain grounding that carries money. A team member never sees donor or
@@ -81,7 +81,7 @@ const DONE_SIMPLE = /\b(?:it'?s|that'?s|i'?ve|i\s+have|now|all)?\s*(?:mark(?:ed)
 
 // The action tools whose ok=true success can back a "done/created/logged" claim.
 const COMPLETION_TOOLS = new Set([
-  "complete_task", "create_task", "update_task", "delete_task",
+  "complete_task", "reopen_task", "create_task", "update_task", "delete_task",
   "record_payment", "update_payment", "delete_payment",
   "add_team_member", "update_team_member", "add_beneficiary", "update_beneficiary",
   "add_inventory_item", "add_contact", "update_contact", "remember_fact",
@@ -281,6 +281,7 @@ function buildGroupSystem(groupName: string, who: string, dateLong: string, snap
   const captureLaw = `Capture from the group. You ACT with tools FIRST, then speak. Calling the tool is mandatory, a confirmation message is never a substitute for it:
 - When someone is asked to do something or takes on a task, you MUST call create_task (assignee_name = that person, due_on = YYYY-MM-DD if a deadline is mentioned) BEFORE you reply. Only after the tool returns, confirm in ONE line that @mentions them, e.g. "Noted @Cynthia, tracked: stall map, due Thu." Never say "tracked" or "noted" unless you actually called create_task in this turn.
 - When someone says they finished or are done with something, you MUST call complete_task (assignee_name = who said it, title = a fragment of the task) BEFORE confirming "done".
+- The reverse is just as real: when someone says a task is NOT actually done, was ticked by mistake, needs redoing, or to undo a completion ("that is not done", "reopen the KRA filing", "mark the stall map as not done"), you MUST call reopen_task (it moves the task from done back to to-do) BEFORE confirming it is reopened. Same rule as complete_task: the tool call is the action, a sentence is not.
 - When someone reports a beneficiary or an inventory item, record it with the tool.
 - When someone states a durable FACT about the org, its people, vendors, schedule, or how things work (e.g. "the venue moved to Youngsfield", "Mary is no longer with us", "we meet on Mondays"), call remember_fact with a short topic so you keep it forever. Only durable facts, never one-off tasks, chatter, or anything confidential.
 - When something needs a decision, money, or an outbound message, it routes to Nur in Needs You.
