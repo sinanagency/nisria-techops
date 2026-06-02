@@ -87,6 +87,7 @@ const COMPLETION_TOOLS = new Set([
   "add_inventory_item", "add_contact", "update_contact", "remember_fact",
   "create_event", "move_event", "delete_event",
   "message_person", "post_to_group",
+  "file_document", "prepare_grants",
 ]);
 
 // True if the reply asserts a completed action while NO completion-class tool
@@ -107,6 +108,25 @@ function claimsCompletionWithoutSuccess(reply: string, toolRuns: { name: string;
   if (aboutUser && !/\b(?:i'?ve|i have|marked|logged|recorded|created|that'?s done|it'?s done)\b/i.test(reply)) return false;
   const anySuccess = toolRuns.some((t) => COMPLETION_TOOLS.has(t.name) && (t.result as any)?.ok === true);
   return !anySuccess && text.length > 0;
+}
+
+// LOOP BREAKER (the deterministic backstop for the repetitive-hedge failure).
+// When the agent can't complete something and has no clean exit, it re-emits a
+// permission-asking / "not done yet" hedge turn after turn, and history feedback
+// reinforces it. The robust signal is NOT text similarity (the wording varies) but
+// CADENCE: this reply hedges AND so did the recent assistant turns. On the third
+// consecutive hedge we stop circling and say one honest, terminal line instead.
+const LOOP_BREAK =
+  "I'm going in circles, which means I'm stuck, not making progress, and I won't keep asking the same thing. Straight answer: I have not moved this forward yet. If it's a clear instruction, say the word and I'll just do it; if it's something the platform can't do, I'll tell you plainly what and offer the closest thing I can.";
+const HEDGE_MARK =
+  /\b(?:please confirm|confirm if you|would you like me to|do you want me to|should i\b|shall i\b|let me know if you|want me to|i have not (?:done|created|set|yet)|i haven'?t (?:done|created|set)|not done yet|have not done it yet)\b/i;
+const isHedge = (s: string) => HEDGE_MARK.test(String(s || ""));
+// True if this reply hedges AND at least two of the last three assistant turns also
+// hedged, i.e. we are now on the third hedge in a row. That is a loop, not progress.
+function isHedgeLoop(reply: string, history: { role: string; content: string }[] = []): boolean {
+  if (!isHedge(reply)) return false;
+  const priorHedges = history.filter((m) => m.role === "assistant").slice(-3).filter((m) => isHedge(String(m.content || ""))).length;
+  return priorHedges >= 2;
 }
 
 // One model call, hardened against the input-tokens-per-minute (ITPM) rate limit.
@@ -258,7 +278,7 @@ How tools work:
 - ACTION tools change the platform and run ONLY on an explicit request: record_payment, create_task, add_team_member, add_inventory_item, add_beneficiary. GATED sends (draft_thank_you, draft_email) NEVER reach a real person; they queue a draft into Needs You for approval.
 - FIX MISTAKES: you can undo and correct. delete_payment removes a payment you logged wrong, update_payment corrects its amount/currency/category/payee, complete_task marks a task done, delete_task removes a wrong task. When she says something is wrong, or to remove, undo, or change it, just do it (these only ever touch records you logged, never her bank-statement history).
 - EDIT THE PORTAL: you can update records, not only create them. update_beneficiary changes a child's status, needs, program, region, or contact (never their funding or any money figure). update_task reassigns a task or changes its due date, priority, or title. update_team_member changes someone's role, phone, responsibilities, location, status, or pay (for pay you MUST have the currency, KES or USD, and you state it back, never mixed). add_contact saves a person's number or email and update_contact corrects one. When she tells you to change one of these, find the record by name and do it; if no one matches or more than one does, ask which before changing anything. Money totals, donations, and grants are read-only to you, you never edit those by chat.
-- REMINDERS: when she asks to be reminded of something by a date ("remind me on June 30 about KRA"), create_task with that exact due_on (YYYY-MM-DD), assignee empty so it is HER reminder. To set a reminder FOR a team member ("remind Dorcas to send the statements on the 2nd"), create_task with assignee_name = that person and the due_on, so the WhatsApp reminder pings THEM. IMPORTANT: the platform does NOT yet support recurring or repeating reminders ("every month", "the 2nd of each month"), create_task holds ONE date only. For a repeating request, set the NEXT single date now, say plainly that you set that one and that recurring is not yet supported, and offer to renew it each time. Never loop asking to confirm a recurrence you cannot create.
+- REMINDERS: when she asks to be reminded of something by a date ("remind me on June 30 about KRA"), create_task with that exact due_on (YYYY-MM-DD), assignee empty so it is HER reminder. To set a reminder FOR a team member ("remind Dorcas to send the statements on the 2nd"), create_task with assignee_name = that person and the due_on, so the WhatsApp reminder pings THEM. IMPORTANT: the platform does NOT yet support recurring or repeating items, neither reminders nor calendar events ("every month", "every Monday", "the 2nd of each month"): create_task and create_event each hold ONE date only. For a repeating request, set the NEXT single date now, say plainly that you set that one and that recurring is not yet supported, and offer to renew it each time. Never loop asking to confirm a recurrence you cannot create. The same honesty applies to anything read-only to you (donations, grants, bank-statement history, account balances): if she asks you to change one, say plainly you can't edit that by chat and offer what you can do, do not hedge or loop.
 - SEND TO A PERSON: when ${who} tells you to message, tell, text, or let a specific person know something ("tell Nur the meeting moved to 3", "message Grace the funds are in"), use message_person with that person's name and the exact words ${who} intends. It sends straight away from this line, so send what they said and never invent the content. If you cannot find a number, or more than one person matches the name, ask. To post into a whole team group use post_to_group instead; to send an email use draft_email.
 - LEARN: when she teaches you a durable fact or corrects you about the org, people, accounts, or policy ("remember X", "note that X", "actually the EIN is Y", "Linda is no longer a vendor"), call remember_fact so you keep it forever. Pass a short topic so a later correction updates it in place. This is for facts she asks you to remember, never for one-off tasks or payments.
 
@@ -377,6 +397,10 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       // into an honest "I have not done that yet" and let the operator confirm.
       if (claimsCompletionWithoutSuccess(reply, toolRuns)) {
         reply = humanize(HONEST_NO_ACTION, { now: { long: n.long, today: n.today } });
+      } else if (isHedgeLoop(reply, opts.history)) {
+        // Third hedge in a row with nothing accomplished: break the loop honestly
+        // instead of asking the same thing again (the Dorcas-style circling).
+        reply = humanize(LOOP_BREAK, { now: { long: n.long, today: n.today } });
       }
       const v = await verifyReply({ userMessage: opts.command, toolRuns, reply });
       if (!v.grounded) {

@@ -231,8 +231,12 @@ async function processJob(db: any, job: any): Promise<void> {
       // "verif(y|ied)" MUST be here: the bank_import summary instructs the owner
       // to reply "verified", and without it that word falls through to the brain
       // and the staged action never commits (caught in the live replay).
-      const yes = /^(y|yes|yep|yeah|yup|confirm(ed)?|verif(y|ied)|correct|go ahead|do it|please do|ok(ay)?|sawa|ndio|ndiyo|approved?)\b/.test(t);
-      const no = /^(n|no|nope|cancel|don'?t|do not|stop|wrong|nah|hapana)\b/.test(t);
+      // CONFIRM VOCABULARY, broadened (was a closed list that looped when the operator
+      // confirmed with an unanticipated phrase: "verified" had to be hand-added after
+      // a live miss). Accepts emoji, leading filler ("please/ok/yes ..."), and common
+      // affirmatives/negatives in English, Swahili, and Sheng.
+      const yes = /^(?:👍|✅|🙏|💯)|^(?:please\s+|ok(?:ay)?\s+|yes\s+|yeah\s+|sure\s+)?(?:y|yes|yep+|yeah|yup|yebo|confirm(?:ed)?|verif(?:y|ied)|correct|that'?s right|go ahead|go for it|do it|do that|make it so|proceed|send(?: it)?|post it|log it|save it|please do|approved?|ok(?:ay)?|sounds good|looks good|lgtm|perfect|great|absolutely|sure|fine|sawa(?:\s+sawa)?|ndio|ndiyo|haya|poa)\b/.test(t);
+      const no = /^(?:👎|🚫)|^(?:n|no|nope|nah|cancel|don'?t|do not|stop|wrong|hold(?:\s+on)?|wait|not yet|later|scrap|hapana|la)\b/.test(t);
       if (yes) {
         // The resolver now serves more than one kind. Payments commit to a row
         // and read back as "Logged X"; a bank_import reads its ledger and hands
