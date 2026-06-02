@@ -121,12 +121,32 @@ const LOOP_BREAK =
 const HEDGE_MARK =
   /\b(?:please confirm|confirm if you|would you like me to|do you want me to|should i\b|shall i\b|let me know if you|want me to|i have not (?:done|created|set|yet)|i haven'?t (?:done|created|set)|not done yet|have not done it yet)\b/i;
 const isHedge = (s: string) => HEDGE_MARK.test(String(s || ""));
-// True if this reply hedges AND at least two of the last three assistant turns also
-// hedged, i.e. we are now on the third hedge in a row. That is a loop, not progress.
+// True if this reply hedges AND the LAST assistant turn also hedged, i.e. this is
+// the SECOND hedge in a row. Originally this required the third consecutive hedge
+// (cadence >= 2), but a two-turn ping-pong ("should I?" / "want me to?") escaped
+// it entirely and read as the loop the operator reported. The second repeat is
+// already a loop: one ask is fine, a second identical-shape ask is circling. So we
+// break on the immediately-preceding hedge. Money staging ("reply yes to confirm")
+// is NOT a hedge phrase here, so a legitimate payment confirmation is unaffected.
 function isHedgeLoop(reply: string, history: { role: string; content: string }[] = []): boolean {
   if (!isHedge(reply)) return false;
-  const priorHedges = history.filter((m) => m.role === "assistant").slice(-3).filter((m) => isHedge(String(m.content || ""))).length;
-  return priorHedges >= 2;
+  const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
+  return !!lastAssistant && isHedge(String(lastAssistant.content || ""));
+}
+
+// BLIND-MODE FIGURE BACKSTOP. When the OpenAI verifier could not run (unverified:
+// no key / error), an invented money figure has no second-model check. We cannot
+// re-derive grounding deterministically (magnitudes, history), so we do the honest
+// non-destructive thing: if the reply states a MATERIAL money figure and NOTHING
+// this turn could be its source (no number in the user's message AND no number in
+// any tool result), we do not delete the figure (it might be grounded in history),
+// we APPEND a caveat so the operator knows it was not verified. Conservative by
+// design: it fires only when there is provably no in-turn numeric source at all.
+const hasAnyNumber = (s: string) => /\d{2,}/.test(String(s || ""));
+function unverifiableFigure(reply: string, command: string, toolRuns: { name: string; result: any }[]): boolean {
+  if (!MONEY_FIGURE.test(reply)) return false;
+  const sourcePresent = hasAnyNumber(command) || hasAnyNumber(JSON.stringify(toolRuns));
+  return !sourcePresent;
 }
 
 // One model call, hardened against the input-tokens-per-minute (ITPM) rate limit.
@@ -408,6 +428,10 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
           v.corrected || "I want to be accurate before I state anything firm. Tell me the exact amount and who it was for, and I will log precisely that.",
           { now: { long: n.long, today: n.today } },
         );
+      } else if (v.unverified && unverifiableFigure(reply, opts.command, toolRuns)) {
+        // The verifier was unavailable AND the reply states a money figure with no
+        // in-turn source. Do not assert it as checked: append an honest caveat.
+        reply = `${reply}\n\nI could not double-check that figure just now, so please confirm it before you rely on it.`;
       }
       // HONESTY in degraded mode: if this turn ran on the OpenAI backup (Claude
       // unavailable), say so. The empty-credits incident showed a silent backup

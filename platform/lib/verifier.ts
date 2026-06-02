@@ -15,7 +15,12 @@
 // reply through unchanged. The verifier must never be able to break the bot.
 
 type ToolRun = { name: string; input?: any; result?: any };
-export type VerifyResult = { grounded: boolean; problems: string[]; corrected?: string };
+// `unverified` is true when the check could NOT run (no key, HTTP error, parse
+// error). It is distinct from grounded=true (checked and clean): the caller must
+// be able to tell "verified clean" from "flew blind", because the second is when
+// an invented figure can slip through. grounded stays true in both so the
+// verifier can never block a reply (fail-open), but unverified flags the blind case.
+export type VerifyResult = { grounded: boolean; problems: string[]; corrected?: string; unverified?: boolean };
 
 const OPENAI_MODEL = "gpt-4o-mini";
 
@@ -49,7 +54,11 @@ export async function verifyReply(opts: {
   reply: string;
 }): Promise<VerifyResult> {
   const key = process.env.OPENAI_API_KEY;
-  if (!key || !opts.reply.trim()) return { grounded: true, problems: [] };
+  if (!opts.reply.trim()) return { grounded: true, problems: [] };
+  if (!key) {
+    console.warn("[verifier] OPENAI_API_KEY missing: reply passed UNVERIFIED (grounding check skipped)");
+    return { grounded: true, problems: [], unverified: true };
+  }
   const payload = {
     USER: opts.userMessage,
     // Surface each tool's success explicitly so the checker can tell a real
@@ -72,7 +81,10 @@ export async function verifyReply(opts: {
         ],
       }),
     });
-    if (!r.ok) return { grounded: true, problems: [] };
+    if (!r.ok) {
+      console.warn(`[verifier] OpenAI check failed (${r.status}): reply passed UNVERIFIED`);
+      return { grounded: true, problems: [], unverified: true };
+    }
     const j = await r.json();
     const txt = j?.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(txt);
@@ -81,7 +93,8 @@ export async function verifyReply(opts: {
       problems: Array.isArray(parsed.problems) ? parsed.problems : [],
       corrected: typeof parsed.corrected === "string" && parsed.corrected.trim() ? parsed.corrected.trim() : undefined,
     };
-  } catch {
-    return { grounded: true, problems: [] };
+  } catch (e: any) {
+    console.warn(`[verifier] check errored (${e?.message || e}): reply passed UNVERIFIED`);
+    return { grounded: true, problems: [], unverified: true };
   }
 }
