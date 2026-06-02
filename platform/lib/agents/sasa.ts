@@ -398,7 +398,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
     const results = [];
     for (const block of resp.content) {
       if (block.type === "tool_use") {
-        const out = await runSmartTool(block.name, block.input || {}, { sourceGroup: inGroup ? opts.groupName : undefined, senderPhone: inGroup ? opts.speakerPhone : undefined, proofPath: opts.proofPath, confirmWrites: opts.confirmWrites, contactId: opts.contactId, sourceMessageId: opts.sourceMessageId, tier: role, rank: inGroup ? null : (opts.operatorRank ?? null), operatorName: opts.operatorName, casesIntake: opts.casesIntake });
+        const out = await runSmartTool(block.name, block.input || {}, { sourceGroup: inGroup ? opts.groupName : undefined, senderPhone: opts.speakerPhone, proofPath: opts.proofPath, confirmWrites: opts.confirmWrites, contactId: opts.contactId, sourceMessageId: opts.sourceMessageId, tier: role, rank: inGroup ? null : (opts.operatorRank ?? null), operatorName: opts.operatorName, casesIntake: opts.casesIntake });
         if (!isReadTool(block.name)) actions.push(out as ToolResult);
         toolRuns.push({ name: block.name, input: block.input, result: out });
         results.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(out) });

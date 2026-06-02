@@ -262,7 +262,7 @@ async function processJob(db: any, job: any): Promise<void> {
 
   let reply: string | undefined;
   try {
-    ({ reply } = await runSasa({ history, command, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined }));
+    ({ reply } = await runSasa({ history, command, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined }));
   } catch (e: any) {
     // A REAL backend failure (Claude API error, tool/DB throw). This is the only
     // path that admits being stuck and asks the operator to retry.

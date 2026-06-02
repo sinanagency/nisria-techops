@@ -74,10 +74,14 @@ async function findMember(db: any, nameHint?: string | null): Promise<any | null
 // be guessed from a display name. The phone<->member bridge is learned in
 // /api/group/ingest, so this fills in for more members over time.
 async function findMemberByPhone(db: any, phone?: string | null): Promise<any | null> {
-  const p = String(phone || "").replace(/[^\d]/g, "");
+  // Normalize with the SAME key operatorOf uses (drops "+", spaces, and a leading
+  // "00"): team phones are stored "00971..." while a wa_id arrives "971...", so a
+  // raw eq() never matched and the speaker was invisible to complete_task. Match in
+  // JS against the phoneKey of each stored number, exactly like operatorOf does.
+  const p = phoneKey(String(phone || ""));
   if (!p) return null;
-  const { data } = await db.from("team_members").select("id,name,role,email,status").eq("phone", p).limit(1);
-  return (data && data[0]) || null;
+  const { data } = await db.from("team_members").select("id,name,role,email,status,phone").limit(400);
+  return (data || []).find((t: any) => phoneKey(t.phone) === p) || null;
 }
 
 // ===========================================================================
