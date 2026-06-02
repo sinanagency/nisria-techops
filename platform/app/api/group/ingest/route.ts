@@ -160,7 +160,12 @@ export async function POST(req: NextRequest) {
           handled_by: "group-bot", status: "seen", sender_type: "group",
           account: group, external_id: messageId || null,
         });
-      } catch { /* best-effort: never crash the bot loop */ }
+      } catch (e: any) {
+        // best-effort: never crash the bot loop, but LOG it (honesty law). A
+        // swallowed case-photo failure is invisible, exactly the blindness that
+        // made attachment handling look broken with no trace.
+        await emit({ type: "whatsapp.group_media_failed", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, payload: { group, stage: "case_photo", mime: mediaMime, name: mediaName, error: String(e?.message || e).slice(0, 200) } }).catch(() => {});
+      }
     }
     return NextResponse.json({ ok: true, reply: "", casePhoto: true });
   }
@@ -194,7 +199,12 @@ export async function POST(req: NextRequest) {
           inputs: [{ channel: "whatsapp", attribution: senderName || senderPhone, filename: mediaName || safeName, mime: mediaMime, storage_path: path, text: text || null }],
         });
         await emit({ type: "whatsapp.group_media_in", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, payload: { group, from: senderPhone, mime: mediaMime, name: mediaName } });
-      } catch { /* best-effort: never crash the bot loop on an ingest hiccup */ }
+      } catch (e: any) {
+        // best-effort: never crash the bot loop on an ingest hiccup, but LOG it.
+        // A team member dropping a PDF that silently fails to file is the same
+        // class of invisible failure as the 727 PDF bug; surface it, never swallow.
+        await emit({ type: "whatsapp.group_media_failed", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, payload: { group, stage: "media_ingest", mime: mediaMime, name: mediaName, error: String(e?.message || e).slice(0, 200) } }).catch(() => {});
+      }
     }
     return NextResponse.json({ ok: true, reply: "", ingested: true });
   }
@@ -204,7 +214,8 @@ export async function POST(req: NextRequest) {
   // like a typed message. Kenyan staff talk more than they type, so this is the
   // difference between hearing the group and being half-deaf to it.
   if (!text && audioB64) {
-    try { text = String(await transcribeAudio(audioB64, audioMime)).trim(); } catch { text = ""; }
+    try { text = String(await transcribeAudio(audioB64, audioMime)).trim(); }
+    catch (e: any) { text = ""; await emit({ type: "whatsapp.group_media_failed", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: null, payload: { group, stage: "transcribe", mime: audioMime, error: String(e?.message || e).slice(0, 200) } }).catch(() => {}); }
   }
 
   // SHARED LINK: fold WhatsApp's own preview (title/description) into the text so

@@ -103,6 +103,7 @@ export const SMART_TOOLS = [
   { name: "lookup_contact", description: "Find a person's contact details (phone, email) by name. Searches contacts, the team roster, and beneficiary records. Use for 'what is X's number', 'how do I reach X', 'what's her email'. You CAN look this up, do not say you have no number.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "team_detail", description: "The team roster with each person's role, phone number, pay (salary or stipend), responsibilities, and status. Use for 'their salaries', 'what does X earn', 'X's number', 'who does what', 'the full team'. Answer directly from this.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional name or role to filter by" } } } },
   { name: "search_documents", description: "Search the filed documents (reports, bank statements, letters, forms, returns) by title or content. Use for 'find the X document', 'do we have a doc about Y', 'pull up the Z report or statement'. Returns titles, summaries, and dates.", input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+  { name: "file_document", description: "Confirm where a document is filed, or file/move it into a Library folder. Any document sent to you (PDF, photo, statement) is read and filed AUTOMATICALLY the moment it arrives, so use this to CONFIRM a document's shelf or to MOVE/recategorize it, NEVER to claim you cannot file or to ask the operator to upload it themselves. Match by a fragment of the title. Folders: legal, finance, programs, events, media, branding, people, reports, general. Omit folder to only report where the matching documents currently live.", input_schema: { type: "object", properties: { query: { type: "string", description: "a fragment of the document title, e.g. 'constitution' or 'KRA'" }, folder: { type: "string", enum: ["legal", "finance", "programs", "events", "media", "branding", "people", "reports", "general"], description: "the shelf to file it under (omit to only confirm current placement)" }, brand: { type: "string", enum: ["nisria", "maisha", "ahadi"], description: "which brand it belongs to, optional" } }, required: ["query"] } },
   { name: "list_learned", description: "Show what you have LEARNED and remembered: the durable facts in your memory (the Brain), both what the operator explicitly taught you and what you quietly picked up on your own. Use for 'what have you learned', 'what do you remember', 'what's in your memory', 'what have you picked up lately', or 'what do you know about <topic>'. Optionally filter by a topic word. Returns each fact with how you learned it (taught vs picked up) and when, so the operator can see and correct your memory.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional topic word to filter by, omit for the most recent" } } } },
   { name: "list_campaigns", description: "The fundraising campaigns with goal, amount raised, status, and dates. Use for 'how are our campaigns doing', 'what campaigns do we have', 'how much has X raised'.", input_schema: { type: "object", properties: {} } },
   { name: "group_activity", description: "What is happening in the team WhatsApp groups: recent messages and the open or overdue tasks born in a group. Use for 'what is happening in the Field Team group', 'any updates from the groups', 'what is pending in <group>', 'is anything overdue in the groups'. Optionally narrow to one group by name.", input_schema: { type: "object", properties: { group: { type: "string", description: "optional group name to narrow to, omit for all groups" } } } },
@@ -610,6 +611,48 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: job } = await db.from("jobs").insert({ kind: "group.send", payload: { group, text }, status: "queued" }).select("id").single();
     await emit({ type: "group.send_queued", source: "agent:sasa", actor: "Nur", subject_type: "job", subject_id: job?.id || null, payload: { group, text: text.slice(0, 200) } });
     return { ok: true, summary: humanize(`Queued for the ${group} group. The group bot will post it.`, opts), affordance: { kind: "open", label: "View groups", href: "/groups" }, detail: { job_id: job?.id, group } };
+  }
+
+  // ---- ACTION: file_document (confirm placement, or file/move into a Library folder) ----
+  // Documents are auto-filed on arrival (the ingest pipeline indexes them into the
+  // documents table + Brain). This makes filing a REAL action the operator can drive:
+  // confirm where a doc landed, or set/move its shelf. Closes the prompt-vs-tool gap
+  // that made Sasa claim it "has no tool to file into folders".
+  if (name === "file_document") {
+    const query = String(input.query || "").trim();
+    if (!query) return { ok: false, summary: humanize("Tell me which document, a word from its title is enough.", opts), error: "missing query" };
+    const FOLDERS = ["legal", "finance", "programs", "events", "media", "branding", "people", "reports", "general"];
+    let folder = String(input.folder || "").toLowerCase().trim();
+    if (folder && !FOLDERS.includes(folder)) {
+      const syn: Record<string, string> = { compliance: "legal", governance: "legal", registration: "legal", financial: "finance", finances: "finance", accounting: "finance", staff: "people", team: "people", hr: "people", program: "programs", event: "events", report: "reports", brand: "branding", photo: "media", photos: "media", image: "media", images: "media" };
+      folder = syn[folder] || "general";
+    }
+    const brand = ["nisria", "maisha", "ahadi"].includes(String(input.brand || "").toLowerCase()) ? String(input.brand).toLowerCase() : null;
+    const like = `%${query.replace(/[,()*%]/g, "")}%`;
+    const { data: docs } = await db.from("documents").select("id,title,folder,drive_file_id").ilike("title", like).order("created_at", { ascending: false }).limit(10);
+    const list = (docs || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a filed document matching "${query}". Try another word from its title, or resend the file and I will pull it in.`, opts), detail: { matched: 0 } };
+
+    if (!folder) {
+      // CONFIRM-ONLY: report where the matches already live (they are filed on arrival).
+      const lines = list.map((d) => `"${d.title}" is filed under ${d.folder || "general"}`);
+      return { ok: true, summary: humanize(list.length === 1 ? `${lines[0]}.` : `Found ${list.length}: ${lines.join("; ")}.`, opts), affordance: { kind: "open", label: "Open library", href: "/library" }, detail: { matched: list.length, folders: list.map((d) => d.folder) } };
+    }
+
+    // FILE / MOVE: set the shelf on each matched document, and promote the stored
+    // attachment to a shelved Library document so it shows on that shelf in the UI.
+    const filed: string[] = [];
+    for (const d of list) {
+      await db.from("documents").update({ folder, ...(brand ? { brand } : {}), updated_at: new Date().toISOString() }).eq("id", d.id);
+      const storagePath = String(d.drive_file_id || "").replace(/^ingest:/, "");
+      if (storagePath && storagePath !== String(d.drive_file_id || "")) {
+        const { data: asset } = await db.from("assets").select("id").eq("storage_path", storagePath).limit(1);
+        if (asset?.[0]) await db.from("assets").update({ type: "document", tags: [folder], ...(brand ? { brand } : {}) }).eq("id", asset[0].id);
+      }
+      filed.push(`"${d.title}"`);
+    }
+    await emit({ type: "document.filed", source: "agent:sasa", actor: ctx.operatorName || "Nur", subject_type: "asset", subject_id: null, payload: { folder, brand, count: filed.length, query } });
+    return { ok: true, summary: humanize(filed.length === 1 ? `Filed ${filed[0]} under ${folder}.` : `Filed ${filed.length} documents under ${folder}: ${filed.join(", ")}.`, opts), affordance: { kind: "open", label: "Open library", href: "/library" }, detail: { filed: filed.length, folder, brand } };
   }
 
   // ---- ACTION · DIRECT SEND: message_person ----

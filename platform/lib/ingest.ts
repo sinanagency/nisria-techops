@@ -177,14 +177,14 @@ export async function processBatch(batchId: string): Promise<{ done: number }> {
 
   for (const it of list) {
     try {
-      const { route, hash } = await classifyItem(it, n.long);
+      const { route, hash, text } = await classifyItem(it, n.long);
       const storedRoute = { ...(it.route || {}), ...route, ...(hash ? { _hash: hash } : {}) };
       const ts = new Date().toISOString();
       if (canAutoApply(route)) {
         // auto-file the obvious. If the write throws, fall back to review so
         // nothing is silently lost.
         try {
-          await applyRoute(route, it);
+          await applyRoute(route, it, text);
           await db.from("ingest_items").update({ status: "applied", applied: true, routed_to: route.target, route: storedRoute, updated_at: ts }).eq("id", it.id);
         } catch (e: any) {
           await db.from("ingest_items").update({ status: "routed", routed_to: route.target, route: storedRoute, error: String(e?.message || "auto-apply failed").slice(0, 300), updated_at: ts }).eq("id", it.id);
@@ -229,7 +229,7 @@ export async function processBatch(batchId: string): Promise<{ done: number }> {
 // router itself runs on Haiku (cheap, separate rate pool). Dedup: if the same
 // bytes/text were filed before, short-circuit to skip so we never reprocess or
 // double-file a re-sent document.
-async function classifyItem(it: any, dateLong: string): Promise<{ route: Route; hash: string | null }> {
+async function classifyItem(it: any, dateLong: string): Promise<{ route: Route; hash: string | null; text: string }> {
   const db = admin();
   const inlineText = it?.route?._text ? String(it.route._text) : "";
   const mime = it.mime || "";
@@ -260,7 +260,7 @@ async function classifyItem(it: any, dateLong: string): Promise<{ route: Route; 
       .in("status", ["routed", "applied"])
       .neq("id", it.id)
       .limit(1);
-    if (prior?.[0]) return { route: { target: "skip", reason: "Duplicate of an item already filed.", confidence: 0.96 }, hash };
+    if (prior?.[0]) return { route: { target: "skip", reason: "Duplicate of an item already filed.", confidence: 0.96 }, hash, text: "" };
   }
 
   // Assemble the text the router will classify.
@@ -278,7 +278,7 @@ async function classifyItem(it: any, dateLong: string): Promise<{ route: Route; 
     contentForRouter = visionCaption;
   }
   if (!contentForRouter && it.filename) contentForRouter = `A file named ${it.filename}.`;
-  if (!contentForRouter) return { route: { target: "skip", reason: "Nothing readable in this item.", confidence: 0.2 }, hash };
+  if (!contentForRouter) return { route: { target: "skip", reason: "Nothing readable in this item.", confidence: 0.2 }, hash, text: "" };
 
   const route = await claudeJSON<Route>(routerSystem(dateLong), contentForRouter.slice(0, 14000), 700, HAIKU);
   if (!route || !route.target) {
@@ -288,11 +288,12 @@ async function classifyItem(it: any, dateLong: string): Promise<{ route: Route; 
         ? { target: "library", caption: visionCaption || it.filename || "Imported file", reason: "Filed in the Library.", confidence: 0.4 }
         : { target: "brain", section: "other", title: "Imported note", content: contentForRouter.slice(0, 2000), reason: "Kept as org context.", confidence: 0.4 },
       hash,
+      text: contentForRouter,
     };
   }
   // carry the vision caption through for a library route if the model omitted one
   if (route.target === "library" && !route.caption) route.caption = visionCaption || it.filename || "Imported file";
-  return { route, hash };
+  return { route, hash, text: contentForRouter };
 }
 
 // ---------------------------------------------------------------------------
@@ -315,8 +316,18 @@ export async function applyBatch(batchId: string, overrides: Record<string, Part
   for (const it of list) {
     const base: Route = { ...(it.route || {}), target: (it.routed_to || it.route?.target || "skip") as RouteTarget };
     const route: Route = { ...base, ...(overrides[it.id] || {}) };
+    // Re-derive the document text locally (free) for the searchable index, rather
+    // than bloating every routed item's jsonb with its full text. Inline-text
+    // items have no storage_path, so indexDocument no-ops on them anyway.
+    let docText = String(it.route?._text || "");
+    if (!docText && it.storage_path) {
+      try {
+        const { data: blob } = await db.storage.from("assets").download(it.storage_path);
+        if (blob) docText = (await extractTextFromBuffer(Buffer.from(await blob.arrayBuffer()), it.mime || "")) || "";
+      } catch {}
+    }
     try {
-      await applyRoute(route, it);
+      await applyRoute(route, it, docText);
       await db.from("ingest_items").update({ status: "applied", applied: true, routed_to: route.target, route: { ...(it.route || {}), ...route }, updated_at: new Date().toISOString() }).eq("id", it.id);
       applied++;
     } catch (e: any) {
@@ -329,12 +340,52 @@ export async function applyBatch(batchId: string, overrides: Record<string, Part
   return { applied };
 }
 
+// Mirror a real filed document into the `documents` table so search_documents
+// can find it by title or full text. Keyed on a synthetic, stable drive_file_id
+// (the table requires + uniques that column) so re-sending the same file UPSERTS
+// rather than duplicating. No-ops for inline notes (no storage_path) and for files
+// with no text layer (an image with <30 chars extracted): those are reachable via
+// the Brain and the asset thread respectively, not via document text search.
+async function indexDocument(it: any, route: Route, docText: string): Promise<void> {
+  if (!it.storage_path) return;
+  const text = (docText || "").trim();
+  if (text.length < 30) return;
+  const db = admin();
+  const category =
+    normCategory(route.category) ||
+    (route.target === "finance" ? "finance" : route.target === "brain" ? String(route.section || "general") : "general");
+  const docType = normCategory(route.category) || (String(it.mime || "").startsWith("image/") ? "image" : "document");
+  await db.from("documents").upsert(
+    {
+      drive_file_id: `ingest:${it.storage_path}`,
+      title: (route.title || route.caption || it.filename || "Imported document").slice(0, 200),
+      folder: category,
+      doc_type: docType,
+      brand: normBrand(route.brand),
+      mime: it.mime || null,
+      extracted_text: text.slice(0, 200000),
+      summary: (route.content || route.caption || route.reason || "").slice(0, 600) || null,
+      source: it.channel === "whatsapp" ? "whatsapp" : "ingest",
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "drive_file_id" },
+  );
+}
+
 // Write ONE routed item to its destination. Attribution flows into the source/
 // channel so a future WhatsApp message is traceable to the team member.
-async function applyRoute(route: Route, it: any): Promise<void> {
+async function applyRoute(route: Route, it: any, docText = ""): Promise<void> {
   const db = admin();
   const attribution = it.attribution || "Nur";
   const channel = it.channel || "file";
+
+  // FINDABILITY (Fix for the split-brain): search_documents reads the `documents`
+  // table, but routing otherwise writes only to assets/brain, so a filed PDF was
+  // invisible to "what's our registration number?". Mirror any real file we have
+  // text for into `documents`, regardless of its routing target, so it surfaces.
+  // Logged on failure, never swallowed (honesty law); never blocks the routing write.
+  try { await indexDocument(it, route, docText); }
+  catch (e: any) { await emit({ type: "ingest.index_failed", source: "ingest", actor: attribution, subject_type: "asset", subject_id: it.asset_id || null, payload: { filename: it.filename, error: String(e?.message || e).slice(0, 200) } }); }
 
   if (route.target === "brain") {
     const section = String(route.section || "other") as SectionKey;

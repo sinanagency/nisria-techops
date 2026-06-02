@@ -25,6 +25,7 @@ import { readMedia } from "../../../../lib/anthropic";
 import { transcribeAudio } from "../../../../lib/transcribe";
 import { createBatch } from "../../../../lib/ingest";
 import { storeMedia } from "../../../../lib/media-store";
+import { extractTextFromBuffer } from "../../../../lib/extract-text";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -109,18 +110,47 @@ async function processJob(db: any, job: any): Promise<void> {
         const stored = await storeMedia({ base64: media.base64, mime: media.mime, name: mediaName, sourceRef: mediaId, title: text || mediaName });
         proofPath = stored.storagePath;
         if (stored.assetId && waMsgId) { try { await db.from("messages").update({ asset_id: stored.assetId }).eq("external_id", waMsgId); } catch {} }
-        const extractPrompt = "Read this attachment. If it shows one or more payments (M-Pesa, bank transfer, receipt, invoice, statement), list each as: payee, amount, currency (KES or USD), what it was for, and date if shown. Otherwise describe what it contains in 1-2 lines. Be precise with numbers, never guess an amount.";
+        const isDoc = !media.mime.startsWith("image/");
+        // EXTRACTION, LOCAL-FIRST (local-first law). A text-layer PDF is read for
+        // FREE with unpdf, never touching a rate-limited API. Only a scanned/image
+        // PDF, or an actual image, falls through to the Claude vision read. This
+        // makes the common document case (a constitution, a registration cert)
+        // structurally impossible to lose to a 429 or an API hiccup, which is the
+        // exact failure that made the bot wrongly claim it "cannot read PDFs".
         let extracted = "";
-        try { extracted = await readMedia(media.base64, media.mime, extractPrompt); } catch { extracted = ""; }
+        if (isDoc) {
+          try {
+            const buf = Buffer.from(media.base64, "base64");
+            const local = await extractTextFromBuffer(buf, media.mime);
+            if (local && local.trim().length >= 40) extracted = local.trim();
+          } catch (e: any) {
+            await emit({ type: "whatsapp.extract_failed", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { stage: "local", mime: media.mime, name: mediaName, error: String(e?.message || e).slice(0, 200) } });
+          }
+        }
+        // Fall to the vision/document API only when local extraction found nothing
+        // (a scanned PDF, or any image). A real failure here is LOGGED and raised as
+        // an incident, NEVER swallowed silently into "" (honesty law): a hidden
+        // error is exactly why this looked like a missing capability for weeks.
+        if (!extracted) {
+          const extractPrompt = "Read this attachment. If it shows one or more payments (M-Pesa, bank transfer, receipt, invoice, statement), list each as: payee, amount, currency (KES or USD), what it was for, and date if shown. Otherwise describe what it contains in 1-2 lines. Be precise with numbers, never guess an amount.";
+          try {
+            extracted = await readMedia(media.base64, media.mime, extractPrompt);
+          } catch (e: any) {
+            extracted = "";
+            await emit({ type: "whatsapp.extract_failed", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { stage: "vision", mime: media.mime, name: mediaName, error: String(e?.message || e).slice(0, 200) } });
+            await pushIncident("Sasa attachment read", `Could not read ${mediaName || media.mime} from ${from}: ${String(e?.message || e).slice(0, 200)}`);
+          }
+        }
         if (extracted) {
-          const isDoc = !media.mime.startsWith("image/");
           const kind = isDoc ? "document" : "image/screenshot";
           command = `${text ? text + "\n\n" : ""}[${kind} attachment, here is what it shows]\n${extracted}\n\nIf the above shows payments Nur made, record each one with record_payment. Otherwise act on it appropriately.`;
           // POPULATE ACCORDINGLY (one-brain + local-first laws): a document Nur
           // sends is not just chat. Write its content back onto the inbound message
           // (so the thread stops reading as a bare "[document]") and route it
           // through the ingest pipeline, which classifies it to the Brain, the
-          // Library, or a record for Nur's review. Best-effort: never break the reply.
+          // Library, or a record for Nur's review, and indexes it so search_documents
+          // can find it. We thread the stored file (storage_path + asset_id) so the
+          // filed document links to the real attachment. Best-effort: never break the reply.
           if (isDoc) {
             const label = mediaName || "Document";
             const summary = `${label}\n\n${extracted}`.slice(0, 4000);
@@ -129,15 +159,21 @@ async function processJob(db: any, job: any): Promise<void> {
               await createBatch({
                 source: "whatsapp",
                 attribution: opName || name || "WhatsApp",
-                inputs: [{ channel: "whatsapp", attribution: opName || name || "WhatsApp", filename: mediaName, mime: media.mime, text: extracted }],
+                inputs: [{ channel: "whatsapp", attribution: opName || name || "WhatsApp", filename: mediaName, mime: media.mime, text: extracted, storage_path: proofPath, asset_id: stored.assetId }],
               });
             } catch {}
           }
         } else {
-          command = text || "(attachment could not be read)";
+          // EXTRACTION FAILED for real (both local and vision). NEVER hand Sasa a
+          // bare "could not read" string that it improvises into "I don't have a
+          // tool to read PDFs". Tell it the truth so it owns the one-off failure in
+          // character and asks for a resend, never denying a capability it has.
+          const label = mediaName || (isDoc ? "that document" : "that image");
+          command = `${text ? text + "\n\n" : ""}[A file named "${label}" (${media.mime}) arrived but its contents could not be extracted on this attempt. Tell ${opName || name || "them"} plainly that you received "${label}" but the read failed just this once, and ask them to resend it so you can pull it in. Do NOT say you lack the ability to read PDFs, documents, or images. You can. This was a one-off failure.]`;
         }
       } else {
-        command = text || "(attachment could not be downloaded)";
+        await emit({ type: "whatsapp.extract_failed", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { stage: "download", mediaId, mime: mediaMime, name: mediaName } });
+        command = `[A file${mediaName ? ` named "${mediaName}"` : ""} arrived from ${opName || name || "the operator"} but the download failed this time. Tell them you received it but could not download it just now, and ask them to resend. Do NOT claim you cannot read files.]`;
       }
     } else if (mediaMime.startsWith("audio/")) {
       // VOICE NOTE: Kenyan staff + Nur talk more than they type. Transcribe via
@@ -145,7 +181,7 @@ async function processJob(db: any, job: any): Promise<void> {
       // typed message, so "paid Lucy 15k" spoken logs the same as typed.
       const media = await downloadMedia(mediaId);
       let transcript = "";
-      if (media) { try { transcript = await transcribeAudio(media.base64, media.mime); } catch { transcript = ""; } }
+      if (media) { try { transcript = await transcribeAudio(media.base64, media.mime); } catch (e: any) { transcript = ""; await emit({ type: "whatsapp.extract_failed", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, payload: { stage: "transcribe", mime: media.mime, error: String(e?.message || e).slice(0, 200) } }); } }
       if (transcript) {
         // keep the transcript on the inbound row so the thread reads the words,
         // not "[audio]", and so conversation history has the real content.
