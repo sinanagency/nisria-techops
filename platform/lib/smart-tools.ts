@@ -574,11 +574,12 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
   }
   if (name === "list_payroll") {
     if (tier === "team") return { error: "not available here" };
-    let qb = db.from("team_payments").select("amount,currency,pay_period,paid_at,status,note,team_members(name)").order("paid_at", { ascending: false }).limit(50);
+    // Payroll lives in `payments` (category=payroll), keyed by payee NAME, not the empty team_payments table.
+    let qb = db.from("payments").select("payee,purpose,amount,currency,status,paid_at,method").eq("category", "payroll").order("paid_at", { ascending: false, nullsFirst: false }).limit(50);
+    if (input.name) qb = qb.ilike("payee", `%${String(input.name).replace(/[,()*%]/g, "")}%`);
     const { data } = await qb;
-    let rows = (data || []) as any[];
-    if (input.name) { const n = String(input.name).toLowerCase(); rows = rows.filter((r) => String(r.team_members?.name || "").toLowerCase().includes(n)); }
-    return { count: rows.length, payments: rows.map((r) => ({ member: r.team_members?.name || null, amount: money(r.amount), currency: r.currency, period: r.pay_period || null, paid_at: r.paid_at || null, status: r.status })) };
+    const rows = (data || []) as any[];
+    return { count: rows.length, payments: rows.map((r) => ({ member: r.payee || null, amount: money(r.amount), currency: r.currency || "KES", period: r.purpose || null, paid_at: r.paid_at || null, status: r.status, method: r.method || null })) };
   }
   if (name === "read_contact_thread") {
     if (tier === "team") return { error: "not available here" };

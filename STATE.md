@@ -67,8 +67,8 @@ Claude Code populates this table as part of the handoff. The Honesty Audit is no
 
 ## Blocked on the operator
 
-- WhatsApp permanent token plus app secret for the bot to send (Phone Number ID and WABA ID already set)
-- Facebook business verification (keeps failing, blocks WhatsApp full rollout and FB auto-post)
+Resolved 2026-06-04: WhatsApp outbound + Facebook business verification. Verified live against Graph API: permanent SYSTEM_USER token (expires_at 0), WHATSAPP_APP_SECRET set in Vercel prod, number verified_name "Nisria" name_status APPROVED code_verification_status VERIFIED quality_rating GREEN. The 727 bot can send.
+
 - Givebutter API key for live payout sync (currently manual)
 - Vercel Pro plus project migration to Nisria's own Vercel account (currently on Sinan's Hobby)
 - Embedder provider key for semantic recall (current recall is full-text only)
