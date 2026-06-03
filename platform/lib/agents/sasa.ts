@@ -15,7 +15,7 @@ import { humanize, withHumanSystem } from "../humanize";
 import { recall, groundingText } from "../memory";
 import { SMART_TOOLS, runSmartTool, isReadTool, type ToolResult } from "../smart-tools";
 import { verifyReply } from "../verifier";
-import { anthropicViaOpenAI, openAIConfigured } from "../openai-fallback";
+import { anthropicViaOpenAI, openAIConfigured, brainOverrideActive } from "../openai-fallback";
 
 const MODEL = "claude-sonnet-4-5";
 const KEY = () => process.env.ANTHROPIC_API_KEY || "";
@@ -121,12 +121,32 @@ const LOOP_BREAK =
 const HEDGE_MARK =
   /\b(?:please confirm|confirm if you|would you like me to|do you want me to|should i\b|shall i\b|let me know if you|want me to|i have not (?:done|created|set|yet)|i haven'?t (?:done|created|set)|not done yet|have not done it yet)\b/i;
 const isHedge = (s: string) => HEDGE_MARK.test(String(s || ""));
-// True if this reply hedges AND at least two of the last three assistant turns also
-// hedged, i.e. we are now on the third hedge in a row. That is a loop, not progress.
+// True if this reply hedges AND the LAST assistant turn also hedged, i.e. this is
+// the SECOND hedge in a row. Originally this required the third consecutive hedge
+// (cadence >= 2), but a two-turn ping-pong ("should I?" / "want me to?") escaped
+// it entirely and read as the loop the operator reported. The second repeat is
+// already a loop: one ask is fine, a second identical-shape ask is circling. So we
+// break on the immediately-preceding hedge. Money staging ("reply yes to confirm")
+// is NOT a hedge phrase here, so a legitimate payment confirmation is unaffected.
 function isHedgeLoop(reply: string, history: { role: string; content: string }[] = []): boolean {
   if (!isHedge(reply)) return false;
-  const priorHedges = history.filter((m) => m.role === "assistant").slice(-3).filter((m) => isHedge(String(m.content || ""))).length;
-  return priorHedges >= 2;
+  const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
+  return !!lastAssistant && isHedge(String(lastAssistant.content || ""));
+}
+
+// BLIND-MODE FIGURE BACKSTOP. When the OpenAI verifier could not run (unverified:
+// no key / error), an invented money figure has no second-model check. We cannot
+// re-derive grounding deterministically (magnitudes, history), so we do the honest
+// non-destructive thing: if the reply states a MATERIAL money figure and NOTHING
+// this turn could be its source (no number in the user's message AND no number in
+// any tool result), we do not delete the figure (it might be grounded in history),
+// we APPEND a caveat so the operator knows it was not verified. Conservative by
+// design: it fires only when there is provably no in-turn numeric source at all.
+const hasAnyNumber = (s: string) => /\d{2,}/.test(String(s || ""));
+function unverifiableFigure(reply: string, command: string, toolRuns: { name: string; result: any }[]): boolean {
+  if (!MONEY_FIGURE.test(reply)) return false;
+  const sourcePresent = hasAnyNumber(command) || hasAnyNumber(JSON.stringify(toolRuns));
+  return !sourcePresent;
 }
 
 // One model call, hardened against the input-tokens-per-minute (ITPM) rate limit.
@@ -151,6 +171,14 @@ function isHedgeLoop(reply: string, history: { role: string; content: string }[]
 // agent loop below is unchanged. The bot only admits "tripped me up" if BOTH
 // providers are down. This is the fix for the rate-limit dead-air the operator saw.
 async function callClaude(system: string, messages: any[], tools: any[]) {
+  // GYM BRAIN-SWAP (eval-only): when SASA_BRAIN_BASE_URL is set, run the entire
+  // turn on a local OpenAI-compatible model (DGX) via the translator and never
+  // touch Anthropic or OpenAI. The env is never set in production, so this branch
+  // is dead in prod and the Claude path below is unchanged.
+  if (brainOverrideActive()) {
+    const resp = await anthropicViaOpenAI({ model: MODEL, max_tokens: 1400, system, tools, messages });
+    return { ...resp, _via: "gym" };
+  }
   const cachedTools = Array.isArray(tools) && tools.length
     ? tools.map((t, i) => (i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t))
     : tools;
@@ -278,7 +306,7 @@ How tools work:
 - ACTION tools change the platform and run ONLY on an explicit request: record_payment, create_task, add_team_member, add_inventory_item, add_beneficiary. GATED sends (draft_thank_you, draft_email) NEVER reach a real person; they queue a draft into Needs You for approval.
 - FIX MISTAKES: you can undo and correct. delete_payment removes a payment you logged wrong, update_payment corrects its amount/currency/category/payee, complete_task marks a task done, delete_task removes a wrong task. When she says something is wrong, or to remove, undo, or change it, just do it (these only ever touch records you logged, never her bank-statement history).
 - EDIT THE PORTAL: you can update records, not only create them. update_beneficiary changes a child's status, needs, program, region, or contact (never their funding or any money figure). update_task reassigns a task or changes its due date, priority, or title. update_team_member changes someone's role, phone, responsibilities, location, status, or pay (for pay you MUST have the currency, KES or USD, and you state it back, never mixed). add_contact saves a person's number or email and update_contact corrects one. When she tells you to change one of these, find the record by name and do it; if no one matches or more than one does, ask which before changing anything. Money totals, donations, and grants are read-only to you, you never edit those by chat.
-- REMINDERS: when she asks to be reminded of something by a date ("remind me on June 30 about KRA"), create_task with that exact due_on (YYYY-MM-DD), assignee empty so it is HER reminder. To set a reminder FOR a team member ("remind Dorcas to send the statements on the 2nd"), create_task with assignee_name = that person and the due_on, so the WhatsApp reminder pings THEM. IMPORTANT: the platform does NOT yet support recurring or repeating items, neither reminders nor calendar events ("every month", "every Monday", "the 2nd of each month"): create_task and create_event each hold ONE date only. For a repeating request, set the NEXT single date now, say plainly that you set that one and that recurring is not yet supported, and offer to renew it each time. Never loop asking to confirm a recurrence you cannot create. The same honesty applies to anything read-only to you (donations, grants, bank-statement history, account balances): if she asks you to change one, say plainly you can't edit that by chat and offer what you can do, do not hedge or loop.
+- REMINDERS: when she asks to be reminded of something by a date ("remind me on June 30 about KRA"), create_task with that exact due_on (YYYY-MM-DD), assignee empty so it is HER reminder. To set a reminder FOR a team member ("remind Dorcas to send the statements on the 2nd"), create_task with assignee_name = that person and the due_on, so the WhatsApp reminder pings THEM. RECURRING TASKS/REMINDERS ARE SUPPORTED: for a repeating task or reminder ("every Monday", "daily", "the 15th of each month"), call create_task with a recurrence of daily, weekdays, weekly, biweekly, or monthly AND the due_on of the FIRST occurrence. When that task is completed the next one is created automatically, so you do NOT need to ask her to renew it. Confirm it like "Done, I'll remind you every Monday starting June 9." For a reminder at a specific TIME ("remind me at 8 PM"), pass create_task time=HH:MM. Recurring CALENDAR EVENTS are also supported now: create_event with the same recurrence values (daily/weekdays/weekly/biweekly/monthly) and the next instance is created automatically once one passes. Never loop asking to confirm a recurrence. The same honesty applies to anything read-only to you (donations, grants, bank-statement history, account balances): if she asks you to change one, say plainly you can't edit that by chat and offer what you can do, do not hedge or loop.
 - SEND TO A PERSON: when ${who} tells you to message, tell, text, or let a specific person know something ("tell Nur the meeting moved to 3", "message Grace the funds are in"), use message_person with that person's name and the exact words ${who} intends. It sends straight away from this line, so send what they said and never invent the content. If you cannot find a number, or more than one person matches the name, ask. To post into a whole team group use post_to_group instead; to send an email use draft_email.
 - LEARN: when she teaches you a durable fact or corrects you about the org, people, accounts, or policy ("remember X", "note that X", "actually the EIN is Y", "Linda is no longer a vendor"), call remember_fact so you keep it forever. Pass a short topic so a later correction updates it in place. This is for facts she asks you to remember, never for one-off tasks or payments.
 
@@ -408,6 +436,10 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
           v.corrected || "I want to be accurate before I state anything firm. Tell me the exact amount and who it was for, and I will log precisely that.",
           { now: { long: n.long, today: n.today } },
         );
+      } else if (v.unverified && unverifiableFigure(reply, opts.command, toolRuns)) {
+        // The verifier was unavailable AND the reply states a money figure with no
+        // in-turn source. Do not assert it as checked: append an honest caveat.
+        reply = `${reply}\n\nI could not double-check that figure just now, so please confirm it before you rely on it.`;
       }
       // HONESTY in degraded mode: if this turn ran on the OpenAI backup (Claude
       // unavailable), say so. The empty-credits incident showed a silent backup
@@ -465,6 +497,69 @@ export async function evalSasa(opts: { history?: SasaTurn[]; command: string; ro
   const text = (resp.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
   const toolCalls = (resp.content || []).filter((b: any) => b.type === "tool_use").map((b: any) => ({ name: b.name, input: b.input }));
   return { text, toolCalls };
+}
+
+// GYM v2 — format-correct SYNTHETIC tool results (NO DB). Lets the multi-turn
+// dry-run continue so we observe Sasa's FINAL human-facing reply (the thing the
+// single-turn evalSasa could not see) with zero side effects. Mirrors the real
+// tools' result shape: staged payments, created tasks, queued drafts, empty reads.
+function stubTool(name: string, input: any): { ok: boolean; summary: string } {
+  const I = input || {};
+  switch (name) {
+    case "record_payment": return { ok: true, summary: `Ready to log ${I.currency || "KES"} ${I.amount ?? "?"} to ${I.payee || "?"}. Reply yes to confirm.` };
+    case "update_payment": case "delete_payment": return { ok: true, summary: `Payment updated.` };
+    case "create_task": return { ok: true, summary: `Task created${I.title ? `: ${I.title}` : ""}${I.due_on ? `, due ${I.due_on}` : ""}.` };
+    case "complete_task": return { ok: true, summary: `Marked "${I.title || "the task"}" done.` };
+    case "reopen_task": return { ok: true, summary: `Reopened "${I.title || "the task"}".` };
+    case "update_task": case "delete_task": return { ok: true, summary: `Task updated.` };
+    case "create_event": return { ok: true, summary: `Event added${I.title ? `: ${I.title}` : ""}${I.date ? ` on ${I.date}` : ""}.` };
+    case "move_event": case "delete_event": return { ok: true, summary: `Event updated.` };
+    case "message_person": return { ok: true, summary: `Message sent to ${I.name || "them"}.` };
+    case "post_to_group": return { ok: true, summary: `Queued to the group.` };
+    case "draft_email": case "draft_thank_you": return { ok: true, summary: `Drafted and queued in Needs You for approval.` };
+    case "remember_fact": return { ok: true, summary: `Noted.` };
+    case "add_team_member": case "update_team_member": case "add_beneficiary": case "update_beneficiary":
+    case "add_inventory_item": case "add_contact": case "update_contact": case "file_document": case "prepare_grants":
+      return { ok: true, summary: `Done.` };
+    default:
+      // reads: a minimal, clearly-synthetic empty result (tests behavior, not data)
+      return { ok: true, summary: `(dry-run) no matching records.` };
+  }
+}
+
+// GYM v2 — MULTI-TURN dry-run. Runs the REAL agent loop (production system prompt
+// + tools) but stubs tool execution (stubTool, no DB), feeding results back so we
+// capture Sasa's full exchange and FINAL reply. Works on Claude (real keys) or the
+// local brain (SASA_BRAIN_BASE_URL). Zero side effects. The gym judges the whole turn.
+export async function evalSasaMulti(opts: { history?: SasaTurn[]; command: string; role?: "admin" | "team"; maxTurns?: number }): Promise<{ finalText: string; turns: { text: string; toolCalls: { name: string; input: any }[] }[]; allToolCalls: { name: string; input: any }[] }> {
+  const role = opts.role || "admin";
+  const who = role === "team" ? "a team member" : "Nur";
+  const dateLong = "Tuesday, June 3, 2026";
+  const snapshot = "6 items waiting in Needs You, 0 messages need a reply, 3 open tasks.";
+  const grounding = "Nisria (By Nisria Inc) is a US nonprofit helping children and families in Kenya. Founder and Executive Director: Nur M'nasria. The team roster lives in team_members. Sister brands: Maisha and AHADI.";
+  const system = buildSystem(role, who, dateLong, snapshot, grounding);
+  const toolset = (role === "team" ? SMART_TOOLS.filter((t) => TEAM_TOOL_NAMES.has(t.name)) : SMART_TOOLS) as any[];
+  const convo: any[] = [
+    ...(opts.history || []).map((m) => ({ role: m.role, content: String(m.content || "") })),
+    { role: "user", content: opts.command },
+  ];
+  const turns: { text: string; toolCalls: { name: string; input: any }[] }[] = [];
+  const allToolCalls: { name: string; input: any }[] = [];
+  const maxTurns = opts.maxTurns || 4;
+  for (let i = 0; i < maxTurns; i++) {
+    const resp = await callClaude(system, convo, toolset);
+    const text = (resp.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
+    const toolUses = (resp.content || []).filter((b: any) => b.type === "tool_use");
+    const tc = toolUses.map((b: any) => ({ name: b.name, input: b.input }));
+    turns.push({ text, toolCalls: tc });
+    allToolCalls.push(...tc);
+    if (resp.stop_reason !== "tool_use" || !toolUses.length) {
+      return { finalText: text, turns, allToolCalls };
+    }
+    convo.push({ role: "assistant", content: resp.content });
+    convo.push({ role: "user", content: toolUses.map((b: any) => ({ type: "tool_result", tool_use_id: b.id, content: JSON.stringify(stubTool(b.name, b.input || {})) })) });
+  }
+  return { finalText: turns[turns.length - 1]?.text || "", turns, allToolCalls };
 }
 
 function fallbackReply(actions: ToolResult[]): string {

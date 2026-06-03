@@ -14,7 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
-import { claimJobs, markJobDone, markJobError } from "../../../../lib/jobs";
+import { claimJobs, markJobDone, markJobError, reclaimStuckJobs, triggerWorker } from "../../../../lib/jobs";
 import { sendText, sendTextAndLog, operatorOf, downloadMedia, sendTypingIndicator } from "../../../../lib/whatsapp";
 import { commitBankImport } from "../../../../lib/bank-import";
 import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
@@ -362,19 +362,32 @@ async function processJob(db: any, job: any): Promise<void> {
   else await markJobError(job.id, res.error || "send failed");
 }
 
-async function drain(): Promise<{ processed: number }> {
+async function drain(): Promise<{ processed: number; requeued: number }> {
   const db = admin();
+  // BACKSTOP (heal #2): the only live drain trigger is the webhook's unawaited,
+  // error-swallowing triggerWorker. If that single call is dropped (cold-start
+  // race, transient network failure, a 401), the inbound message is enqueued but
+  // never processed and, with no whatsapp.reply reclaim anywhere, never requeued,
+  // so the operator gets silence. Requeue any orphaned/clamped whatsapp.reply job
+  // here every time the worker runs (idempotent; claimJobs guards the claim race).
+  const reclaimed = await reclaimStuckJobs("whatsapp.reply").catch(() => ({ requeued: 0, parked: 0 }));
   let processed = 0;
+  let lastBatch = 0;
   // A few passes so a burst of messages clears in one invocation, bounded by maxDuration.
   for (let pass = 0; pass < 4; pass++) {
     const jobs = await claimJobs("whatsapp.reply", 5);
     if (!jobs.length) break;
+    lastBatch = jobs.length;
     for (const job of jobs) {
       try { await processJob(db, job); processed++; }
       catch (e: any) { await markJobError(job.id, String(e?.message || e)); }
     }
   }
-  return { processed };
+  // If the final pass came back full, a backlog likely remains beyond this
+  // invocation's pass cap: re-trigger ourselves so the burst drains without
+  // waiting for the next inbound message to happen to wake the worker.
+  if (lastBatch >= 5) triggerWorker("/api/whatsapp/worker");
+  return { processed, requeued: reclaimed?.requeued || 0 };
 }
 
 export async function POST(req: NextRequest) {

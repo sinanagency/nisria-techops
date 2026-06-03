@@ -30,6 +30,22 @@ const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 // agent. Overridable, e.g. to gpt-4o-mini for cheaper non-agent paths.
 const FALLBACK_MODEL = () => process.env.OPENAI_FALLBACK_MODEL || "gpt-4o";
 
+// GYM BRAIN-SWAP (eval-only, never set in production). When SASA_BRAIN_BASE_URL
+// points at a local OpenAI-compatible endpoint (a DGX vLLM serve), the same
+// translator routes there instead of api.openai.com, using SASA_BRAIN_KEY and
+// SASA_BRAIN_MODEL. This lets the eval/gym run Sasa's REAL prompt + tools on a
+// free local model with zero Anthropic/OpenAI spend. Unset => behaves exactly as
+// the OpenAI fallback always has.
+export function brainOverrideActive(): boolean {
+  return !!(process.env.SASA_BRAIN_BASE_URL || "").trim();
+}
+const TARGET_URL = () => {
+  const base = (process.env.SASA_BRAIN_BASE_URL || "").trim();
+  return base ? `${base.replace(/\/$/, "")}/chat/completions` : OPENAI_URL;
+};
+const TARGET_MODEL = () => (brainOverrideActive() ? (process.env.SASA_BRAIN_MODEL || "gym") : FALLBACK_MODEL());
+const TARGET_KEY = () => (brainOverrideActive() ? (process.env.SASA_BRAIN_KEY || "") : (process.env.OPENAI_API_KEY || "")).trim();
+
 export function openAIConfigured(): boolean {
   return !!(process.env.OPENAI_API_KEY || "").trim();
 }
@@ -128,8 +144,8 @@ function messagesToOpenAI(messages: any[]): any[] {
 // configured, the payload can't be represented (PDF), or the OpenAI call fails,
 // so the caller can rethrow the ORIGINAL Anthropic error and degrade honestly.
 export async function anthropicViaOpenAI(payload: Record<string, any>): Promise<any> {
-  const key = (process.env.OPENAI_API_KEY || "").trim();
-  if (!key) throw new UnsupportedFallback("OPENAI_API_KEY not set");
+  const key = TARGET_KEY();
+  if (!key) throw new UnsupportedFallback(brainOverrideActive() ? "SASA_BRAIN_KEY not set" : "OPENAI_API_KEY not set");
 
   const messages: any[] = [];
   const sys = systemToText(payload.system);
@@ -137,14 +153,14 @@ export async function anthropicViaOpenAI(payload: Record<string, any>): Promise<
   messages.push(...messagesToOpenAI(payload.messages || []));
 
   const body: Record<string, any> = {
-    model: FALLBACK_MODEL(),
+    model: TARGET_MODEL(),
     max_tokens: payload.max_tokens ?? 1024,
     messages,
   };
   const tools = toolsToOpenAI(payload.tools);
   if (tools) body.tools = tools;
 
-  const r = await fetch(OPENAI_URL, {
+  const r = await fetch(TARGET_URL(), {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -159,8 +175,13 @@ export async function anthropicViaOpenAI(payload: Record<string, any>): Promise<
   const msg = choice?.message || {};
 
   // Rebuild Anthropic content[] : text block (if any) + a tool_use block per call.
+  // Strip any <think>...</think> reasoning preamble (some open models, e.g. Qwen3,
+  // emit it in content; OpenAI never does, so this is a no-op on the real fallback).
   const out: any[] = [];
-  if (msg.content) out.push({ type: "text", text: String(msg.content) });
+  if (msg.content) {
+    const text = String(msg.content).replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    if (text) out.push({ type: "text", text });
+  }
   for (const tc of msg.tool_calls || []) {
     let input: any = {};
     try { input = JSON.parse(tc.function?.arguments || "{}"); } catch { input = {}; }

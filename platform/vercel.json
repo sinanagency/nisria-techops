@@ -5,6 +5,7 @@
     { "path": "/api/drive/extract", "schedule": "0 5 * * *" },
     { "path": "/api/group/digest", "schedule": "0 4 * * *" },
     { "path": "/api/cron/reminders", "schedule": "10 6 * * *" },
-    { "path": "/api/cron/task-digest", "schedule": "30 16 * * *" }
+    { "path": "/api/cron/task-digest", "schedule": "30 16 * * *" },
+    { "path": "/api/whatsapp/worker", "schedule": "*/5 * * * *" }
   ]
 }

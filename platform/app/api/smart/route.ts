@@ -10,11 +10,12 @@
 // bot and this console share the identical brain. This route is the web door to it.
 import { NextRequest, NextResponse } from "next/server";
 import { runSasa, type SasaTurn } from "../../../lib/agents/sasa";
+import { runOrchestrated, meshEnabled } from "../../../lib/agents/orchestrator";
 import { getCurrentUser } from "../../../lib/auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
@@ -30,13 +31,11 @@ export async function POST(req: NextRequest) {
     // network), so threading identity costs nothing. builder => owner (Taona,
     // final say); founder => founder (Nur). Sasa's admin prompt is rank-aware.
     const user = getCurrentUser();
-    const operatorRank = user?.role === "builder" ? "owner" : user?.role === "founder" ? "founder" : undefined;
-    const { reply, actions } = await runSasa({
-      history,
-      command: String(text),
-      operatorName: user?.name,
-      operatorRank,
-    });
+    const operatorRank: "owner" | "founder" | undefined = user?.role === "builder" ? "owner" : user?.role === "founder" ? "founder" : undefined;
+    const turnOpts = { history, command: String(text), operatorName: user?.name, operatorRank };
+    // MESH (flag-gated, off by default): route multi-step requests through the
+    // orchestrator (decompose -> per-step runSasa -> synthesize). Monolith otherwise.
+    const { reply, actions } = meshEnabled() ? await runOrchestrated(turnOpts) : await runSasa(turnOpts);
     return NextResponse.json({ reply, actions });
   } catch (e: any) {
     return NextResponse.json({ reply: `Something went wrong: ${e?.message || "Smart Mode error"}`, actions: [] }, { status: 200 });

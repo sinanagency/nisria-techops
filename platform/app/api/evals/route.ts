@@ -400,7 +400,7 @@ export async function GET(req: NextRequest) {
   for (const c of CASES) {
     // Self-throttle: space the model calls so the suite stays under the org's
     // input-tokens-per-minute rate limit and can be run reliably any time.
-    if (results.length) await new Promise((r) => setTimeout(r, 12000));
+    if (results.length) await new Promise((r) => setTimeout(r, 3000));
     try {
       const out = await evalSasa({ history: c.history, command: c.command, role: c.role });
       const checks = c.assert(out);

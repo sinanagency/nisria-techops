@@ -28,14 +28,25 @@ function score(title: string, agency: string): { s: number; tier: string } {
   return { s: Math.round(s * 100) / 100, tier };
 }
 
+// Bound every upstream call so one slow/hanging API cannot blow the 60s budget
+// (heal #4: 11 sequential fetches with no timeout). On abort/error: return null,
+// the callers treat that exactly like a non-ok response and skip the query.
+async function fetchWithTimeout(url: string, init: RequestInit = {}, ms = 8000): Promise<Response | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { ...init, signal: ctrl.signal }); }
+  catch { return null; }
+  finally { clearTimeout(t); }
+}
+
 async function searchGrantsGov(keyword: string) {
-  const r = await fetch("https://api.grants.gov/v1/api/search2", {
+  const r = await fetchWithTimeout("https://api.grants.gov/v1/api/search2", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ rows: 40, keyword, oppStatuses: "forecasted|posted", eligibilities: "", agencies: "", aln: "", fundingCategories: "" }),
     cache: "no-store",
   });
-  if (!r.ok) return [];
+  if (!r || !r.ok) return [];
   const j = await r.json();
   return j?.data?.oppHits || [];
 }
@@ -45,8 +56,8 @@ async function searchGrantsGov(keyword: string) {
 // useful as partnership / co-funding signal even though they aren't open RFPs.
 async function searchWorldBank(keyword: string) {
   const url = `https://search.worldbank.org/api/v2/projects?format=json&rows=30&qterm=${encodeURIComponent(keyword)}&fl=id,project_name,countryshortname,closingdate,boardapprovaldate,url,sector1,status`;
-  const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) return [];
+  const r = await fetchWithTimeout(url, { cache: "no-store" });
+  if (!r || !r.ok) return [];
   const j = await r.json();
   return Object.values(j?.projects || {}) as any[];
 }

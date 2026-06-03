@@ -27,6 +27,8 @@ import { emit } from "./events";
 import { now } from "./now";
 import { humanize, withHumanSystem } from "./humanize";
 import { claudeJSON } from "./anthropic";
+import { getBrief } from "./brief";
+import { haloDraft, haloPublish } from "./halo";
 import { laneFor, createIntent, queueApproval, type Lane } from "./gateway";
 import { recall, groundingText, remember, rememberUpsert } from "./memory";
 import { ownerContactIds, OWNER_PRIVATE_KIND } from "./privacy";
@@ -54,6 +56,31 @@ const MEMBER_ALIASES: Record<string, string> = {
   "mama njambi": "dorcas", "mama": "dorcas", "njambi": "dorcas",
   "liz": "eliza", "milla": "mitchelle", "michell": "mitchelle",
 };
+// RECURRENCE: compute the next single date from a rule. NULL rule / unknown => null.
+// One-off model: a recurring task spawns its NEXT instance when the current one is
+// completed (see complete_task), so the platform still only ever holds ONE date per row.
+const RECURRENCE_RULES = ["daily", "weekdays", "weekly", "biweekly", "monthly"];
+function addDaysISO(iso: string, n: number): string {
+  const x = new Date(iso + "T00:00:00Z");
+  x.setUTCDate(x.getUTCDate() + n);
+  return x.toISOString().slice(0, 10);
+}
+function nextRecurrence(fromISO: string | null, rule: string | null, todayISO: string): string | null {
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(String(fromISO || "")) ? String(fromISO) : todayISO;
+  switch (rule) {
+    case "daily": return addDaysISO(base, 1);
+    case "weekly": return addDaysISO(base, 7);
+    case "biweekly": return addDaysISO(base, 14);
+    case "weekdays": {
+      let d = addDaysISO(base, 1);
+      let dow = new Date(d + "T00:00:00Z").getUTCDay();
+      while (dow === 0 || dow === 6) { d = addDaysISO(d, 1); dow = new Date(d + "T00:00:00Z").getUTCDay(); }
+      return d;
+    }
+    case "monthly": { const x = new Date(base + "T00:00:00Z"); x.setUTCMonth(x.getUTCMonth() + 1); return x.toISOString().slice(0, 10); }
+    default: return null;
+  }
+}
 async function findMember(db: any, nameHint?: string | null): Promise<any | null> {
   if (!nameHint) return null;
   const raw = String(nameHint).trim().toLowerCase();
@@ -94,7 +121,7 @@ export const SMART_TOOLS = [
   { name: "newest_donor", description: "Return the most recently added donor (use when Nur says 'our newest donor').", input_schema: { type: "object", properties: {} } },
   { name: "finance_summary", description: "Money in vs money out for a month: donation totals + payments due/paid.", input_schema: { type: "object", properties: { month: { type: "string", description: "YYYY-MM, defaults to current" } } } },
   { name: "list_grants", description: "Grant opportunities found by the hunter, or applications in the pipeline.", input_schema: { type: "object", properties: { kind: { type: "string", enum: ["opportunities", "applications"] } } } },
-  { name: "list_tasks", description: "Open tasks across the team.", input_schema: { type: "object", properties: {} } },
+  { name: "list_tasks", description: "Open tasks across the team, with optional filters. Use for 'what's overdue', 'what's on Grace's plate', 'high priority tasks', 'what's due this week'.", input_schema: { type: "object", properties: { assignee_name: { type: "string" }, status: { type: "string", enum: ["todo", "in_progress", "blocked"] }, due_before: { type: "string", description: "YYYY-MM-DD, only tasks due on/before" }, priority: { type: "string", enum: ["low", "medium", "high"] }, overdue_only: { type: "boolean" } } } },
   { name: "inbox_status", description: "Conversations needing a reply, per account, with who and subject.", input_schema: { type: "object", properties: {} } },
   { name: "list_team", description: "The active team roster (names, roles) so you can pick an assignee.", input_schema: { type: "object", properties: {} } },
   { name: "latest_gift", description: "The most recent succeeded gift + its donor (use for 'thank the latest gift').", input_schema: { type: "object", properties: {} } },
@@ -106,16 +133,30 @@ export const SMART_TOOLS = [
   { name: "file_document", description: "Confirm where a document is filed, or file/move it into a Library folder. Any document sent to you (PDF, photo, statement) is read and filed AUTOMATICALLY the moment it arrives, so use this to CONFIRM a document's shelf or to MOVE/recategorize it, NEVER to claim you cannot file or to ask the operator to upload it themselves. Match by a fragment of the title. Folders: legal, finance, programs, events, media, branding, people, reports, general. Omit folder to only report where the matching documents currently live.", input_schema: { type: "object", properties: { query: { type: "string", description: "a fragment of the document title, e.g. 'constitution' or 'KRA'" }, folder: { type: "string", enum: ["legal", "finance", "programs", "events", "media", "branding", "people", "reports", "general"], description: "the shelf to file it under (omit to only confirm current placement)" }, brand: { type: "string", enum: ["nisria", "maisha", "ahadi"], description: "which brand it belongs to, optional" } }, required: ["query"] } },
   { name: "list_learned", description: "Show what you have LEARNED and remembered: the durable facts in your memory (the Brain), both what the operator explicitly taught you and what you quietly picked up on your own. Use for 'what have you learned', 'what do you remember', 'what's in your memory', 'what have you picked up lately', or 'what do you know about <topic>'. Optionally filter by a topic word. Returns each fact with how you learned it (taught vs picked up) and when, so the operator can see and correct your memory.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional topic word to filter by, omit for the most recent" } } } },
   { name: "list_campaigns", description: "The fundraising campaigns with goal, amount raised, status, and dates. Use for 'how are our campaigns doing', 'what campaigns do we have', 'how much has X raised'.", input_schema: { type: "object", properties: {} } },
+  { name: "list_inventory", description: "The Maisha inventory: items with quantity, stock status, and whether each is listed on Folklore. Use for 'what's in stock', 'what's low or out of stock', 'how many necklaces do we have', 'what's listed on Folklore'.", input_schema: { type: "object", properties: {} } },
+  { name: "read_document", description: "Read the actual TEXT of a filed document so you can quote or summarize it. Use for 'what does the constitution say about X', 'pull up the text of the KRA letter', 'summarize the lease'. Match by a fragment of the title. Returns the extracted text (may be long).", input_schema: { type: "object", properties: { query: { type: "string", description: "a fragment of the document title" } }, required: ["query"] } },
+  { name: "list_assets", description: "The media/asset library (logos, photos, brand files). Use for 'what assets do we have', 'show me our logos', 'do we have photos of X'. Optionally filter by brand or type.", input_schema: { type: "object", properties: { brand: { type: "string", enum: ["nisria", "maisha", "ahadi"] }, type: { type: "string", description: "logo, photo, document, etc" } } } },
+  { name: "agent_activity", description: "What the background agents have been doing: recent agent runs with the agent name, decision, and status. Use for 'what have the agents done today', 'did the grant agent run', 'what has Sasa been doing in the background'.", input_schema: { type: "object", properties: { agent: { type: "string", description: "optional: filter to one agent name" } } } },
+  { name: "list_groups", description: "The team WhatsApp groups the bot knows about (from group message history). Use for 'what groups are we in', 'which groups does the bot watch'.", input_schema: { type: "object", properties: {} } },
+  { name: "read_brief", description: "The current daily brief: the headline summary + the key points for today. Use for 'what's the brief', 'give me the rundown', 'what should I focus on today'.", input_schema: { type: "object", properties: {} } },
+  { name: "list_payroll", description: "Team payment (payroll) history: who was paid, how much, when, and the status. Use for 'who have we paid this month', 'show payroll', 'how much have we paid Dorcas'. Optionally filter by a member name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string", description: "optional team member name to filter" } } } },
+  { name: "list_bank_transactions", description: "The bank statement ledger (reconciled transactions) for a date window. Use for 'what came through the bank in May', 'show recent bank transactions', 'any large withdrawals'. Admin only.", input_schema: { type: "object", properties: { from: { type: "string", description: "YYYY-MM-DD" }, to: { type: "string", description: "YYYY-MM-DD" } } } },
+  { name: "read_contact_thread", description: "Read the recent message history with a specific contact (what was last said to/from them). Use for 'what did we last say to John', 'show my thread with Mary'. Match by name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "list_content", description: "Recent social/content posts with their channels, status (draft/scheduled/posted), and schedule. Use for 'what content is scheduled', 'what posts are in draft', 'what did we post'.", input_schema: { type: "object", properties: {} } },
+  { name: "list_beneficiaries", description: "List beneficiaries (children/families in the programs) with optional filters. CONFIDENTIAL: admin only, never in a group/team context. Use for 'who is in the rescue program', 'list our graduated children', 'who has no photo'. Filters: program, status, cohort.", input_schema: { type: "object", properties: { program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, status: { type: "string" }, has_photo: { type: "boolean" } } } },
+  { name: "find_studio_doc", description: "Find a generated Studio document (cover letters, budgets, branded docs/PDFs) by title or type. Use for 'pull up the budget cover letter', 'find the grant narrative doc'.", input_schema: { type: "object", properties: { query: { type: "string" } } } },
+  { name: "summarize_document", description: "Summarize a filed document's contents. Use for 'summarize the lease', 'what's the gist of the KRA letter', 'tldr the constitution'. Match by a fragment of the title.", input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+  { name: "donor_activity", description: "A donor's recent activity: their gifts and any recent messages/threads. Use for 'what's the history with Jane', 'when did the Smiths last give', 'show me Mark's activity'. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "group_activity", description: "What is happening in the team WhatsApp groups: recent messages and the open or overdue tasks born in a group. Use for 'what is happening in the Field Team group', 'any updates from the groups', 'what is pending in <group>', 'is anything overdue in the groups'. Optionally narrow to one group by name.", input_schema: { type: "object", properties: { group: { type: "string", description: "optional group name to narrow to, omit for all groups" } } } },
   { name: "member_activity", description: "What a specific team member has been doing: their open, overdue, and recently completed tasks plus their recent group messages. Use for 'what has Cynthia done this week', 'is X keeping up', 'what is on Grace plate', 'how active is X lately'.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "query_calendar", description: "Read the UNIFIED calendar for a date window: task due dates, payment/payroll days, grant deadlines, scheduled content, meetings, team travel, AND Kenya public holidays (Eid included). Use for 'what's on this week', 'what's coming up', 'is anything due Friday', 'what does next month look like', 'when is the next holiday'. Dates are YYYY-MM-DD. Returns each item with its type, date, and (for you only) any amount.", input_schema: { type: "object", properties: { from: { type: "string", description: "window start YYYY-MM-DD, defaults to today" }, to: { type: "string", description: "window end YYYY-MM-DD, defaults to 14 days out" } } } },
   { name: "check_conflicts", description: "Check whether a specific date is a Kenya public holiday (Eid, Madaraka Day, etc., when the team is OFF) or already has heavy load. Use BEFORE scheduling anything that needs the team to travel or show up, and whenever a due date or meeting lands on a date, to catch a clash early. Returns the holiday name if it is one, plus what else is already on that day.", input_schema: { type: "object", properties: { date: { type: "string", description: "the date to check, YYYY-MM-DD" } }, required: ["date"] } },
 
   // ---- ACTION · SAFE POPULATES (run immediately, internal state only) ----
-  { name: "create_task", description: "Create a task in the platform. Optionally assign it to a team member by name. SAFE: runs immediately. Use for 'assign a task to ...'.", input_schema: { type: "object", properties: { title: { type: "string" }, assignee_name: { type: "string", description: "a team member's name, or omit for unassigned" }, priority: { type: "string", enum: ["low", "medium", "high"] }, due_on: { type: "string", description: "YYYY-MM-DD" } }, required: ["title"] } },
+  { name: "create_task", description: "Create a task or reminder. Optionally assign it to a team member by name. SAFE: runs immediately. Use for 'assign a task to ...', 'remind me on ...'. For a RECURRING task/reminder ('every Monday', 'daily', 'on the 15th each month'), set recurrence and the due_on of the FIRST occurrence; when it is completed the next one is created automatically.", input_schema: { type: "object", properties: { title: { type: "string" }, assignee_name: { type: "string", description: "a team member's name, or omit for unassigned" }, priority: { type: "string", enum: ["low", "medium", "high"] }, due_on: { type: "string", description: "YYYY-MM-DD (the first occurrence if recurring)" }, time: { type: "string", description: "HH:MM time-of-day for the reminder, e.g. 20:00" }, recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly"], description: "set for a repeating task; omit for a one-off" } }, required: ["title"] } },
   { name: "add_team_member", description: "Add a person to the team roster. SAFE: internal record only. Use for 'add <name> to the team as <role>'.", input_schema: { type: "object", properties: { name: { type: "string" }, role: { type: "string" }, email: { type: "string" }, member_type: { type: "string", enum: ["staff", "tailor", "volunteer", "contractor"] } }, required: ["name"] } },
   { name: "add_inventory_item", description: "Add a Maisha inventory item (handmade goods). SAFE: internal record. Use for 'add 20 necklaces to inventory'.", input_schema: { type: "object", properties: { name: { type: "string" }, quantity: { type: "number" }, category: { type: "string" }, collection: { type: "string" }, unit_price: { type: "number" } }, required: ["name"] } },
-  { name: "add_beneficiary", description: "Intake a child/family into a program. SAFE: lands PRIVATE (never donor-facing until Nur publishes). Use for 'add a beneficiary named ...'.", input_schema: { type: "object", properties: { full_name: { type: "string" }, program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, region: { type: "string" }, needs: { type: "string" } }, required: ["full_name"] } },
+  { name: "add_beneficiary", description: "Intake a child/family into a program. SAFE: lands PRIVATE (never donor-facing until Nur publishes). Use for 'add a beneficiary named ...'. Capture as much of the profile as given (DOB/age, gender, guardian, story, needs, region, contact).", input_schema: { type: "object", properties: { full_name: { type: "string" }, program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, region: { type: "string" }, needs: { type: "string" }, date_of_birth: { type: "string", description: "YYYY-MM-DD" }, age: { type: "number", description: "age at intake if DOB unknown" }, gender: { type: "string", enum: ["male", "female", "other"] }, guardian_status: { type: "string", description: "e.g. orphan, single guardian, both parents" }, story: { type: "string", description: "private background/story (never donor-facing)" }, contact_phone: { type: "string" }, tags: { type: "array", items: { type: "string" } } }, required: ["full_name"] } },
   { name: "prepare_grants", description: "Trigger the Grant agent to prepare all un-prepared applications in the background. SAFE: enqueues jobs, nothing is submitted. Use for 'prepare the grants'.", input_schema: { type: "object", properties: {} } },
   { name: "record_payment", description: "Log a payment Nur has ALREADY MADE into the finance ledger as paid. SAFE: records internal finance state (it does NOT move money, she already paid it). Call ONCE PER payment when she reports payments she made, whether typed or read from a screenshot/receipt/PDF. currency is KES or USD only, NEVER mix them, default KES if she does not say (and state the currency back so she can correct). category one of: payroll, rent, utilities, stipend, upkeep, petty cash, health, legal, payout, other. If a payee or amount is unclear, ASK rather than guess.", input_schema: { type: "object", properties: { payee: { type: "string" }, amount: { type: "number" }, currency: { type: "string", enum: ["KES", "USD"] }, category: { type: "string" }, purpose: { type: "string", description: "what it was for" }, method: { type: "string", description: "mpesa, bank, cash, etc" }, date: { type: "string", description: "YYYY-MM-DD, defaults to today" } }, required: ["payee", "amount"] } },
   { name: "complete_task", description: "Mark a task DONE. SAFE: internal state. Use when someone reports they finished something (e.g. 'done with the stall map'). Resolve the task by who reported it and/or a fragment of the title. If more than one open task matches, ask which one rather than guessing.", input_schema: { type: "object", properties: { assignee_name: { type: "string", description: "who did it, defaults to the person speaking" }, title: { type: "string", description: "a fragment of the task title to match" } } } },
@@ -129,20 +170,48 @@ export const SMART_TOOLS = [
   { name: "message_person", description: "Send a WhatsApp message to ONE specific person (Nur, a team member, or a known contact) directly from this line. Use ONLY when the operator EXPLICITLY tells you to message / tell / send / let someone know something, e.g. 'tell Nur the meeting moved to 3', 'message Mark to bring the receipts', 'let Grace know the funds are in'. The exact words to send come from the operator's instruction, never invented. Resolve the recipient by name (or a number if given). If you cannot find a number, ASK for it. If more than one person matches the name, ASK which one. WhatsApp can only reach someone who has messaged this line in the last 24 hours; if it cannot be delivered, say so plainly. Do NOT use this for posting into a group (that is post_to_group) or for email (that is draft_email).", input_schema: { type: "object", properties: { to: { type: "string", description: "the person's name (e.g. 'Nur') or a phone number" }, text: { type: "string", description: "the exact message to send, in the operator's intended words" } }, required: ["to", "text"] } },
 
   // ---- ACTION · CALENDAR (manage the operator's Google Calendar / events) ----
-  { name: "create_event", description: "Put something on the calendar: a meeting, team travel, a site visit, a reminder, a one-off event. SAFE: lands on the calendar immediately and syncs to the Google Calendar so it shows on her phone. Use for 'put the donor meeting on Tuesday at 3', 'block Thursday for the Kibera visit', 'add a team day on the 14th', 'I am traveling Friday'. Provide a clear title and date. Add a time for a timed event, leave it off for an all-day one. Before scheduling team travel, you may check_conflicts first so you can flag a holiday.", input_schema: { type: "object", properties: { title: { type: "string" }, date: { type: "string", description: "YYYY-MM-DD" }, end_date: { type: "string", description: "YYYY-MM-DD for a multi-day event, optional" }, time: { type: "string", description: "HH:MM 24h start time, omit for all-day" }, end_time: { type: "string", description: "HH:MM 24h end time, optional" }, location: { type: "string" }, notes: { type: "string" }, kind: { type: "string", enum: ["event", "meeting", "travel", "visit", "reminder"] } }, required: ["title", "date"] } },
+  { name: "create_event", description: "Put something on the calendar: a meeting, team travel, a site visit, a reminder, a one-off event. SAFE: lands on the calendar immediately and syncs to the Google Calendar so it shows on her phone. Use for 'put the donor meeting on Tuesday at 3', 'block Thursday for the Kibera visit', 'add a team day on the 14th', 'I am traveling Friday'. Provide a clear title and date. Add a time for a timed event, leave it off for an all-day one. Before scheduling team travel, you may check_conflicts first so you can flag a holiday.", input_schema: { type: "object", properties: { title: { type: "string" }, date: { type: "string", description: "YYYY-MM-DD" }, end_date: { type: "string", description: "YYYY-MM-DD for a multi-day event, optional" }, time: { type: "string", description: "HH:MM 24h start time, omit for all-day" }, end_time: { type: "string", description: "HH:MM 24h end time, optional" }, location: { type: "string" }, notes: { type: "string" }, kind: { type: "string", enum: ["event", "meeting", "travel", "visit", "reminder"] }, recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly"], description: "set for a repeating event; the next instance is created automatically once this one passes" } }, required: ["title", "date"] } },
   { name: "move_event", description: "Reschedule a calendar event you previously added (a meeting, visit, travel, reminder) to a new date and/or time. SAFE: updates it on the calendar and on Google. Use for 'move the donor meeting to Friday', 'push the Kibera visit to next week', 'shift it to 4pm'. Match the event by a fragment of its title. If several match, ask which. This is for calendar EVENTS; to move a task due date use create_task, to move a payment use update_payment.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the event title to match" }, new_date: { type: "string", description: "YYYY-MM-DD" }, new_time: { type: "string", description: "HH:MM 24h, optional" } }, required: ["title"] } },
   { name: "delete_event", description: "Remove a calendar event you previously added (meeting, visit, travel, reminder). SAFE and recoverable. Use for 'cancel the donor meeting', 'drop the Thursday visit', 'remove that event'. Match by a fragment of the title. If several match, ask which. Only affects calendar EVENTS, never tasks, payments, grants, or holidays.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the event title to match" } }, required: ["title"] } },
 
   // ---- ACTION · GATED SENDS (queue into approvals, NEVER auto-send) ----
   { name: "draft_thank_you", description: "Draft a donor thank-you and QUEUE it into Needs-You for Nur's approval. GATED: never auto-sent. Pass donor_name OR use latest_gift first.", input_schema: { type: "object", properties: { donor_name: { type: "string", description: "donor name, or omit to thank the latest gift" } } } },
+  { name: "draft_all_thank_yous", description: "Draft thank-yous for ALL recent gifts that haven't been thanked yet, in one go. GATED: each lands in Needs You for approval, nothing is sent. Use for 'thank everyone we haven't thanked', 'draft thank-yous for this week's gifts'.", input_schema: { type: "object", properties: {} } },
+  { name: "log_payout", description: "Log a Givebutter -> Kenya USD payout (the bridge transfer), kept out of the operating-spend ledger. Use for 'log a payout of 3000 from Givebutter', 'we withdrew 5000 to Kenya'. USD.", input_schema: { type: "object", properties: { amount: { type: "number" }, note: { type: "string" } }, required: ["amount"] } },
+  { name: "schedule_payment", description: "Schedule an UPCOMING payment/obligation with a due date (and optional recurrence). Use for 'rent of 25000 is due on the 1st', 'set up the 30000 monthly salary for the 28th'. This records a future obligation (status upcoming), it does NOT move money. Currency KES or USD, never mixed.", input_schema: { type: "object", properties: { payee: { type: "string" }, amount: { type: "number" }, currency: { type: "string", enum: ["KES", "USD"] }, due_on: { type: "string", description: "YYYY-MM-DD" }, category: { type: "string" }, recurrence: { type: "string", enum: ["none", "monthly", "yearly"] }, purpose: { type: "string" } }, required: ["payee", "amount", "due_on"] } },
+  { name: "mark_payment_paid", description: "Mark a scheduled/upcoming payment as PAID. Use for 'I paid the rent', 'the salary went out'. Match an upcoming payment by payee (and amount if given). If it recurs (monthly/yearly), the next one is scheduled automatically.", input_schema: { type: "object", properties: { payee: { type: "string" }, amount: { type: "number" } }, required: ["payee"] } },
+  { name: "mark_handled", description: "Mark a conversation/inbox message as handled (replied/closed) so it stops showing as needing a reply. Use for 'mark the John thread as handled', 'close that conversation'. Match by contact name.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "draft_post", description: "Create a social/content post as a DRAFT (or schedule it for a date). Use for 'draft an Instagram post about the new classroom', 'schedule a post for Friday'. SAFE: it is only a draft/scheduled item, NOT published (publishing to Instagram/Facebook is a separate approved step). Channels: instagram, facebook, linkedin, outreach.", input_schema: { type: "object", properties: { title: { type: "string" }, body: { type: "string" }, channels: { type: "array", items: { type: "string" } }, scheduled_for: { type: "string", description: "YYYY-MM-DD or ISO datetime; omit for a plain draft" } }, required: ["body"] } },
+  { name: "refresh_grants", description: "Trigger the grant hunter to scan for new funding opportunities now. SAFE: runs the background hunt, submits nothing. Use for 'find new grants', 'refresh the grant opportunities'.", input_schema: { type: "object", properties: {} } },
+  { name: "run_group_digest", description: "Trigger the team-group daily digest to post now (the morning task summary into the groups). Admin only. Use for 'send the group digest', 'post today's task summary to the groups'.", input_schema: { type: "object", properties: {} } },
+  { name: "post_to_social", description: "Draft a social post (Facebook/Instagram) for a brand in its learned voice, via Halo. Use for 'post this to Instagram for Nisria', 'draft a Facebook post about the school kits'. Returns a draft for approval, it is NOT published until you confirm with publish_social_post. Brand: nisria, maisha, or ahadi.", input_schema: { type: "object", properties: { brand: { type: "string", enum: ["nisria", "maisha", "ahadi"] }, idea: { type: "string", description: "the post idea or the text to base the caption on" }, media_url: { type: "string", description: "optional public URL of a photo/video to attach" }, platforms: { type: "string", description: "csv, default instagram,facebook" }, hint: { type: "string" } }, required: ["brand", "idea"] } },
+  { name: "publish_social_post", description: "Publish a social post that was drafted with post_to_social, after the rep approves (or edits). Pass the post_id from the draft, and the edited caption if they changed it. Use on 'post it', 'publish that', 'yes post'.", input_schema: { type: "object", properties: { post_id: { type: "string" }, caption: { type: "string", description: "the rep's edited caption, optional" } }, required: ["post_id"] } },
   { name: "draft_email", description: "Draft an outbound email and QUEUE it into approvals for Nur. GATED: NEVER sent until Nur approves. Use for 'email <someone> about ...'. Provide recipient (name/email if known), subject, and the gist; you write the body.", input_schema: { type: "object", properties: { to: { type: "string", description: "recipient email if known, else a name" }, subject: { type: "string" }, about: { type: "string", description: "what the email should say" }, account: { type: "string", enum: ["sasa@nisria.co", "maisha@nisria.co"] } }, required: ["about"] } },
 
   // ---- ACTION · SAFE EDITS (update an existing record; admin only) ----
-  { name: "update_beneficiary", description: "Update an EXISTING beneficiary (a child or family already in a program). Use when Nur says to change someone's status, needs, program, region, or contact ('mark Amani as graduated', 'update Grace's needs to school fees', 'move Joseph to the education program'). Match by name. You CANNOT change funding or any money figure here. If nobody matches, or more than one does, ask.", input_schema: { type: "object", properties: { name: { type: "string", description: "the beneficiary's name" }, status: { type: "string", description: "e.g. active, graduated, exited, paused (only if she says so)" }, needs: { type: "string" }, program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, region: { type: "string" }, contact_phone: { type: "string" } }, required: ["name"] } },
-  { name: "update_task", description: "Change an EXISTING open task: reassign it, change its due date or priority, or rename it. Use for 'reassign the KRA filing to Eliza', 'move the audit task to Friday', 'make the grant task high priority'. To mark a task done use complete_task; to remove it use delete_task. Match by a few words of the title. If more than one matches, ask which.", input_schema: { type: "object", properties: { title: { type: "string", description: "words from the current task title" }, assignee_name: { type: "string" }, due_on: { type: "string", description: "YYYY-MM-DD" }, priority: { type: "string", enum: ["low", "medium", "high"] }, new_title: { type: "string" } }, required: ["title"] } },
-  { name: "update_team_member", description: "Update a team member's profile: role, phone, responsibilities, location, status, or pay. Use for 'change Dorcas's role to Lead Tailor', 'update Eliza's number', 'set John's pay to KES 30,000'. For pay you MUST include the currency (KES or USD), NEVER mix them, and state it back. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, role: { type: "string" }, phone: { type: "string" }, responsibilities: { type: "string" }, location: { type: "string" }, status: { type: "string", enum: ["active", "inactive", "departed"] }, pay_amount: { type: "number" }, pay_currency: { type: "string", enum: ["KES", "USD"] } }, required: ["name"] } },
+  { name: "update_beneficiary", description: "Update an EXISTING beneficiary (a child or family already in a program). Use when Nur says to change someone's status, needs, program, region, contact, gender, guardian, story, DOB/age, or tags ('mark Amani as graduated', 'update Grace's needs', 'Joseph is an orphan'). Match by name. You CANNOT change funding or any money figure here. If nobody matches, or more than one does, ask.", input_schema: { type: "object", properties: { name: { type: "string", description: "the beneficiary's name" }, status: { type: "string", description: "e.g. active, graduated, exited, paused (only if she says so)" }, needs: { type: "string" }, program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, region: { type: "string" }, contact_phone: { type: "string" }, gender: { type: "string", enum: ["male", "female", "other"] }, guardian_status: { type: "string" }, story: { type: "string" }, date_of_birth: { type: "string", description: "YYYY-MM-DD" }, age: { type: "number" }, tags: { type: "array", items: { type: "string" } } }, required: ["name"] } },
+  { name: "update_task", description: "Change an EXISTING open task: reassign it, change its due date/priority, rename it, or move its STATUS (start it = in_progress, mark it blocked, or back to todo). Use for 'reassign the KRA filing to Eliza', 'make the grant task high priority', 'I've started the audit', 'the stall map is blocked'. To mark a task DONE use complete_task; to remove it use delete_task. Match by a few words of the title. If more than one matches, ask which.", input_schema: { type: "object", properties: { title: { type: "string", description: "words from the current task title" }, assignee_name: { type: "string" }, due_on: { type: "string", description: "YYYY-MM-DD" }, priority: { type: "string", enum: ["low", "medium", "high"] }, new_title: { type: "string" }, status: { type: "string", enum: ["todo", "in_progress", "blocked"], description: "move the task's state; for 'done' use complete_task" } }, required: ["title"] } },
+  { name: "update_team_member", description: "Update a team member's profile: role, phone, responsibilities, location, status, or pay. Use for 'change Dorcas's role to Lead Tailor', 'update Eliza's number', 'set John's pay to KES 30,000'. For pay you MUST include the currency (KES or USD), NEVER mix them, and state it back. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, role: { type: "string" }, phone: { type: "string" }, responsibilities: { type: "string" }, location: { type: "string" }, status: { type: "string", enum: ["active", "inactive"] }, pay_amount: { type: "number" }, pay_currency: { type: "string", enum: ["KES", "USD"] } }, required: ["name"] } },
   { name: "add_contact", description: "Save a person's contact (phone and/or email) so you can reach them later. Use for 'save this number for John ...', 'add Mary, mary@x.com'. If that name already exists, it updates their details instead.", input_schema: { type: "object", properties: { name: { type: "string" }, phone: { type: "string" }, email: { type: "string" }, channel: { type: "string", description: "whatsapp, email, phone" } }, required: ["name"] } },
   { name: "update_contact", description: "Correct an EXISTING contact's phone or email by name. Use for 'change John's number to ...', 'update Mary's email'. If nobody matches, or more than one does, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, phone: { type: "string" }, email: { type: "string" } }, required: ["name"] } },
+  { name: "add_donor", description: "Add a NEW donor record. Use for 'add a new donor named ...', 'create a donor record for ...'. Lifetime value and gift history stay read-only (they come from real gifts). If the donor already exists, use update_donor.", input_schema: { type: "object", properties: { full_name: { type: "string" }, email: { type: "string" }, phone: { type: "string" }, type: { type: "string", enum: ["individual", "corporate", "foundation", "government"] }, status: { type: "string", enum: ["prospect", "active", "lapsed", "major"] }, country: { type: "string" }, source: { type: "string" } }, required: ["full_name"] } },
+  { name: "update_donor", description: "Update an EXISTING donor by name: status (prospect/active/lapsed/major), type, country, email, phone, tags, notes. Use for 'mark Jane as a major donor', 'tag the Smiths as recurring', 'update Mary's email'. Lifetime value/gift figures are read-only. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, status: { type: "string", enum: ["prospect", "active", "lapsed", "major"] }, type: { type: "string", enum: ["individual", "corporate", "foundation", "government"] }, country: { type: "string" }, email: { type: "string" }, phone: { type: "string" }, tags: { type: "array", items: { type: "string" } }, notes: { type: "string" } }, required: ["name"] } },
+  { name: "add_campaign", description: "Create a NEW fundraising campaign. Use for 'start a campaign called ...', 'set up a Ramadan campaign with a goal of 10000'. Does NOT touch Givebutter. If the campaign already exists, use update_campaign.", input_schema: { type: "object", properties: { name: { type: "string" }, type: { type: "string", enum: ["seasonal", "csr", "cause", "grant", "always_on"] }, status: { type: "string", enum: ["planned", "live", "closed"] }, goal_amount: { type: "number" }, starts_on: { type: "string", description: "YYYY-MM-DD" }, ends_on: { type: "string", description: "YYYY-MM-DD" } }, required: ["name"] } },
+  { name: "update_campaign", description: "Update an EXISTING campaign by name: status (planned/live/closed), type, goal, or dates. Use for 'mark the Ramadan campaign live', 'raise the goal to 15000', 'close the year-end campaign'. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, status: { type: "string", enum: ["planned", "live", "closed"] }, type: { type: "string", enum: ["seasonal", "csr", "cause", "grant", "always_on"] }, goal_amount: { type: "number" }, starts_on: { type: "string", description: "YYYY-MM-DD" }, ends_on: { type: "string", description: "YYYY-MM-DD" } }, required: ["name"] } },
+  { name: "log_team_payment", description: "Log a payment made to a team member (payroll/stipend). Use for 'paid Dorcas 30000 for May', 'log Eliza's stipend'. Resolve the member by name. Currency is KES or USD and NEVER mixed; state it back. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" }, amount: { type: "number" }, currency: { type: "string", enum: ["KES", "USD"] }, pay_period: { type: "string", description: "e.g. 'May 2026'" }, note: { type: "string" } }, required: ["name", "amount"] } },
+  { name: "add_grant", description: "Add a grant application to the pipeline. Use for 'add a grant to the Ford Foundation', 'we're applying to USAID for 50000'. Currency is USD. It lands in 'researching'.", input_schema: { type: "object", properties: { funder: { type: "string" }, program: { type: "string" }, amount_requested: { type: "number" }, deadline: { type: "string", description: "YYYY-MM-DD" } }, required: ["funder"] } },
+  { name: "pursue_opportunity", description: "Move a discovered grant OPPORTUNITY (from the hunter) into the application pipeline and queue its prep. Use for 'pursue the Ford opportunity', 'let's go after that education grant'. Match by funder or title.", input_schema: { type: "object", properties: { query: { type: "string", description: "funder or title of the opportunity" } }, required: ["query"] } },
+  { name: "update_grant_status", description: "Move a grant application's status or record an award. Use for 'mark the Ford grant submitted', 'we won the USAID grant for 40000', 'the X grant was rejected'. Match by funder. Status: researching, drafting, review, submitted, won, lost, rejected. For an award include amount_awarded (USD).", input_schema: { type: "object", properties: { funder: { type: "string" }, status: { type: "string", enum: ["researching", "drafting", "review", "submitted", "won", "lost", "rejected"] }, amount_awarded: { type: "number" } }, required: ["funder"] } },
+  { name: "approve_case", description: "Approve a potential beneficiary (a CASE under review) into an active beneficiary. Admin only. Use for 'approve the case for Amani', 'accept the Mwangi children into the program'. Match by name.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "decline_case", description: "Decline a case (potential beneficiary). Admin only. Keeps the record for audit. Use for 'decline the X case'. Optionally give a reason.", input_schema: { type: "object", properties: { name: { type: "string" }, reason: { type: "string" } }, required: ["name"] } },
+  { name: "set_public_profile", description: "Set a beneficiary's DONOR-FACING public name (alias) and sanitized public story. Admin only. This does NOT publish them (consent stays as-is); it prepares the public profile for Nur to review/publish.", input_schema: { type: "object", properties: { name: { type: "string" }, public_name: { type: "string" }, public_story: { type: "string" } }, required: ["name"] } },
+  { name: "set_beneficiary_funding", description: "Set a beneficiary's funding goal and/or amount funded (USD). Admin only. Use for 'set Amani's funding goal to 1200', 'we've funded 300 of Grace's goal'. Money figures only ever set here, explicitly.", input_schema: { type: "object", properties: { name: { type: "string" }, goal_amount: { type: "number" }, funded_amount: { type: "number" } }, required: ["name"] } },
+  { name: "update_inventory_item", description: "Update an EXISTING Maisha inventory item by name: quantity, stock status, price, location, or its Folklore listing URL. Use for 'we sold 3 of the beaded necklaces', 'mark the kikoy out of stock', 'set the listing URL for X'. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, quantity: { type: "number" }, status: { type: "string", enum: ["in_stock", "low", "out", "archived"] }, unit_price: { type: "number" }, location: { type: "string" }, folklore_url: { type: "string" } }, required: ["name"] } },
+  { name: "delete_document", description: "Permanently remove a filed document (e.g. a duplicate or a wrongly-filed file). Use for 'delete the duplicate KRA letter', 'remove that document'. Match by a fragment of the title; if more than one matches, ask which. The removal is logged. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "a fragment of the document title" } }, required: ["query"] } },
+  { name: "set_monthly_goal", description: "Set the monthly fundraising goal the dashboard gauge measures against. Use for 'set our monthly goal to 20000', 'change the target to 15k'. Owner/founder only.", input_schema: { type: "object", properties: { amount: { type: "number" } }, required: ["amount"] } },
+  { name: "edit_brain_section", description: "Update a section of the org profile / Brain that Settings exposes (e.g. org_profile, mission, programs). Use for 'update our mission to ...', 'set the org overview'. Owner/founder only.", input_schema: { type: "object", properties: { section: { type: "string", description: "the section key, e.g. org_profile, mission, programs" }, content: { type: "string" } }, required: ["section", "content"] } },
+  { name: "delete_contact", description: "Delete a saved contact by name. Use for 'remove the contact John Doe', 'delete that duplicate contact'. Match by name; if more than one matches, ask. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "activate_member", description: "Activate a team member (set status active + activated). Use for 'activate Dorcas', 'bring Eliza back to active'. Match by name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
 ] as const;
 
 export const SMART_TOOL_NAMES = new Set(SMART_TOOLS.map((t) => t.name));
@@ -150,7 +219,10 @@ const READ_TOOLS = new Set([
   "query_donations", "lookup_donor", "newest_donor", "finance_summary",
   "list_grants", "list_tasks", "inbox_status", "list_team", "latest_gift",
   "search_history", "find_beneficiary", "lookup_contact", "team_detail",
-  "search_documents", "list_campaigns",
+  "search_documents", "list_campaigns", "list_inventory",
+  "read_document", "list_assets", "agent_activity", "list_groups",
+  "read_brief", "list_payroll", "list_bank_transactions", "read_contact_thread",
+  "list_content", "find_studio_doc", "list_beneficiaries", "summarize_document", "donor_activity",
   "group_activity", "member_activity",
   "query_calendar", "check_conflicts",
   "list_learned",
@@ -207,8 +279,14 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     return { opportunities: data || [] };
   }
   if (name === "list_tasks") {
-    const { data } = await db.from("tasks").select("title,status,priority,due_on,assignee:team_members(name)").neq("status", "done").limit(40);
-    return { open_tasks: (data || []).map((t: any) => ({ title: t.title, priority: t.priority, due: t.due_on, assignee: t.assignee?.name })) };
+    let qb = db.from("tasks").select("title,status,priority,due_on,assignee:team_members(name),assignee_id").neq("status", "done");
+    if (["todo", "in_progress", "blocked"].includes(input.status)) qb = qb.eq("status", input.status);
+    if (["low", "medium", "high"].includes(input.priority)) qb = qb.eq("priority", input.priority);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(input.due_before || ""))) qb = qb.lte("due_on", input.due_before);
+    if (input.overdue_only === true) { const today = new Date().toISOString().slice(0, 10); qb = qb.lt("due_on", today).not("due_on", "is", null); }
+    if (input.assignee_name) { const m = await findMember(db, input.assignee_name); if (m) qb = qb.eq("assignee_id", m.id); }
+    const { data } = await qb.order("due_on", { ascending: true }).limit(60);
+    return { count: (data || []).length, open_tasks: ((data || []) as any[]).map((t) => ({ title: t.title, status: t.status, priority: t.priority, due: t.due_on, assignee: t.assignee?.name || null })) };
   }
   if (name === "inbox_status") {
     let q = db.from("messages").select("subject,account,created_at,contact_id,contact:contacts(name)").eq("direction", "in").eq("status", "new").eq("sender_type", "individual").order("created_at", { ascending: false }).limit(30);
@@ -309,7 +387,12 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     const q = String(input.query || "").trim();
     if (!q) return { results: [], note: "give a topic to search" };
     const like = `%${q.replace(/[,()*%]/g, "")}%`;
-    const { data } = await db.from("documents").select("title,doc_type,folder,doc_date,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`).order("doc_date", { ascending: false }).limit(12);
+    let qb = db.from("documents").select("title,doc_type,folder,doc_date,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
+    // PII/sensitivity wall: a team-tier caller only sees 'normal' documents. Bank
+    // statements, IDs, contracts, finance + legal docs are tagged sensitive/restricted
+    // (documents.sensitivity) and are admin-only.
+    if (tier === "team") qb = qb.eq("sensitivity", "normal");
+    const { data } = await qb.order("doc_date", { ascending: false }).limit(12);
     return { count: (data || []).length, results: ((data || []) as any[]).map((d) => ({ title: d.title, type: d.doc_type || null, folder: d.folder || null, date: d.doc_date || null, summary: String(d.summary || "").slice(0, 160) || null })) };
   }
   if (name === "list_learned") {
@@ -343,6 +426,134 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     // money figures (goal/raised). Those are admin-only.
     const showMoney = tier !== "team";
     return { count: (data || []).length, campaigns: ((data || []) as any[]).map((c) => ({ name: c.name, type: c.type || null, status: c.status || null, goal: showMoney ? money(c.goal_amount) : undefined, raised: showMoney ? money(c.raised_amount) : undefined, starts: c.starts_on || null, ends: c.ends_on || null })) };
+  }
+  if (name === "list_inventory") {
+    const { data } = await db.from("inventory").select("name,quantity,status,category,collection,unit_price,folklore_listed").order("name", { ascending: true }).limit(100);
+    const items = (data || []) as any[];
+    return {
+      count: items.length,
+      low_or_out: items.filter((i) => i.status === "low" || i.status === "out").length,
+      listed_on_folklore: items.filter((i) => i.folklore_listed).length,
+      items: items.map((i) => ({ name: i.name, qty: i.quantity, status: i.status, category: i.category || null, collection: i.collection || null, listed: !!i.folklore_listed })),
+    };
+  }
+  if (name === "read_document") {
+    const q = String(input.query || "").trim();
+    if (!q) return { error: "give a document title fragment" };
+    const like = `%${q.replace(/[,()*%]/g, "")}%`;
+    let qb = db.from("documents").select("title,doc_type,folder,doc_date,extracted_text,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
+    if (tier === "team") qb = qb.eq("sensitivity", "normal");
+    const { data } = await qb.order("doc_date", { ascending: false }).limit(1);
+    const doc = (data || [])[0] as any;
+    if (!doc) return { found: false, note: `No document matching "${q}".` };
+    const text = String(doc.extracted_text || "").trim();
+    return { found: true, title: doc.title, type: doc.doc_type || null, date: doc.doc_date || null, summary: String(doc.summary || "").slice(0, 200) || null, text: text ? text.slice(0, 4000) : null, text_available: !!text, note: text ? undefined : "This document has no extracted text yet." };
+  }
+  if (name === "list_assets") {
+    let qb = db.from("assets").select("title,type,brand,tags,consent_required,consent_on_file,created_at");
+    if (["nisria", "maisha", "ahadi"].includes(input.brand)) qb = qb.eq("brand", input.brand);
+    if (input.type) qb = qb.eq("type", String(input.type).slice(0, 40));
+    const { data } = await qb.order("created_at", { ascending: false }).limit(60);
+    let rows = (data || []) as any[];
+    // consent wall: a team-tier caller never sees assets that need consent but lack it on file
+    if (tier === "team") rows = rows.filter((a) => !a.consent_required || a.consent_on_file);
+    return { count: rows.length, assets: rows.map((a) => ({ title: a.title || "(untitled)", type: a.type || null, brand: a.brand || null, tags: a.tags || [] })) };
+  }
+  if (name === "agent_activity") {
+    if (tier === "team") return { error: "not available here" };
+    let qb = db.from("agent_runs").select("agent,decision,status,error,created_at");
+    if (input.agent) qb = qb.ilike("agent", `%${String(input.agent).replace(/[,()*%]/g, "")}%`);
+    const { data } = await qb.order("created_at", { ascending: false }).limit(25);
+    return { count: (data || []).length, runs: ((data || []) as any[]).map((r) => ({ agent: r.agent, decision: r.decision || null, status: r.status, error: r.error || null, at: r.created_at })) };
+  }
+  if (name === "list_groups") {
+    const { data } = await db.from("messages").select("account").eq("sender_type", "group").not("account", "is", null).limit(500);
+    const names = [...new Set(((data || []) as any[]).map((m) => m.account).filter(Boolean))];
+    return { count: names.length, groups: names };
+  }
+  if (name === "list_content") {
+    const { data } = await db.from("content_posts").select("title,channels,status,scheduled_for,posted_at,created_at").order("created_at", { ascending: false }).limit(30);
+    return { count: (data || []).length, posts: ((data || []) as any[]).map((p) => ({ title: p.title || "(untitled)", channels: p.channels || [], status: p.status, scheduled_for: p.scheduled_for || null, posted_at: p.posted_at || null })) };
+  }
+  if (name === "find_studio_doc") {
+    const q = String(input.query || "").trim();
+    let qb = db.from("studio_documents").select("title,doc_type,kind,brand,created_at");
+    if (q) qb = qb.ilike("title", `%${q.replace(/[,()*%]/g, "")}%`);
+    const { data } = await qb.order("created_at", { ascending: false }).limit(15);
+    return { count: (data || []).length, documents: ((data || []) as any[]).map((d) => ({ title: d.title, type: d.doc_type || d.kind || null, brand: d.brand || null, created: d.created_at })) };
+  }
+  if (name === "summarize_document") {
+    const q = String(input.query || "").trim();
+    if (!q) return { error: "give a document title" };
+    const like = `%${q.replace(/[,()*%]/g, "")}%`;
+    let qb = db.from("documents").select("title,extracted_text,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
+    if (tier === "team") qb = qb.eq("sensitivity", "normal");
+    const { data } = await qb.order("doc_date", { ascending: false }).limit(1);
+    const doc = (data || [])[0] as any;
+    if (!doc) return { found: false, note: `No document matching "${q}".` };
+    const text = String(doc.extracted_text || "").trim();
+    if (!text) return { found: true, title: doc.title, summary: doc.summary || null, note: "No extracted text to summarize yet." };
+    try {
+      const out = await claudeJSON<{ summary: string }>(`Summarize the document in 3-5 plain sentences for a nonprofit operator. Return JSON {"summary":"..."}.`, `Document "${doc.title}":\n\n${text.slice(0, 8000)}`);
+      return { found: true, title: doc.title, summary: out?.summary || doc.summary || null };
+    } catch { return { found: true, title: doc.title, summary: doc.summary || null, note: "Could not generate a fresh summary; showing the stored one." }; }
+  }
+  if (name === "donor_activity") {
+    if (tier === "team") return { error: "not available here" };
+    const dn = String(input.name || "").trim();
+    if (!dn) return { error: "which donor?" };
+    const { data: donors } = await db.from("donors").select("id,full_name,email,lifetime_value,last_gift_at").ilike("full_name", `%${dn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const dlist = (donors || []) as any[];
+    if (!dlist.length) return { found: false, note: `No donor matching "${dn}".` };
+    if (dlist.length > 1) return { found: false, note: `A few donors match: ${dlist.map((d) => d.full_name).join(", ")}. Which one?` };
+    const d = dlist[0];
+    const { data: gifts } = await db.from("donations").select("amount,status,donated_at,is_recurring").eq("donor_id", d.id).order("donated_at", { ascending: false }).limit(10);
+    let msgs: any[] = [];
+    if (d.email) { const { data: contacts } = await db.from("contacts").select("id").eq("email", d.email).limit(1); if (contacts?.[0]) { const { data: m } = await db.from("messages").select("direction,subject,body,created_at").eq("contact_id", contacts[0].id).order("created_at", { ascending: false }).limit(8); msgs = m || []; } }
+    return { found: true, donor: d.full_name, lifetime_value: money(d.lifetime_value), last_gift_at: d.last_gift_at || null, gifts: ((gifts || []) as any[]).map((g) => ({ amount: money(g.amount), status: g.status, at: g.donated_at, recurring: g.is_recurring })), recent_messages: msgs.map((m) => ({ dir: m.direction, subject: m.subject || null, text: String(m.body || "").slice(0, 200), at: m.created_at })) };
+  }
+  if (name === "list_beneficiaries") {
+    // CONFIDENTIAL (children): admin only, hard-refused for team/group tier.
+    if (tier === "team") return { error: "Beneficiary records are confidential and not available here." };
+    let qb = db.from("beneficiaries").select("full_name,program,status,region,photo_asset_id").is("intake_stage", null);
+    if (["safe_house", "education", "rescue", "nutrition", "other"].includes(input.program)) qb = qb.eq("program", input.program);
+    if (input.status) qb = qb.eq("status", String(input.status).slice(0, 40));
+    const { data } = await qb.order("full_name", { ascending: true }).limit(100);
+    let rows = (data || []) as any[];
+    if (input.has_photo === true) rows = rows.filter((r) => r.photo_asset_id);
+    if (input.has_photo === false) rows = rows.filter((r) => !r.photo_asset_id);
+    return { count: rows.length, beneficiaries: rows.map((r) => ({ name: r.full_name, program: r.program || null, status: r.status, region: r.region || null, has_photo: !!r.photo_asset_id })) };
+  }
+  if (name === "read_brief") {
+    const b = await getBrief();
+    return { headline: b.text, points: (b.points || []).map((p) => p.text) };
+  }
+  if (name === "list_payroll") {
+    if (tier === "team") return { error: "not available here" };
+    let qb = db.from("team_payments").select("amount,currency,pay_period,paid_at,status,note,team_members(name)").order("paid_at", { ascending: false }).limit(50);
+    const { data } = await qb;
+    let rows = (data || []) as any[];
+    if (input.name) { const n = String(input.name).toLowerCase(); rows = rows.filter((r) => String(r.team_members?.name || "").toLowerCase().includes(n)); }
+    return { count: rows.length, payments: rows.map((r) => ({ member: r.team_members?.name || null, amount: money(r.amount), currency: r.currency, period: r.pay_period || null, paid_at: r.paid_at || null, status: r.status })) };
+  }
+  if (name === "read_contact_thread") {
+    if (tier === "team") return { error: "not available here" };
+    const cn = String(input.name || "").trim();
+    if (!cn) return { error: "give a contact name" };
+    const { data: contacts } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (contacts || []) as any[];
+    if (!list.length) return { found: false, note: `No contact matching "${cn}".` };
+    if (list.length > 1) return { found: false, note: `A few match: ${list.map((c) => c.name).join(", ")}. Which one?` };
+    const { data: msgs } = await db.from("messages").select("direction,channel,subject,body,created_at").eq("contact_id", list[0].id).order("created_at", { ascending: false }).limit(15);
+    return { found: true, contact: list[0].name, count: (msgs || []).length, messages: ((msgs || []) as any[]).map((m) => ({ dir: m.direction, channel: m.channel, subject: m.subject || null, text: String(m.body || "").slice(0, 300), at: m.created_at })) };
+  }
+  if (name === "list_bank_transactions") {
+    if (tier === "team") return { error: "not available here" };
+    let qb = db.from("bank_transactions").select("txn_date,description,amount,currency,direction,category,account");
+    if (input.from) qb = qb.gte("txn_date", String(input.from).slice(0, 10));
+    if (input.to) qb = qb.lte("txn_date", String(input.to).slice(0, 10));
+    const { data } = await qb.order("txn_date", { ascending: false }).limit(60);
+    return { count: (data || []).length, transactions: ((data || []) as any[]).map((t) => ({ date: t.txn_date, description: t.description || null, amount: money(t.amount), currency: t.currency || "KES", direction: t.direction || null, category: t.category || null, account: t.account || null })) };
   }
   if (name === "group_activity") {
     if (tier === "team") return { error: "not available here" };
@@ -453,7 +664,9 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // source_group: when the task is born in a team group, remember which one so
     // follow-ups post back to that same group (set from ctx, not the model).
     const source_group = ctx.sourceGroup || null;
-    const { data: task, error: taskErr } = await db.from("tasks").insert({ title, assignee_id: member?.id || null, priority, status: "todo", source: "ai", created_by: "Nur", due_on, source_group }).select("id,title").single();
+    const recurrence = RECURRENCE_RULES.includes(input.recurrence) ? input.recurrence : null;
+    const due_time = /^\d{1,2}:\d{2}$/.test(String(input.time || "")) ? String(input.time).padStart(5, "0") : null;
+    const { data: task, error: taskErr } = await db.from("tasks").insert({ title, assignee_id: member?.id || null, priority, status: "todo", source: "ai", created_by: "Nur", due_on, due_time, source_group, recurrence }).select("id,title").single();
     if (taskErr || !task) return { ok: false, summary: "", error: taskErr?.message || "task insert failed" };
     await emit({ type: "task.assigned", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: task?.id || null, payload: { title, assignee: member?.name || null, via: ctx.sourceGroup ? "group" : "smart", group: source_group } });
     // URGENT GATE (Field-nervous-system law): a high-priority task, or one due
@@ -488,7 +701,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const frag = String(input.title || "").trim().slice(0, 60);
     // Pull the full open board once (same query shape as list_tasks / the UI).
     const { data: openRows } = await db
-      .from("tasks").select("id,title,assignee_id,source_group")
+      .from("tasks").select("id,title,assignee_id,source_group,recurrence,due_on,priority")
       .neq("status", "done").order("created_at", { ascending: false }).limit(60);
     const open = (openRows || []) as any[];
     if (!open.length) return { ok: false, summary: humanize("There are no open tasks right now.", opts) };
@@ -551,7 +764,18 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (creditId) {
       await emit({ type: "team.task_done", source: "agent:sasa", actor: member?.name || "team", subject_type: "team_member", subject_id: creditId, payload: { task_id: task.id, title: task.title, group: task.source_group } });
     }
-    return { ok: true, summary: humanize(`Marked "${task.title}" done.`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: task.id } };
+    // RECURRENCE: if this was a repeating task, spawn the NEXT instance now (one-off
+    // model — the platform still holds one date per row; completion rolls it forward).
+    let spawnedNote = "";
+    if (task.recurrence && RECURRENCE_RULES.includes(task.recurrence)) {
+      const next = nextRecurrence(task.due_on, task.recurrence, n.today);
+      if (next) {
+        const { data: nt } = await db.from("tasks").insert({ title: task.title, assignee_id: task.assignee_id || null, priority: task.priority || "medium", status: "todo", source: "ai", created_by: "Nur", due_on: next, source_group: task.source_group || null, recurrence: task.recurrence }).select("id").single();
+        await emit({ type: "task.assigned", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: nt?.id || null, payload: { title: task.title, recurring: task.recurrence, due_on: next, via: "recurrence" } });
+        spawnedNote = ` Next one (${task.recurrence}) set for ${next}.`;
+      }
+    }
+    return { ok: true, summary: humanize(`Marked "${task.title}" done.${spawnedNote}`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: task.id, recurrence: task.recurrence || null } };
   }
 
   // ---- SAFE: reopen_task (the inverse of complete_task: done -> todo) ----
@@ -608,6 +832,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const group = String(input.group || "").trim();
     const text = String(input.text || "").trim();
     if (!group || !text) return { ok: false, summary: "I need a group name and the message text.", error: "missing group or text" };
+    // idempotency (lib idempotency law): don't double-queue the same post to the
+    // same group within a short window (a retried action or double tool-call).
+    const sinceMin = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const { data: dupe } = await db.from("jobs").select("id").eq("kind", "group.send").in("status", ["queued", "sending"]).eq("payload->>group", group).eq("payload->>text", text).gte("created_at", sinceMin).limit(1);
+    if (dupe?.[0]) return { ok: true, summary: humanize(`Already queued for the ${group} group.`, opts), detail: { job_id: dupe[0].id, group, deduped: true } };
     const { data: job } = await db.from("jobs").insert({ kind: "group.send", payload: { group, text }, status: "queued" }).select("id").single();
     await emit({ type: "group.send_queued", source: "agent:sasa", actor: "Nur", subject_type: "job", subject_id: job?.id || null, payload: { group, text: text.slice(0, 200) } });
     return { ok: true, summary: humanize(`Queued for the ${group} group. The group bot will post it.`, opts), affordance: { kind: "open", label: "View groups", href: "/groups" }, detail: { job_id: job?.id, group } };
@@ -642,8 +871,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // FILE / MOVE: set the shelf on each matched document, and promote the stored
     // attachment to a shelved Library document so it shows on that shelf in the UI.
     const filed: string[] = [];
+    // filing into legal/finance also walls it from team tier (sensitivity restricted)
+    const sensitivePatch = (folder === "legal" || folder === "finance") ? { sensitivity: "restricted" } : {};
     for (const d of list) {
-      await db.from("documents").update({ folder, ...(brand ? { brand } : {}), updated_at: new Date().toISOString() }).eq("id", d.id);
+      await db.from("documents").update({ folder, ...(brand ? { brand } : {}), ...sensitivePatch, updated_at: new Date().toISOString() }).eq("id", d.id);
       const storagePath = String(d.drive_file_id || "").replace(/^ingest:/, "");
       if (storagePath && storagePath !== String(d.drive_file_id || "")) {
         const { data: asset } = await db.from("assets").select("id").eq("storage_path", storagePath).limit(1);
@@ -734,7 +965,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!iname) return { ok: false, summary: "I need an item name.", error: "no name" };
     const quantity = Number(input.quantity) > 0 ? Math.round(Number(input.quantity)) : 0;
     const unit_price = input.unit_price != null && Number(input.unit_price) > 0 ? Number(input.unit_price) : null;
-    const { data: item } = await db.from("inventory").insert({ name: iname, quantity, category: input.category || null, collection: input.collection || null, unit_price, status: "draft", folklore_listed: false }).select("id,name").single();
+    const { data: item } = await db.from("inventory").insert({ name: iname, quantity, category: input.category || null, collection: input.collection || null, unit_price, status: "in_stock", folklore_listed: false }).select("id,name").single();
     await emit({ type: "inventory.item_added", source: "agent:sasa", actor: "Nur", subject_type: "inventory", subject_id: item?.id || null, payload: { name: iname, quantity, via: "smart" } });
     return { ok: true, summary: humanize(`Added ${quantity > 0 ? `${quantity} ` : ""}${iname} to inventory.`, opts), affordance: { kind: "open", label: "Open inventory", href: "/inventory" }, detail: { inventory_id: item?.id, quantity } };
   }
@@ -747,6 +978,16 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const program = PROGRAMS.includes(input.program) ? input.program : "other";
     const region = input.region ? String(input.region).slice(0, 120) : null;
     const ref_code = `NB-${Date.now().toString(36).toUpperCase()}`;
+    // Richer intake profile (all PRIVATE, never donor-facing). Columns already exist;
+    // we just capture more of what the operator gives so chat-intake isn't a thin slice.
+    const rich: any = {};
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(input.date_of_birth || ""))) rich.date_of_birth = input.date_of_birth;
+    if (["male", "female", "other"].includes(String(input.gender || "").toLowerCase())) rich.gender = String(input.gender).toLowerCase();
+    if (input.guardian_status) rich.guardian_status = String(input.guardian_status).slice(0, 120);
+    if (input.story) rich.story_private = String(input.story).slice(0, 2000);
+    if (typeof input.age === "number" && input.age > 0 && input.age < 120) rich.age_at_intake = Math.round(input.age);
+    if (input.contact_phone) rich.contact_phone = String(input.contact_phone).slice(0, 40);
+    if (Array.isArray(input.tags)) rich.tags = input.tags.map((s: any) => String(s).slice(0, 40)).slice(0, 20);
     // CASES-INTAKE GROUP (e.g. Rescue & Rehab): a child mentioned here is a
     // POTENTIAL beneficiary, NOT an accepted one. Nur said do not add them as
     // beneficiaries yet, so the row lands as a CASE: intake_stage 'under_review'
@@ -766,7 +1007,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
         return { ok: true, summary: humanize(`${full_name} is already logged as a case for review${p ? ` (${p} photo${p === 1 ? "" : "s"} added)` : ""}.`, opts), detail: { case_id: existingCase[0].id, deduped: true, photos: p } };
       }
       const { data: crow } = await db.from("beneficiaries").insert({
-        ref_code, full_name, program, region, location: region,
+        ref_code, full_name, program, region, location: region, ...rich,
         needs: input.needs ? String(input.needs).slice(0, 600) : null,
         status: "inactive", intake_stage: "under_review", consent_public: false,
         intake_date: n.today, case_channel: ctx.sourceGroup ? `group:${ctx.sourceGroup}` : "group",
@@ -780,7 +1021,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       await emit({ type: "case.intake", source: "agent:sasa", actor: ctx.operatorName || "team", subject_type: "beneficiary", subject_id: crow?.id || null, payload: { ref: ref_code, program, channel: ctx.sourceGroup || "group", via: "group", photos, ai: true } });
       return { ok: true, summary: humanize(`Logged ${full_name} as a case for Nur to review${photos ? ` (${photos} photo${photos === 1 ? "" : "s"} attached)` : ""}, not yet a beneficiary.`, opts), affordance: { kind: "open", label: "Open cases", href: "/cases" }, detail: { case_id: crow?.id, ref_code, intake_stage: "under_review", photos } };
     }
-    const { data: row } = await db.from("beneficiaries").insert({ ref_code, full_name, program, region, location: region, needs: input.needs ? String(input.needs).slice(0, 600) : null, status: "active", consent_public: false, intake_date: n.today }).select("id,ref_code").single();
+    const { data: row } = await db.from("beneficiaries").insert({ ref_code, full_name, program, region, location: region, ...rich, needs: input.needs ? String(input.needs).slice(0, 600) : null, status: "active", consent_public: false, intake_date: n.today }).select("id,ref_code").single();
     await emit({ type: "beneficiary.intake", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: row?.id || null, payload: { ref: ref_code, program, via: "smart", ai: true } });
     return { ok: true, summary: humanize(`Added ${full_name} to the ${program.replace(/_/g, " ")} program (private, not donor facing until you publish).`, opts), affordance: { kind: "open", label: "Open beneficiaries", href: "/beneficiaries" }, detail: { beneficiary_id: row?.id, ref_code } };
   }
@@ -803,10 +1044,62 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (input.program && PROGRAMS.includes(input.program)) { patch.program = input.program; changed.push(`program ${input.program.replace(/_/g, " ")}`); }
     if (input.region) { patch.region = String(input.region).slice(0, 120); patch.location = patch.region; changed.push(`region ${patch.region}`); }
     if (input.contact_phone) { patch.contact_phone = String(input.contact_phone).slice(0, 40); changed.push("contact"); }
-    if (!changed.length) return { ok: false, summary: humanize("Tell me what to change (status, needs, program, region, or phone).", opts) };
+    if (["male", "female", "other"].includes(String(input.gender || "").toLowerCase())) { patch.gender = String(input.gender).toLowerCase(); changed.push("gender"); }
+    if (input.guardian_status) { patch.guardian_status = String(input.guardian_status).slice(0, 120); changed.push("guardian"); }
+    if (input.story) { patch.story_private = String(input.story).slice(0, 2000); changed.push("story"); }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(input.date_of_birth || ""))) { patch.date_of_birth = input.date_of_birth; changed.push("DOB"); }
+    if (typeof input.age === "number" && input.age > 0 && input.age < 120) { patch.age_at_intake = Math.round(input.age); changed.push("age"); }
+    if (Array.isArray(input.tags)) { patch.tags = input.tags.map((s: any) => String(s).slice(0, 40)).slice(0, 20); changed.push("tags"); }
+    if (!changed.length) return { ok: false, summary: humanize("Tell me what to change (status, needs, program, region, phone, gender, guardian, story, DOB, age, tags).", opts) };
     await db.from("beneficiaries").update(patch).eq("id", b.id);
     await emit({ type: "beneficiary.updated", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: b.id, payload: { name: b.full_name || b.public_name, changed, via: "smart" } });
     return { ok: true, summary: humanize(`Updated ${b.full_name || b.public_name}: ${changed.join(", ")}.`, opts), affordance: { kind: "open", label: "Open beneficiaries", href: "/beneficiaries" }, detail: { beneficiary_id: b.id, changed } };
+  }
+
+  // ---- CASE LIFECYCLE + CARE (admin only, confidential) ----
+  if (name === "approve_case" || name === "decline_case" || name === "set_public_profile" || name === "set_beneficiary_funding") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const nm = String(input.name || "").trim();
+    if (!nm) return { ok: false, summary: "Which beneficiary/case?", error: "no name" };
+    const like = `%${nm.replace(/[,()*%]/g, "")}%`;
+    if (name === "approve_case" || name === "decline_case") {
+      const { data: cases } = await db.from("beneficiaries").select("id,full_name,ref_code").not("intake_stage", "is", null).ilike("full_name", like).limit(5);
+      const list = (cases || []) as any[];
+      if (!list.length) return { ok: false, summary: humanize(`I do not see a case under review for ${nm}.`, opts) };
+      if (list.length > 1) return { ok: false, summary: humanize(`A few cases match: ${list.map((c) => c.full_name).join(", ")}. Which one?`, opts) };
+      const c = list[0];
+      if (name === "approve_case") {
+        await db.from("beneficiaries").update({ intake_stage: null, status: "active", updated_at: new Date().toISOString() }).eq("id", c.id);
+        await emit({ type: "beneficiary.case_approved", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: c.id, payload: { name: c.full_name, via: "smart" } });
+        return { ok: true, summary: humanize(`Approved ${c.full_name} — now an active beneficiary.`, opts), affordance: { kind: "open", label: "View beneficiaries", href: "/beneficiaries" }, detail: { id: c.id } };
+      }
+      await db.from("beneficiaries").update({ intake_stage: "declined", ...(input.reason ? { triage_notes: String(input.reason).slice(0, 600) } : {}), updated_at: new Date().toISOString() }).eq("id", c.id);
+      await emit({ type: "beneficiary.case_declined", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: c.id, payload: { name: c.full_name, via: "smart" } });
+      return { ok: true, summary: humanize(`Declined the case for ${c.full_name} (kept on record).`, opts), affordance: { kind: "open", label: "View cases", href: "/cases" }, detail: { id: c.id } };
+    }
+    // set_public_profile / set_beneficiary_funding operate on an existing beneficiary
+    const { data: bens } = await db.from("beneficiaries").select("id,full_name,public_name").ilike("full_name", like).limit(5);
+    const list = (bens || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a beneficiary called ${nm}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((b) => b.full_name).join(", ")}. Which one?`, opts) };
+    const b = list[0];
+    if (name === "set_public_profile") {
+      const patch: any = { updated_at: new Date().toISOString() }; const changed: string[] = [];
+      if (input.public_name) { patch.public_name = String(input.public_name).slice(0, 120); changed.push("public name"); }
+      if (input.public_story) { patch.public_story = String(input.public_story).slice(0, 2000); changed.push("public story"); }
+      if (!changed.length) return { ok: false, summary: humanize("Give me the public name and/or the sanitized public story.", opts) };
+      await db.from("beneficiaries").update(patch).eq("id", b.id);
+      await emit({ type: "beneficiary.public_profile_set", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: b.id, payload: { name: b.full_name, changed, via: "smart" } });
+      return { ok: true, summary: humanize(`Set the public ${changed.join(" and ")} for ${b.full_name}. It is NOT published yet, review consent before it goes donor-facing.`, opts), affordance: { kind: "open", label: "Open beneficiaries", href: "/beneficiaries" }, detail: { id: b.id } };
+    }
+    // set_beneficiary_funding
+    const patch: any = { updated_at: new Date().toISOString() }; const changed: string[] = [];
+    if (typeof input.goal_amount === "number" && input.goal_amount >= 0) { patch.goal_amount = input.goal_amount; changed.push(`goal ${money(input.goal_amount)}`); }
+    if (typeof input.funded_amount === "number" && input.funded_amount >= 0) { patch.funded_amount = input.funded_amount; changed.push(`funded ${money(input.funded_amount)}`); }
+    if (!changed.length) return { ok: false, summary: humanize("Tell me the funding goal and/or the amount funded.", opts) };
+    await db.from("beneficiaries").update(patch).eq("id", b.id);
+    await emit({ type: "beneficiary.funding_set", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: b.id, payload: { name: b.full_name, changed, via: "smart" } });
+    return { ok: true, summary: humanize(`Updated ${b.full_name}'s funding: ${changed.join(", ")} (USD).`, opts), affordance: { kind: "open", label: "Open beneficiaries", href: "/beneficiaries" }, detail: { id: b.id } };
   }
 
   // ---- SAFE EDIT: update_task (reassign / due / priority / rename) ----
@@ -828,6 +1121,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (/^\d{4}-\d{2}-\d{2}$/.test(String(input.due_on || ""))) { patch.due_on = input.due_on; changed.push(`due ${input.due_on}`); }
     if (["low", "medium", "high"].includes(input.priority)) { patch.priority = input.priority; changed.push(`${input.priority} priority`); }
     if (input.new_title && String(input.new_title).trim()) { patch.title = String(input.new_title).trim().slice(0, 200); changed.push("renamed"); }
+    if (["todo", "in_progress", "blocked"].includes(input.status)) { patch.status = input.status; changed.push(`status ${input.status.replace("_", " ")}`); }
     if (!changed.length) return { ok: false, summary: humanize("Tell me what to change (assignee, due date, priority, or title).", opts) };
     await db.from("tasks").update(patch).eq("id", t.id);
     await emit({ type: "task.updated", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: t.id, payload: { title: patch.title || t.title, changed, via: "smart" } });
@@ -844,7 +1138,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (input.phone) { patch.phone = phoneKey(input.phone); changed.push("phone"); }
     if (input.responsibilities) { patch.responsibilities = String(input.responsibilities).slice(0, 600); changed.push("responsibilities"); }
     if (input.location) { patch.location = String(input.location).slice(0, 120); changed.push(`location ${patch.location}`); }
-    if (["active", "inactive", "departed"].includes(input.status)) { patch.status = input.status; changed.push(`status ${input.status}`); }
+    if (["active", "inactive"].includes(input.status)) { patch.status = input.status; changed.push(`status ${input.status}`); }
     if (typeof input.pay_amount === "number" && input.pay_amount >= 0) {
       // Currency law: never assume KES vs USD, never mix, state it back.
       const cur = ["KES", "USD"].includes(input.pay_currency) ? input.pay_currency : null;
@@ -891,6 +1185,380 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     await db.from("contacts").update(patch).eq("id", list[0].id);
     await emit({ type: "contact.updated", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: list[0].id, payload: { name: list[0].name, changed, via: "smart" } });
     return { ok: true, summary: humanize(`Updated ${list[0].name}'s ${changed.join(" and ")}.`, opts), affordance: { kind: "open", label: "View contacts", href: "/contacts" }, detail: { contact_id: list[0].id, changed } };
+  }
+
+  // ---- SAFE EDIT: add_donor (new donor record; lifetime value stays read-only) ----
+  if (name === "add_donor") {
+    const dname = String(input.full_name || input.name || "").trim();
+    if (!dname) return { ok: false, summary: "I need the donor's name.", error: "no name" };
+    const dtype = ["individual", "corporate", "foundation", "government"].includes(input.type) ? input.type : "individual";
+    const dstatus = ["prospect", "active", "lapsed", "major"].includes(input.status) ? input.status : "prospect";
+    const { data: existing } = await db.from("donors").select("id,full_name").ilike("full_name", dname).limit(2);
+    if ((existing || []).length) return { ok: false, summary: humanize(`${dname} is already a donor. Use update_donor to change their details.`, opts), detail: { donor_id: (existing as any[])[0].id } };
+    const row: any = { full_name: dname, type: dtype, status: dstatus, source: input.source ? String(input.source).slice(0, 80) : "sasa" };
+    if (input.email) row.email = String(input.email).trim().slice(0, 160);
+    if (input.phone) row.phone = String(input.phone).trim().slice(0, 40);
+    if (input.country) row.country = String(input.country).slice(0, 80);
+    const { data: ins } = await db.from("donors").insert(row).select("id").single();
+    await emit({ type: "donor.added", source: "agent:sasa", actor: "Nur", subject_type: "donor", subject_id: ins?.id || null, payload: { name: dname, status: dstatus, via: "smart" } });
+    return { ok: true, summary: humanize(`Added ${dname} as a ${dstatus} donor.`, opts), affordance: { kind: "open", label: "View donors", href: "/donors" }, detail: { donor_id: ins?.id } };
+  }
+
+  // ---- SAFE EDIT: update_donor (status/type/country/contact/tags/notes; money read-only) ----
+  if (name === "update_donor") {
+    const dname = String(input.name || input.full_name || "").trim();
+    if (!dname) return { ok: false, summary: "Which donor?", error: "no name" };
+    const { data: matches } = await db.from("donors").select("id,full_name").ilike("full_name", `%${dname.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (matches || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a donor matching ${dname}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few donors match: ${list.map((d) => d.full_name).join(", ")}. Which one?`, opts) };
+    const patch: any = {}; const changed: string[] = [];
+    if (["prospect", "active", "lapsed", "major"].includes(input.status)) { patch.status = input.status; changed.push(`status ${input.status}`); }
+    if (["individual", "corporate", "foundation", "government"].includes(input.type)) { patch.type = input.type; changed.push(`type ${input.type}`); }
+    if (input.country) { patch.country = String(input.country).slice(0, 80); changed.push("country"); }
+    if (input.email) { patch.email = String(input.email).trim().slice(0, 160); changed.push("email"); }
+    if (input.phone) { patch.phone = String(input.phone).trim().slice(0, 40); changed.push("phone"); }
+    if (input.notes) { patch.notes = String(input.notes).slice(0, 1000); changed.push("notes"); }
+    if (Array.isArray(input.tags)) { patch.tags = input.tags.map((s: any) => String(s).slice(0, 40)).slice(0, 20); changed.push("tags"); }
+    if (!changed.length) return { ok: false, summary: humanize("Tell me what to change (status, type, country, email, phone, tags, notes).", opts) };
+    patch.updated_at = new Date().toISOString();
+    await db.from("donors").update(patch).eq("id", list[0].id);
+    await emit({ type: "donor.updated", source: "agent:sasa", actor: "Nur", subject_type: "donor", subject_id: list[0].id, payload: { name: list[0].full_name, changed, via: "smart" } });
+    return { ok: true, summary: humanize(`Updated ${list[0].full_name}: ${changed.join(", ")}.`, opts), affordance: { kind: "open", label: "View donors", href: "/donors" }, detail: { donor_id: list[0].id, changed } };
+  }
+
+  // ---- SAFE EDIT: add_campaign (never touches Givebutter) ----
+  if (name === "add_campaign") {
+    const cname = String(input.name || "").trim();
+    if (!cname) return { ok: false, summary: "I need a campaign name.", error: "no name" };
+    const ctype = ["seasonal", "csr", "cause", "grant", "always_on"].includes(input.type) ? input.type : "seasonal";
+    const cstatus = ["planned", "live", "closed"].includes(input.status) ? input.status : "planned";
+    const { data: existing } = await db.from("campaigns").select("id,name").ilike("name", cname).limit(2);
+    if ((existing || []).length) return { ok: false, summary: humanize(`A campaign called "${cname}" already exists. Use update_campaign.`, opts), detail: { campaign_id: (existing as any[])[0].id } };
+    const row: any = { name: cname, type: ctype, status: cstatus };
+    if (typeof input.goal_amount === "number" && input.goal_amount >= 0) row.goal_amount = input.goal_amount;
+    if (input.starts_on) row.starts_on = String(input.starts_on).slice(0, 10);
+    if (input.ends_on) row.ends_on = String(input.ends_on).slice(0, 10);
+    const { data: ins } = await db.from("campaigns").insert(row).select("id").single();
+    await emit({ type: "campaign.added", source: "agent:sasa", actor: "Nur", subject_type: "campaign", subject_id: ins?.id || null, payload: { name: cname, via: "smart" } });
+    return { ok: true, summary: humanize(`Created the "${cname}" campaign (${cstatus}${row.goal_amount ? `, goal ${money(row.goal_amount)}` : ""}).`, opts), affordance: { kind: "open", label: "View campaigns", href: "/campaigns" }, detail: { campaign_id: ins?.id } };
+  }
+
+  // ---- SAFE EDIT: update_campaign (status/goal/dates/type by name) ----
+  if (name === "update_campaign") {
+    const cname = String(input.name || "").trim();
+    if (!cname) return { ok: false, summary: "Which campaign?", error: "no name" };
+    const { data: matches } = await db.from("campaigns").select("id,name").ilike("name", `%${cname.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (matches || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a campaign matching "${cname}".`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few campaigns match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
+    const patch: any = {}; const changed: string[] = [];
+    if (["planned", "live", "closed"].includes(input.status)) { patch.status = input.status; changed.push(`status ${input.status}`); }
+    if (["seasonal", "csr", "cause", "grant", "always_on"].includes(input.type)) { patch.type = input.type; changed.push(`type ${input.type}`); }
+    if (typeof input.goal_amount === "number" && input.goal_amount >= 0) { patch.goal_amount = input.goal_amount; changed.push(`goal ${money(input.goal_amount)}`); }
+    if (input.starts_on) { patch.starts_on = String(input.starts_on).slice(0, 10); changed.push("start"); }
+    if (input.ends_on) { patch.ends_on = String(input.ends_on).slice(0, 10); changed.push("end"); }
+    if (!changed.length) return { ok: false, summary: humanize("Tell me what to change (status, type, goal, dates).", opts) };
+    patch.updated_at = new Date().toISOString();
+    await db.from("campaigns").update(patch).eq("id", list[0].id);
+    await emit({ type: "campaign.updated", source: "agent:sasa", actor: "Nur", subject_type: "campaign", subject_id: list[0].id, payload: { name: list[0].name, changed, via: "smart" } });
+    return { ok: true, summary: humanize(`Updated "${list[0].name}": ${changed.join(", ")}.`, opts), affordance: { kind: "open", label: "View campaigns", href: "/campaigns" }, detail: { campaign_id: list[0].id, changed } };
+  }
+
+  // ---- SAFE: log_team_payment (payroll/stipend to a team member; currency explicit) ----
+  if (name === "log_team_payment") {
+    const mname = String(input.name || "").trim();
+    if (!mname) return { ok: false, summary: "Which team member?", error: "no name" };
+    if (typeof input.amount !== "number" || input.amount <= 0) return { ok: false, summary: "How much was paid?", error: "no amount" };
+    const ccy = ["KES", "USD"].includes(input.currency) ? input.currency : "KES";
+    const { data: members } = await db.from("team_members").select("id,name").ilike("name", `%${mname.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (members || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a team member called ${mname}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((m) => m.name).join(", ")}. Which one?`, opts) };
+    const row: any = { team_member_id: list[0].id, amount: input.amount, currency: ccy, status: "paid", paid_at: new Date().toISOString(), created_by: "Sasa" };
+    if (input.pay_period) row.pay_period = String(input.pay_period).slice(0, 60);
+    if (input.note) row.note = String(input.note).slice(0, 400);
+    const { data: ins } = await db.from("team_payments").insert(row).select("id").single();
+    await emit({ type: "team.payment_logged", source: "agent:sasa", actor: "Nur", subject_type: "team_member", subject_id: list[0].id, payload: { name: list[0].name, amount: input.amount, currency: ccy, via: "smart" } });
+    return { ok: true, summary: humanize(`Logged ${ccy} ${money(input.amount)} paid to ${list[0].name}${row.pay_period ? ` for ${row.pay_period}` : ""}.`, opts), affordance: { kind: "open", label: "View team", href: "/team" }, detail: { team_member_id: list[0].id, payment_id: ins?.id } };
+  }
+
+  // ---- SAFE: add_grant (new grant application in the pipeline; USD) ----
+  if (name === "add_grant") {
+    const funder = String(input.funder || "").trim();
+    if (!funder) return { ok: false, summary: "Which funder is the grant to?", error: "no funder" };
+    const row: any = { funder, status: "researching", currency: "USD" };
+    if (input.program) row.program = String(input.program).slice(0, 200);
+    if (typeof input.amount_requested === "number" && input.amount_requested >= 0) row.amount_requested = input.amount_requested;
+    if (input.deadline) row.deadline = String(input.deadline).slice(0, 10);
+    const { data: ins } = await db.from("grant_applications").insert(row).select("id").single();
+    await emit({ type: "grant.added", source: "agent:sasa", actor: "Nur", subject_type: "grant", subject_id: ins?.id || null, payload: { funder, program: row.program || null, amount_requested: row.amount_requested || null, deadline: row.deadline || null, via: "smart" } });
+    return { ok: true, summary: humanize(`Added a grant application to ${funder}${row.amount_requested ? ` for ${money(row.amount_requested)} USD` : ""}.`, opts), affordance: { kind: "open", label: "View grants", href: "/grants" }, detail: { grant_id: ins?.id } };
+  }
+
+  // ---- SAFE: pursue_opportunity (move a discovered opportunity into the pipeline) ----
+  if (name === "pursue_opportunity") {
+    const q = String(input.query || "").trim();
+    if (!q) return { ok: false, summary: "Which opportunity (funder or title)?", error: "no query" };
+    const like = `%${q.replace(/[,()*%]/g, "")}%`;
+    const { data: opps } = await db.from("grant_opportunities").select("id,title,funder,description,amount_floor,amount_ceiling,currency,close_date,url,source,relevance_score,pursued").or(`funder.ilike.${like},title.ilike.${like}`).neq("pursued", true).order("relevance_score", { ascending: false }).limit(5);
+    const list = (opps || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I do not see an un-pursued opportunity matching "${q}".`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((o) => o.funder || o.title).join(", ")}. Which one?`, opts) };
+    const o = list[0];
+    const { data: grant } = await db.from("grant_applications").insert({ funder: o.funder || o.title, program: o.title, amount_requested: o.amount_floor || o.amount_ceiling || null, deadline: o.close_date || null, status: "researching", currency: o.currency || "USD", link: o.url || null, notes: o.description ? `Discovered via ${o.source} (relevance ${Math.round((o.relevance_score || 0) * 100)}%).\n${o.description}` : null }).select("id").single();
+    await db.from("grant_opportunities").update({ pursued: true }).eq("id", o.id);
+    await emit({ type: "grant.added", source: "agent:sasa", actor: "Nur", subject_type: "grant", subject_id: grant?.id || null, payload: { funder: o.funder, source: o.source, via: "smart" } });
+    if (grant?.id) { await enqueueJob("grant.prepare", grant.id, { funder: o.funder || o.title }); triggerWorker("/api/grants/prepare"); }
+    return { ok: true, summary: humanize(`Pursuing the ${o.funder || o.title} opportunity, added it to the pipeline and queued the package prep.`, opts), affordance: { kind: "open", label: "View grants", href: "/grants" }, detail: { grant_id: grant?.id } };
+  }
+
+  // ---- SAFE EDIT: update_grant_status (move pipeline status / record an award) ----
+  if (name === "update_grant_status") {
+    const funder = String(input.funder || "").trim();
+    if (!funder) return { ok: false, summary: "Which grant (by funder)?", error: "no funder" };
+    if (!["researching", "drafting", "review", "submitted", "won", "lost", "rejected"].includes(input.status) && typeof input.amount_awarded !== "number") {
+      return { ok: false, summary: humanize("Tell me the new status (submitted, won, lost, rejected, ...) or the award amount.", opts) };
+    }
+    const { data: matches } = await db.from("grant_applications").select("id,funder,status").ilike("funder", `%${funder.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (matches || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a grant application to ${funder}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few grants match: ${list.map((g) => g.funder).join(", ")}. Which one?`, opts) };
+    const patch: any = { updated_at: new Date().toISOString() }; const changed: string[] = [];
+    if (["researching", "drafting", "review", "submitted", "won", "lost", "rejected"].includes(input.status)) {
+      patch.status = input.status; changed.push(`status ${input.status}`);
+      if (input.status === "submitted") patch.submitted_on = new Date().toISOString().slice(0, 10);
+      if (["won", "lost", "rejected"].includes(input.status)) patch.decision_on = new Date().toISOString().slice(0, 10);
+    }
+    if (typeof input.amount_awarded === "number" && input.amount_awarded >= 0) { patch.amount_awarded = input.amount_awarded; changed.push(`awarded ${money(input.amount_awarded)} USD`); }
+    await db.from("grant_applications").update(patch).eq("id", list[0].id);
+    await emit({ type: "grant.status_changed", source: "agent:sasa", actor: "Nur", subject_type: "grant", subject_id: list[0].id, payload: { funder: list[0].funder, changed, via: "smart" } });
+    return { ok: true, summary: humanize(`Updated the ${list[0].funder} grant: ${changed.join(", ")}.`, opts), affordance: { kind: "open", label: "View grants", href: "/grants" }, detail: { grant_id: list[0].id, changed } };
+  }
+
+  // ---- GATED: draft_all_thank_yous (batch over recent un-thanked gifts) ----
+  if (name === "draft_all_thank_yous") {
+    const { data: gifts } = await db.from("donations").select("id,amount,is_recurring,donor:donors(id,full_name,email)").eq("status", "succeeded").order("donated_at", { ascending: false }).limit(15);
+    let queued = 0, skipped = 0;
+    for (const g of ((gifts || []) as any[])) {
+      const donor = (g as any).donor;
+      if (!donor?.email) { skipped++; continue; }
+      const r = await queueThankYouGated(db, g, donor, n);
+      if (r.created) queued++;
+      if (queued >= 10) break;
+    }
+    const msg = queued ? `Drafted ${queued} thank-you${queued === 1 ? "" : "s"} into Needs You for your approval. Nothing is sent until you approve.` : `No new thank-yous to draft, recent gifts are already queued or have no email on file.`;
+    return { ok: true, summary: humanize(msg, opts), affordance: { kind: "queued", label: "Review in Needs You", href: "/" }, detail: { gated: true, queued, skipped } };
+  }
+
+  // ---- SAFE: log_payout (Givebutter->Kenya USD bridge; out of operating-spend ledger) ----
+  if (name === "log_payout") {
+    const amount = Number(input.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return { ok: false, summary: "How much was the payout?", error: "no amount" };
+    const ref = `GB-PAYOUT-${Date.now().toString(36).toUpperCase()}`;
+    const { data: row } = await db.from("payments").insert({ direction: "in", payee: "Givebutter payout", purpose: input.note ? String(input.note).slice(0, 300) : "Givebutter USD payout to Kenya", amount, currency: "USD", method: "givebutter", status: "paid", paid_at: new Date().toISOString(), category: "payout", ref, created_by: "Sasa" }).select("id").single();
+    await emit({ type: "payment.logged", source: "agent:sasa", actor: "Nur", subject_type: "payment", subject_id: row?.id || null, payload: { payout: true, amount, currency: "USD", via: "smart" } });
+    return { ok: true, summary: humanize(`Logged a Givebutter payout of USD ${money(amount)}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { id: row?.id, payout: true } };
+  }
+
+  // ---- SAFE: schedule_payment (upcoming obligation; never moves money) ----
+  if (name === "schedule_payment") {
+    const payee = String(input.payee || "").trim();
+    const amount = Number(input.amount);
+    const due_on = /^\d{4}-\d{2}-\d{2}$/.test(String(input.due_on || "")) ? input.due_on : null;
+    if (!payee) return { ok: false, summary: "Who is the payment to?", error: "no payee" };
+    if (!Number.isFinite(amount) || amount <= 0) return { ok: false, summary: "How much is the payment?", error: "no amount" };
+    if (!due_on) return { ok: false, summary: "When is it due? (a date)", error: "no due date" };
+    const currency = ["KES", "USD"].includes(input.currency) ? input.currency : "KES";
+    const recurrence = ["none", "monthly", "yearly"].includes(input.recurrence) ? input.recurrence : "none";
+    const { data: row } = await db.from("payments").insert({ direction: "out", payee, purpose: input.purpose ? String(input.purpose).slice(0, 300) : null, amount, currency, method: "mpesa", status: "upcoming", due_on, category: input.category ? String(input.category).slice(0, 40) : "other", recurrence, created_by: "Sasa" }).select("id").single();
+    await emit({ type: "payment.scheduled", source: "agent:sasa", actor: "Nur", subject_type: "payment", subject_id: row?.id || null, payload: { payee, amount, currency, due_on, recurrence, via: "smart" } });
+    return { ok: true, summary: humanize(`Scheduled ${currency} ${money(amount)} to ${payee}, due ${due_on}${recurrence !== "none" ? ` (${recurrence})` : ""}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { id: row?.id } };
+  }
+
+  // ---- SAFE: mark_payment_paid (flip upcoming->paid; roll recurrence forward) ----
+  if (name === "mark_payment_paid") {
+    const payee = String(input.payee || "").trim();
+    if (!payee) return { ok: false, summary: "Which payment (by payee)?", error: "no payee" };
+    let q = db.from("payments").select("id,payee,amount,currency,due_on,recurrence,category,method,purpose").eq("status", "upcoming").ilike("payee", `%${payee.replace(/[,()*%]/g, "")}%`);
+    if (typeof input.amount === "number") q = q.eq("amount", input.amount);
+    const { data: ups } = await q.order("due_on", { ascending: true }).limit(5);
+    const list = (ups || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I do not see an upcoming payment to ${payee}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few upcoming payments match ${payee}: ${list.map((p) => `${p.currency} ${money(p.amount)} due ${p.due_on}`).join("; ")}. Which one (give the amount)?`, opts) };
+    const p = list[0];
+    await db.from("payments").update({ status: "paid", paid_at: new Date().toISOString() }).eq("id", p.id);
+    await emit({ type: "payment.paid", source: "agent:sasa", actor: "Nur", subject_type: "payment", subject_id: p.id, payload: { payee: p.payee, amount: p.amount, currency: p.currency, via: "smart" } });
+    // roll the recurrence forward (monthly/yearly), calendar-safe
+    let rolled = "";
+    if (p.recurrence === "monthly" || p.recurrence === "yearly") {
+      const base = new Date((p.due_on || new Date().toISOString().slice(0, 10)) + "T00:00:00Z");
+      if (p.recurrence === "monthly") base.setUTCMonth(base.getUTCMonth() + 1); else base.setUTCFullYear(base.getUTCFullYear() + 1);
+      const nextDue = base.toISOString().slice(0, 10);
+      await db.from("payments").insert({ direction: "out", payee: p.payee, purpose: p.purpose, amount: p.amount, currency: p.currency, method: p.method || "mpesa", status: "upcoming", due_on: nextDue, category: p.category, recurrence: p.recurrence, created_by: "Sasa" });
+      rolled = ` Next ${p.recurrence} one scheduled for ${nextDue}.`;
+    }
+    return { ok: true, summary: humanize(`Marked the ${p.currency} ${money(p.amount)} payment to ${p.payee} as paid.${rolled}`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { id: p.id } };
+  }
+
+  // ---- SAFE: mark_handled (close an inbox conversation) ----
+  if (name === "mark_handled") {
+    const cn = String(input.name || "").trim();
+    if (!cn) return { ok: false, summary: "Which conversation (contact name)?", error: "no name" };
+    const { data: contacts } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (contacts || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a contact called ${cn}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
+    const { data: upd } = await db.from("messages").update({ status: "replied" }).eq("contact_id", list[0].id).eq("direction", "in").eq("status", "new").select("id");
+    await emit({ type: "inbox.handled", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: list[0].id, payload: { name: list[0].name, count: (upd || []).length, via: "smart" } });
+    return { ok: true, summary: humanize(`Marked the conversation with ${list[0].name} as handled.`, opts), affordance: { kind: "open", label: "Open inbox", href: "/inbox" }, detail: { contact_id: list[0].id, cleared: (upd || []).length } };
+  }
+
+  // ---- SAFE: draft_post (content draft/scheduled; NOT published) ----
+  if (name === "draft_post") {
+    const body = String(input.body || "").trim();
+    if (!body) return { ok: false, summary: "What should the post say?", error: "no body" };
+    const channels = Array.isArray(input.channels) ? input.channels.map((c: any) => String(c).toLowerCase().slice(0, 20)).slice(0, 6) : [];
+    let scheduled_for: string | null = null;
+    if (input.scheduled_for) { const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(String(input.scheduled_for)) ? String(input.scheduled_for) + "T09:00:00Z" : String(input.scheduled_for)); if (!isNaN(d.getTime())) scheduled_for = d.toISOString(); }
+    const status = scheduled_for ? "scheduled" : "draft";
+    const { data: row } = await db.from("content_posts").insert({ title: input.title ? String(input.title).slice(0, 200) : null, body: body.slice(0, 4000), channels, status, scheduled_for, created_by: "Sasa" }).select("id").single();
+    await emit({ type: "content.drafted", source: "agent:sasa", actor: "Nur", subject_type: "content_post", subject_id: row?.id || null, payload: { channels, status, scheduled_for, via: "smart" } });
+    return { ok: true, summary: humanize(`${status === "scheduled" ? `Scheduled a post for ${scheduled_for!.slice(0, 10)}` : "Drafted a post"}${channels.length ? ` (${channels.join(", ")})` : ""}. It is not published, review it in Content.`, opts), affordance: { kind: "open", label: "Open Content", href: "/content" }, detail: { post_id: row?.id, status } };
+  }
+
+  // ---- SAFE: refresh_grants (trigger the background hunt) ----
+  if (name === "refresh_grants") {
+    triggerWorker("/api/grants/refresh");
+    return { ok: true, summary: humanize("Kicked off the grant hunt, I'll surface any new opportunities once it finishes.", opts), affordance: { kind: "open", label: "View grants", href: "/grants" }, detail: { triggered: true } };
+  }
+
+  // ---- SAFE: run_group_digest (trigger the team-group daily digest) ----
+  if (name === "run_group_digest") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    triggerWorker("/api/group/digest");
+    return { ok: true, summary: humanize("Triggered the group digest, the morning task summary will post to the groups shortly.", opts), affordance: { kind: "open", label: "View groups", href: "/groups" }, detail: { triggered: true } };
+  }
+
+  // ---- GATED: post_to_social (draft via Halo; NOT published) ----
+  if (name === "post_to_social") {
+    const brand = ["nisria", "maisha", "ahadi"].includes(String(input.brand || "").toLowerCase()) ? String(input.brand).toLowerCase() : null;
+    if (!brand) return { ok: false, summary: "Which brand, Nisria, Maisha, or AHADI?", error: "no brand" };
+    const idea = String(input.idea || input.note || "").trim();
+    const mediaUrl = input.media_url ? String(input.media_url) : undefined;
+    if (!idea && !mediaUrl) return { ok: false, summary: "What should the post be about? Give me the idea, the text, or a photo.", error: "no idea" };
+    try {
+      const d = await haloDraft({ tenant: brand, note: idea || undefined, mediaUrl, platforms: input.platforms ? String(input.platforms) : "instagram,facebook", hint: input.hint ? String(input.hint) : undefined });
+      const caps = (d.drafts || []).map((x) => `*${x.platform}*: ${x.caption}${x.hashtags ? `\n${x.hashtags}` : ""}`).join("\n\n");
+      const q = d.question ? `\n\n${d.question}` : "";
+      return { ok: true, summary: humanize(`Here is a draft for ${d.brand} (${(d.drafts || []).map((x) => x.platform).join(", ")}):\n\n${caps}\n\nReply "post it" to publish, or send your edit.${q}`, opts), affordance: { kind: "open", label: "Open Content", href: "/content" }, detail: { post_id: d.postId, brand: d.brand, gated: true } };
+    } catch (e: any) {
+      return { ok: false, summary: humanize(`I could not reach the social drafter just now (${e?.message || e}).`, opts), error: String(e?.message || e) };
+    }
+  }
+
+  // ---- PUBLISH: publish_social_post (after approval, via Halo) ----
+  if (name === "publish_social_post") {
+    const postId = String(input.post_id || "").trim();
+    if (!postId) return { ok: false, summary: "I need the draft's id to publish it.", error: "no post_id" };
+    try {
+      const r = await haloPublish({ postId, caption: input.caption ? String(input.caption) : undefined });
+      const oks = (r.results || []).filter((x) => x.ok);
+      const fails = (r.results || []).filter((x) => !x.ok);
+      const parts: string[] = [];
+      if (oks.length) parts.push(`Posted to ${oks.map((x) => x.platform).join(", ")}.`);
+      for (const f of fails) parts.push(`${f.platform}: ${f.draftOnly ? "saved as a draft (that channel isn't live)" : f.error || "failed"}.`);
+      await emit({ type: "social.published", source: "agent:sasa", actor: "Nur", subject_type: "content_post", subject_id: null, payload: { postId, ok: oks.length, failed: fails.length, via: "smart" } });
+      return { ok: oks.length > 0, summary: humanize(parts.join(" ") || "Submitted to Halo.", opts), affordance: { kind: "open", label: "Open Content", href: "/content" }, detail: { status: r.status, results: r.results } };
+    } catch (e: any) {
+      return { ok: false, summary: humanize(`Publishing failed (${e?.message || e}).`, opts), error: String(e?.message || e) };
+    }
+  }
+
+  // ---- SAFE EDIT: update_inventory_item ----
+  if (name === "update_inventory_item") {
+    const iname = String(input.name || "").trim();
+    if (!iname) return { ok: false, summary: "Which item?", error: "no name" };
+    const { data: matches } = await db.from("inventory").select("id,name").ilike("name", `%${iname.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (matches || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find an inventory item matching "${iname}".`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few items match: ${list.map((i) => i.name).join(", ")}. Which one?`, opts) };
+    const patch: any = { updated_at: new Date().toISOString() }; const changed: string[] = [];
+    if (typeof input.quantity === "number" && input.quantity >= 0) { patch.quantity = Math.round(input.quantity); changed.push(`qty ${patch.quantity}`); }
+    if (["in_stock", "low", "out", "archived"].includes(input.status)) { patch.status = input.status; changed.push(`status ${input.status}`); }
+    if (typeof input.unit_price === "number" && input.unit_price >= 0) { patch.unit_price = input.unit_price; changed.push("price"); }
+    if (input.location) { patch.location = String(input.location).slice(0, 120); changed.push("location"); }
+    if (input.folklore_url) { patch.folklore_url = String(input.folklore_url).slice(0, 400); patch.folklore_listed = true; changed.push("listing"); }
+    if (changed.length === 0) return { ok: false, summary: humanize("Tell me what to change (quantity, status, price, location, or listing URL).", opts) };
+    await db.from("inventory").update(patch).eq("id", list[0].id);
+    await emit({ type: "inventory.updated", source: "agent:sasa", actor: "Nur", subject_type: "inventory", subject_id: list[0].id, payload: { name: list[0].name, changed, via: "smart" } });
+    return { ok: true, summary: humanize(`Updated ${list[0].name}: ${changed.join(", ")}.`, opts), affordance: { kind: "open", label: "View inventory", href: "/inventory" }, detail: { item_id: list[0].id, changed } };
+  }
+
+  // ---- SAFE: delete_document (permanent, logged; admin only) ----
+  if (name === "delete_document") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const q = String(input.query || "").trim();
+    if (!q) return { ok: false, summary: "Which document?", error: "no query" };
+    const { data: docs } = await db.from("documents").select("id,title,folder").ilike("title", `%${q.replace(/[,()*%]/g, "")}%`).order("created_at", { ascending: false }).limit(6);
+    const list = (docs || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a document matching "${q}".`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few documents match: ${list.map((d) => `"${d.title}"`).join(", ")}. Which one?`, opts) };
+    const d = list[0];
+    await db.from("documents").delete().eq("id", d.id);
+    await emit({ type: "document.deleted", source: "agent:sasa", actor: "Nur", subject_type: "document", subject_id: d.id, payload: { title: d.title, folder: d.folder || null, via: "smart" } });
+    return { ok: true, summary: humanize(`Removed "${d.title}" from the library.`, opts), affordance: { kind: "open", label: "Open library", href: "/library" }, detail: { document_id: d.id } };
+  }
+
+  // ---- SAFE: set_monthly_goal (org_profile section=monthly_goal; owner/founder) ----
+  if (name === "set_monthly_goal") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const amount = Math.round(Number(input.amount));
+    if (!Number.isFinite(amount) || amount <= 0) return { ok: false, summary: "What should the monthly goal be?", error: "bad amount" };
+    const { data: ex } = await db.from("org_profile").select("id").eq("section", "monthly_goal").maybeSingle();
+    if (ex?.id) await db.from("org_profile").update({ content: String(amount) }).eq("id", ex.id);
+    else await db.from("org_profile").insert({ section: "monthly_goal", content: String(amount) });
+    await emit({ type: "org.monthly_goal_set", source: "agent:sasa", actor: "Nur", subject_type: "org", subject_id: null, payload: { amount, via: "smart" } });
+    return { ok: true, summary: humanize(`Set the monthly fundraising goal to ${money(amount)}.`, opts), affordance: { kind: "open", label: "Dashboard", href: "/" }, detail: { monthly_goal: amount } };
+  }
+
+  // ---- SAFE: edit_brain_section (org_profile section upsert; owner/founder) ----
+  if (name === "edit_brain_section") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const section = String(input.section || "").trim().toLowerCase().replace(/\s+/g, "_").slice(0, 60);
+    const content = String(input.content || "").trim();
+    if (!section || !content) return { ok: false, summary: "Tell me which section and the new content.", error: "missing" };
+    const { data: ex } = await db.from("org_profile").select("id").eq("section", section).maybeSingle();
+    if (ex?.id) await db.from("org_profile").update({ content, updated_by: "Sasa", updated_at: new Date().toISOString() }).eq("id", ex.id);
+    else await db.from("org_profile").insert({ section, content, data: {}, updated_by: "Sasa" });
+    await emit({ type: "brain.section_edited", source: "agent:sasa", actor: "Nur", subject_type: "org", subject_id: null, payload: { section, via: "smart" } });
+    return { ok: true, summary: humanize(`Updated the "${section.replace(/_/g, " ")}" section of the Brain.`, opts), affordance: { kind: "open", label: "Settings", href: "/settings" }, detail: { section } };
+  }
+
+  // ---- SAFE: delete_contact (admin) ----
+  if (name === "delete_contact") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const cn = String(input.name || "").trim();
+    if (!cn) return { ok: false, summary: "Which contact?", error: "no name" };
+    const { data: matches } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (matches || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a contact called ${cn}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
+    await db.from("contacts").delete().eq("id", list[0].id);
+    await emit({ type: "contact.deleted", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: list[0].id, payload: { name: list[0].name, via: "smart" } });
+    return { ok: true, summary: humanize(`Removed ${list[0].name} from your contacts.`, opts), affordance: { kind: "open", label: "View contacts", href: "/contacts" }, detail: { contact_id: list[0].id } };
+  }
+
+  // ---- SAFE: activate_member (admin) ----
+  if (name === "activate_member") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const mn = String(input.name || "").trim();
+    if (!mn) return { ok: false, summary: "Which team member?", error: "no name" };
+    const m = await findMember(db, mn);
+    if (!m) return { ok: false, summary: humanize(`I could not find a team member called ${mn}.`, opts) };
+    await db.from("team_members").update({ activated: true, status: "active" }).eq("id", m.id);
+    await emit({ type: "team.member_activated", source: "agent:sasa", actor: "Nur", subject_type: "team_member", subject_id: m.id, payload: { name: m.name, via: "smart" } });
+    return { ok: true, summary: humanize(`Activated ${m.name}.`, opts), affordance: { kind: "open", label: "View team", href: "/team" }, detail: { team_member_id: m.id } };
   }
 
   // ---- SAFE: prepare_grants (background jobs, nothing submitted) ----
@@ -1103,7 +1771,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // Mirror to Google first so we can store its id (honest sync state, Law 11).
     let gcal_event_id: string | null = null;
     if (gcalConfigured()) { try { gcal_event_id = (await gcalCreate(row)).id; } catch { /* link not live yet */ } }
-    const { data: ev, error: evErr } = await db.from("calendar_events").insert({ ...row, gcal_event_id, source: "ai", created_by: "Nur" }).select("id").single();
+    const evRecurrence = RECURRENCE_RULES.includes(input.recurrence) ? input.recurrence : null;
+    const { data: ev, error: evErr } = await db.from("calendar_events").insert({ ...row, recurrence: evRecurrence, gcal_event_id, source: "ai", created_by: "Nur" }).select("id").single();
     if (evErr || !ev) return { ok: false, summary: "", error: evErr?.message || "event insert failed" };
     await emit({ type: "calendar.event_created", source: "agent:sasa", actor: "Nur", subject_type: "calendar_event", subject_id: ev.id, payload: { title, date, time, via: ctx.sourceGroup ? "group" : "smart", synced: !!gcal_event_id } });
     const holiday = await holidayOn(date);

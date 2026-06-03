@@ -16,7 +16,7 @@ import { transcribeAudio } from "../../../../lib/transcribe";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const digits = (s: string) => String(s || "").replace(/[^\d]/g, "");
 
@@ -53,6 +53,10 @@ function substantive(text: string): boolean {
   if (/sasa/i.test(t)) return true;          // addressed
   if (/\?\s*$/.test(t)) return true;          // a question
   if (t.length >= 25) return true;            // likely reports something
+  // short but INTENTFUL reports must still wake the brain so the capture happens
+  // (e.g. "paid the rent", "kid intake done", "stall map finished"). Without this,
+  // a <25-char actionable message was silently dropped with no trace.
+  if (/\b(done|paid|finished|complete|completed|sent|added|received|bought|collected|intake|delivered|booked|fixed|sorted|submitted|filed|reopen|assigned|bought|picked up|dropped off)\b/i.test(t)) return true;
   return false;
 }
 
@@ -307,8 +311,13 @@ export async function POST(req: NextRequest) {
     if (!recent?.[0]) {
       const note = `Heads up from the ${group} group: ${reason}`;
       const nums = (process.env.WHATSAPP_OPERATORS || "").split(",").map((s) => s.trim()).filter(Boolean);
-      for (const n of nums) { try { await sendText(n, note); } catch {} }
-      await emit({ type: "group.flagged_nur", source: "group-bot", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, payload: { group, reason, notified: nums.length } });
+      // Track DELIVERY, not just attempts: if the 727 push fails or no operators
+      // are configured, the escalation was previously swallowed silently. Now the
+      // event records delivered vs attempted and flags needs_attention=true when
+      // NOTHING got through, so a lost flag is durable and queryable, never silent.
+      let delivered = 0;
+      for (const n of nums) { try { await sendText(n, note); delivered++; } catch {} }
+      await emit({ type: "group.flagged_nur", source: "group-bot", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, payload: { group, reason, attempted: nums.length, delivered, needs_attention: delivered === 0 } });
     }
     return NextResponse.json({ ok: true, reply: "", flagged: true });
   }

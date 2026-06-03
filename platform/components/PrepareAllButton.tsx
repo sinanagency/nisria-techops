@@ -19,6 +19,10 @@ export default function PrepareAllButton() {
   const [note, setNote] = useState<string | null>(null);
   const [kicking, setKicking] = useState(false); // brief: the enqueue call itself
   const prevActive = useRef(0);
+  // Mirror of `active` for the poll's setTimeout. The poll effect runs once (empty
+  // deps), so reading the `active` state inside it would capture a stale 0 forever
+  // and the fast 4s "while working" cadence would never fire. Read the ref instead.
+  const activeRef = useRef(0);
 
   // Poll the queue depth. Cheap count query. Updates a chip only — never a
   // transition, never a navigation. Polls faster while work is in flight.
@@ -30,6 +34,7 @@ export default function PrepareAllButton() {
         const s = await getPrepareStatus();
         if (!alive) return;
         setActive(s.active);
+        activeRef.current = s.active;
         // when the queue empties after having had work, pull fresh data once so
         // the new "Prepared · review" cards appear without a manual refresh.
         if (prevActive.current > 0 && s.active === 0) {
@@ -40,7 +45,7 @@ export default function PrepareAllButton() {
       } catch {
         /* ignore — chip just won't update this cycle */
       }
-      if (alive) timer = setTimeout(tick, active > 0 ? 4000 : 15000);
+      if (alive) timer = setTimeout(tick, activeRef.current > 0 ? 4000 : 15000);
     };
     tick();
     return () => { alive = false; clearTimeout(timer); };
@@ -56,6 +61,7 @@ export default function PrepareAllButton() {
       if (res.queued > 0) {
         setActive((a) => a + res.queued);
         prevActive.current = prevActive.current + res.queued;
+        activeRef.current = activeRef.current + res.queued;
         setNote(`Queued ${res.queued}. Preparing in the background — you can leave this page.`);
       } else if (res.alreadyQueued > 0) {
         setNote("Already preparing those. You can leave this page.");
