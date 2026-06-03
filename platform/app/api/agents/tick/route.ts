@@ -20,9 +20,43 @@ export const maxDuration = 60;
 const RANK: Record<Lane, number> = { auto: 0, approve: 1, escalate: 2 };
 const stricter = (a: Lane, b: Lane): Lane => (RANK[a] >= RANK[b] ? a : b);
 
+// RECURRING CALENDAR EVENTS (one-off model, mirrors recurring tasks): when a
+// recurring event's date passes and no future instance exists yet, create the next.
+function nextEventDate(fromISO: string, rule: string): string | null {
+  const add = (iso: string, n: number) => { const x = new Date(iso + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+  switch (rule) {
+    case "daily": return add(fromISO, 1);
+    case "weekly": return add(fromISO, 7);
+    case "biweekly": return add(fromISO, 14);
+    case "weekdays": { let d = add(fromISO, 1); let dow = new Date(d + "T00:00:00Z").getUTCDay(); while (dow === 0 || dow === 6) { d = add(d, 1); dow = new Date(d + "T00:00:00Z").getUTCDay(); } return d; }
+    case "monthly": { const x = new Date(fromISO + "T00:00:00Z"); x.setUTCMonth(x.getUTCMonth() + 1); return x.toISOString().slice(0, 10); }
+    default: return null;
+  }
+}
+async function materializeRecurringEvents(db: any, today: string): Promise<number> {
+  const { data: rec } = await db.from("calendar_events").select("id,title,starts_on,start_time,end_time,all_day,location,notes,kind,brand,recurrence").not("recurrence", "is", null).lt("starts_on", today).order("starts_on", { ascending: false }).limit(50);
+  let made = 0;
+  const seenTitles = new Set<string>();
+  for (const e of (rec || []) as any[]) {
+    if (seenTitles.has(e.title + e.recurrence)) continue; // only roll the most recent past instance per series
+    seenTitles.add(e.title + e.recurrence);
+    const next = nextEventDate(e.starts_on, e.recurrence);
+    if (!next) continue;
+    // skip if a future instance of this series already exists
+    const { data: future } = await db.from("calendar_events").select("id").eq("title", e.title).eq("recurrence", e.recurrence).gte("starts_on", today).limit(1);
+    if (future?.[0]) continue;
+    await db.from("calendar_events").insert({ title: e.title, starts_on: next, start_time: e.start_time, end_time: e.end_time, all_day: e.all_day, location: e.location, notes: e.notes, kind: e.kind, brand: e.brand, recurrence: e.recurrence, source: "ai", created_by: "Sasa" });
+    await emit({ type: "calendar.event_recurred", source: "agent:sasa", actor: "system", subject_type: "calendar_event", subject_id: e.id, payload: { title: e.title, recurrence: e.recurrence, next } });
+    made++;
+  }
+  return made;
+}
+
 async function runTick() {
   const db = admin();
-  const out = { processed: 0, drafted: 0, escalated: 0, auto_sent: 0, thanked: 0, errors: [] as string[] };
+  const out = { processed: 0, drafted: 0, escalated: 0, auto_sent: 0, thanked: 0, events_recurred: 0, errors: [] as string[] };
+  // materialize any due recurring calendar events first (cheap, idempotent)
+  try { out.events_recurred = await materializeRecurringEvents(db, new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10)); } catch (e: any) { out.errors.push("recur: " + (e?.message || e)); }
 
   const { data: msgs } = await db
     .from("messages")
