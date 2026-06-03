@@ -107,6 +107,10 @@ export const SMART_TOOLS = [
   { name: "list_learned", description: "Show what you have LEARNED and remembered: the durable facts in your memory (the Brain), both what the operator explicitly taught you and what you quietly picked up on your own. Use for 'what have you learned', 'what do you remember', 'what's in your memory', 'what have you picked up lately', or 'what do you know about <topic>'. Optionally filter by a topic word. Returns each fact with how you learned it (taught vs picked up) and when, so the operator can see and correct your memory.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional topic word to filter by, omit for the most recent" } } } },
   { name: "list_campaigns", description: "The fundraising campaigns with goal, amount raised, status, and dates. Use for 'how are our campaigns doing', 'what campaigns do we have', 'how much has X raised'.", input_schema: { type: "object", properties: {} } },
   { name: "list_inventory", description: "The Maisha inventory: items with quantity, stock status, and whether each is listed on Folklore. Use for 'what's in stock', 'what's low or out of stock', 'how many necklaces do we have', 'what's listed on Folklore'.", input_schema: { type: "object", properties: {} } },
+  { name: "read_document", description: "Read the actual TEXT of a filed document so you can quote or summarize it. Use for 'what does the constitution say about X', 'pull up the text of the KRA letter', 'summarize the lease'. Match by a fragment of the title. Returns the extracted text (may be long).", input_schema: { type: "object", properties: { query: { type: "string", description: "a fragment of the document title" } }, required: ["query"] } },
+  { name: "list_assets", description: "The media/asset library (logos, photos, brand files). Use for 'what assets do we have', 'show me our logos', 'do we have photos of X'. Optionally filter by brand or type.", input_schema: { type: "object", properties: { brand: { type: "string", enum: ["nisria", "maisha", "ahadi"] }, type: { type: "string", description: "logo, photo, document, etc" } } } },
+  { name: "agent_activity", description: "What the background agents have been doing: recent agent runs with the agent name, decision, and status. Use for 'what have the agents done today', 'did the grant agent run', 'what has Sasa been doing in the background'.", input_schema: { type: "object", properties: { agent: { type: "string", description: "optional: filter to one agent name" } } } },
+  { name: "list_groups", description: "The team WhatsApp groups the bot knows about (from group message history). Use for 'what groups are we in', 'which groups does the bot watch'.", input_schema: { type: "object", properties: {} } },
   { name: "group_activity", description: "What is happening in the team WhatsApp groups: recent messages and the open or overdue tasks born in a group. Use for 'what is happening in the Field Team group', 'any updates from the groups', 'what is pending in <group>', 'is anything overdue in the groups'. Optionally narrow to one group by name.", input_schema: { type: "object", properties: { group: { type: "string", description: "optional group name to narrow to, omit for all groups" } } } },
   { name: "member_activity", description: "What a specific team member has been doing: their open, overdue, and recently completed tasks plus their recent group messages. Use for 'what has Cynthia done this week', 'is X keeping up', 'what is on Grace plate', 'how active is X lately'.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "query_calendar", description: "Read the UNIFIED calendar for a date window: task due dates, payment/payroll days, grant deadlines, scheduled content, meetings, team travel, AND Kenya public holidays (Eid included). Use for 'what's on this week', 'what's coming up', 'is anything due Friday', 'what does next month look like', 'when is the next holiday'. Dates are YYYY-MM-DD. Returns each item with its type, date, and (for you only) any amount.", input_schema: { type: "object", properties: { from: { type: "string", description: "window start YYYY-MM-DD, defaults to today" }, to: { type: "string", description: "window end YYYY-MM-DD, defaults to 14 days out" } } } },
@@ -148,6 +152,8 @@ export const SMART_TOOLS = [
   { name: "update_donor", description: "Update an EXISTING donor by name: status (prospect/active/lapsed/major), type, country, email, phone, tags, notes. Use for 'mark Jane as a major donor', 'tag the Smiths as recurring', 'update Mary's email'. Lifetime value/gift figures are read-only. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, status: { type: "string", enum: ["prospect", "active", "lapsed", "major"] }, type: { type: "string", enum: ["individual", "corporate", "foundation", "government"] }, country: { type: "string" }, email: { type: "string" }, phone: { type: "string" }, tags: { type: "array", items: { type: "string" } }, notes: { type: "string" } }, required: ["name"] } },
   { name: "add_campaign", description: "Create a NEW fundraising campaign. Use for 'start a campaign called ...', 'set up a Ramadan campaign with a goal of 10000'. Does NOT touch Givebutter. If the campaign already exists, use update_campaign.", input_schema: { type: "object", properties: { name: { type: "string" }, type: { type: "string", enum: ["seasonal", "csr", "cause", "grant", "always_on"] }, status: { type: "string", enum: ["planned", "live", "closed"] }, goal_amount: { type: "number" }, starts_on: { type: "string", description: "YYYY-MM-DD" }, ends_on: { type: "string", description: "YYYY-MM-DD" } }, required: ["name"] } },
   { name: "update_campaign", description: "Update an EXISTING campaign by name: status (planned/live/closed), type, goal, or dates. Use for 'mark the Ramadan campaign live', 'raise the goal to 15000', 'close the year-end campaign'. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, status: { type: "string", enum: ["planned", "live", "closed"] }, type: { type: "string", enum: ["seasonal", "csr", "cause", "grant", "always_on"] }, goal_amount: { type: "number" }, starts_on: { type: "string", description: "YYYY-MM-DD" }, ends_on: { type: "string", description: "YYYY-MM-DD" } }, required: ["name"] } },
+  { name: "add_grant", description: "Add a grant application to the pipeline. Use for 'add a grant to the Ford Foundation', 'we're applying to USAID for 50000'. Currency is USD. It lands in 'researching'.", input_schema: { type: "object", properties: { funder: { type: "string" }, program: { type: "string" }, amount_requested: { type: "number" }, deadline: { type: "string", description: "YYYY-MM-DD" } }, required: ["funder"] } },
+  { name: "update_grant_status", description: "Move a grant application's status or record an award. Use for 'mark the Ford grant submitted', 'we won the USAID grant for 40000', 'the X grant was rejected'. Match by funder. Status: researching, drafting, review, submitted, won, lost, rejected. For an award include amount_awarded (USD).", input_schema: { type: "object", properties: { funder: { type: "string" }, status: { type: "string", enum: ["researching", "drafting", "review", "submitted", "won", "lost", "rejected"] }, amount_awarded: { type: "number" } }, required: ["funder"] } },
 ] as const;
 
 export const SMART_TOOL_NAMES = new Set(SMART_TOOLS.map((t) => t.name));
@@ -156,6 +162,7 @@ const READ_TOOLS = new Set([
   "list_grants", "list_tasks", "inbox_status", "list_team", "latest_gift",
   "search_history", "find_beneficiary", "lookup_contact", "team_detail",
   "search_documents", "list_campaigns", "list_inventory",
+  "read_document", "list_assets", "agent_activity", "list_groups",
   "group_activity", "member_activity",
   "query_calendar", "check_conflicts",
   "list_learned",
@@ -363,6 +370,40 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
       listed_on_folklore: items.filter((i) => i.folklore_listed).length,
       items: items.map((i) => ({ name: i.name, qty: i.quantity, status: i.status, category: i.category || null, collection: i.collection || null, listed: !!i.folklore_listed })),
     };
+  }
+  if (name === "read_document") {
+    const q = String(input.query || "").trim();
+    if (!q) return { error: "give a document title fragment" };
+    const like = `%${q.replace(/[,()*%]/g, "")}%`;
+    let qb = db.from("documents").select("title,doc_type,folder,doc_date,extracted_text,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
+    if (tier === "team") qb = qb.not("folder", "eq", "legal").not("doc_type", "eq", "contract");
+    const { data } = await qb.order("doc_date", { ascending: false }).limit(1);
+    const doc = (data || [])[0] as any;
+    if (!doc) return { found: false, note: `No document matching "${q}".` };
+    const text = String(doc.extracted_text || "").trim();
+    return { found: true, title: doc.title, type: doc.doc_type || null, date: doc.doc_date || null, summary: String(doc.summary || "").slice(0, 200) || null, text: text ? text.slice(0, 4000) : null, text_available: !!text, note: text ? undefined : "This document has no extracted text yet." };
+  }
+  if (name === "list_assets") {
+    let qb = db.from("assets").select("title,type,brand,tags,consent_required,consent_on_file,created_at");
+    if (["nisria", "maisha", "ahadi"].includes(input.brand)) qb = qb.eq("brand", input.brand);
+    if (input.type) qb = qb.eq("type", String(input.type).slice(0, 40));
+    const { data } = await qb.order("created_at", { ascending: false }).limit(60);
+    let rows = (data || []) as any[];
+    // consent wall: a team-tier caller never sees assets that need consent but lack it on file
+    if (tier === "team") rows = rows.filter((a) => !a.consent_required || a.consent_on_file);
+    return { count: rows.length, assets: rows.map((a) => ({ title: a.title || "(untitled)", type: a.type || null, brand: a.brand || null, tags: a.tags || [] })) };
+  }
+  if (name === "agent_activity") {
+    if (tier === "team") return { error: "not available here" };
+    let qb = db.from("agent_runs").select("agent,decision,status,error,created_at");
+    if (input.agent) qb = qb.ilike("agent", `%${String(input.agent).replace(/[,()*%]/g, "")}%`);
+    const { data } = await qb.order("created_at", { ascending: false }).limit(25);
+    return { count: (data || []).length, runs: ((data || []) as any[]).map((r) => ({ agent: r.agent, decision: r.decision || null, status: r.status, error: r.error || null, at: r.created_at })) };
+  }
+  if (name === "list_groups") {
+    const { data } = await db.from("messages").select("account").eq("sender_type", "group").not("account", "is", null).limit(500);
+    const names = [...new Set(((data || []) as any[]).map((m) => m.account).filter(Boolean))];
+    return { count: names.length, groups: names };
   }
   if (name === "group_activity") {
     if (tier === "team") return { error: "not available here" };
@@ -994,6 +1035,42 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     await db.from("campaigns").update(patch).eq("id", list[0].id);
     await emit({ type: "campaign.updated", source: "agent:sasa", actor: "Nur", subject_type: "campaign", subject_id: list[0].id, payload: { name: list[0].name, changed, via: "smart" } });
     return { ok: true, summary: humanize(`Updated "${list[0].name}": ${changed.join(", ")}.`, opts), affordance: { kind: "open", label: "View campaigns", href: "/campaigns" }, detail: { campaign_id: list[0].id, changed } };
+  }
+
+  // ---- SAFE: add_grant (new grant application in the pipeline; USD) ----
+  if (name === "add_grant") {
+    const funder = String(input.funder || "").trim();
+    if (!funder) return { ok: false, summary: "Which funder is the grant to?", error: "no funder" };
+    const row: any = { funder, status: "researching", currency: "USD" };
+    if (input.program) row.program = String(input.program).slice(0, 200);
+    if (typeof input.amount_requested === "number" && input.amount_requested >= 0) row.amount_requested = input.amount_requested;
+    if (input.deadline) row.deadline = String(input.deadline).slice(0, 10);
+    const { data: ins } = await db.from("grant_applications").insert(row).select("id").single();
+    await emit({ type: "grant.added", source: "agent:sasa", actor: "Nur", subject_type: "grant", subject_id: ins?.id || null, payload: { funder, program: row.program || null, amount_requested: row.amount_requested || null, deadline: row.deadline || null, via: "smart" } });
+    return { ok: true, summary: humanize(`Added a grant application to ${funder}${row.amount_requested ? ` for ${money(row.amount_requested)} USD` : ""}.`, opts), affordance: { kind: "open", label: "View grants", href: "/grants" }, detail: { grant_id: ins?.id } };
+  }
+
+  // ---- SAFE EDIT: update_grant_status (move pipeline status / record an award) ----
+  if (name === "update_grant_status") {
+    const funder = String(input.funder || "").trim();
+    if (!funder) return { ok: false, summary: "Which grant (by funder)?", error: "no funder" };
+    if (!["researching", "drafting", "review", "submitted", "won", "lost", "rejected"].includes(input.status) && typeof input.amount_awarded !== "number") {
+      return { ok: false, summary: humanize("Tell me the new status (submitted, won, lost, rejected, ...) or the award amount.", opts) };
+    }
+    const { data: matches } = await db.from("grant_applications").select("id,funder,status").ilike("funder", `%${funder.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (matches || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a grant application to ${funder}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few grants match: ${list.map((g) => g.funder).join(", ")}. Which one?`, opts) };
+    const patch: any = { updated_at: new Date().toISOString() }; const changed: string[] = [];
+    if (["researching", "drafting", "review", "submitted", "won", "lost", "rejected"].includes(input.status)) {
+      patch.status = input.status; changed.push(`status ${input.status}`);
+      if (input.status === "submitted") patch.submitted_on = new Date().toISOString().slice(0, 10);
+      if (["won", "lost", "rejected"].includes(input.status)) patch.decision_on = new Date().toISOString().slice(0, 10);
+    }
+    if (typeof input.amount_awarded === "number" && input.amount_awarded >= 0) { patch.amount_awarded = input.amount_awarded; changed.push(`awarded ${money(input.amount_awarded)} USD`); }
+    await db.from("grant_applications").update(patch).eq("id", list[0].id);
+    await emit({ type: "grant.status_changed", source: "agent:sasa", actor: "Nur", subject_type: "grant", subject_id: list[0].id, payload: { funder: list[0].funder, changed, via: "smart" } });
+    return { ok: true, summary: humanize(`Updated the ${list[0].funder} grant: ${changed.join(", ")}.`, opts), affordance: { kind: "open", label: "View grants", href: "/grants" }, detail: { grant_id: list[0].id, changed } };
   }
 
   // ---- SAFE: prepare_grants (background jobs, nothing submitted) ----
