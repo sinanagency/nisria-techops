@@ -140,6 +140,7 @@ export const SMART_TOOLS = [
   { name: "read_brief", description: "The current daily brief: the headline summary + the key points for today. Use for 'what's the brief', 'give me the rundown', 'what should I focus on today'.", input_schema: { type: "object", properties: {} } },
   { name: "list_payroll", description: "Team payment (payroll) history: who was paid, how much, when, and the status. Use for 'who have we paid this month', 'show payroll', 'how much have we paid Dorcas'. Optionally filter by a member name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string", description: "optional team member name to filter" } } } },
   { name: "list_bank_transactions", description: "The bank statement ledger (reconciled transactions) for a date window. Use for 'what came through the bank in May', 'show recent bank transactions', 'any large withdrawals'. Admin only.", input_schema: { type: "object", properties: { from: { type: "string", description: "YYYY-MM-DD" }, to: { type: "string", description: "YYYY-MM-DD" } } } },
+  { name: "read_contact_thread", description: "Read the recent message history with a specific contact (what was last said to/from them). Use for 'what did we last say to John', 'show my thread with Mary'. Match by name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "group_activity", description: "What is happening in the team WhatsApp groups: recent messages and the open or overdue tasks born in a group. Use for 'what is happening in the Field Team group', 'any updates from the groups', 'what is pending in <group>', 'is anything overdue in the groups'. Optionally narrow to one group by name.", input_schema: { type: "object", properties: { group: { type: "string", description: "optional group name to narrow to, omit for all groups" } } } },
   { name: "member_activity", description: "What a specific team member has been doing: their open, overdue, and recently completed tasks plus their recent group messages. Use for 'what has Cynthia done this week', 'is X keeping up', 'what is on Grace plate', 'how active is X lately'.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "query_calendar", description: "Read the UNIFIED calendar for a date window: task due dates, payment/payroll days, grant deadlines, scheduled content, meetings, team travel, AND Kenya public holidays (Eid included). Use for 'what's on this week', 'what's coming up', 'is anything due Friday', 'what does next month look like', 'when is the next holiday'. Dates are YYYY-MM-DD. Returns each item with its type, date, and (for you only) any amount.", input_schema: { type: "object", properties: { from: { type: "string", description: "window start YYYY-MM-DD, defaults to today" }, to: { type: "string", description: "window end YYYY-MM-DD, defaults to 14 days out" } } } },
@@ -169,6 +170,8 @@ export const SMART_TOOLS = [
 
   // ---- ACTION · GATED SENDS (queue into approvals, NEVER auto-send) ----
   { name: "draft_thank_you", description: "Draft a donor thank-you and QUEUE it into Needs-You for Nur's approval. GATED: never auto-sent. Pass donor_name OR use latest_gift first.", input_schema: { type: "object", properties: { donor_name: { type: "string", description: "donor name, or omit to thank the latest gift" } } } },
+  { name: "draft_all_thank_yous", description: "Draft thank-yous for ALL recent gifts that haven't been thanked yet, in one go. GATED: each lands in Needs You for approval, nothing is sent. Use for 'thank everyone we haven't thanked', 'draft thank-yous for this week's gifts'.", input_schema: { type: "object", properties: {} } },
+  { name: "log_payout", description: "Log a Givebutter -> Kenya USD payout (the bridge transfer), kept out of the operating-spend ledger. Use for 'log a payout of 3000 from Givebutter', 'we withdrew 5000 to Kenya'. USD.", input_schema: { type: "object", properties: { amount: { type: "number" }, note: { type: "string" } }, required: ["amount"] } },
   { name: "draft_email", description: "Draft an outbound email and QUEUE it into approvals for Nur. GATED: NEVER sent until Nur approves. Use for 'email <someone> about ...'. Provide recipient (name/email if known), subject, and the gist; you write the body.", input_schema: { type: "object", properties: { to: { type: "string", description: "recipient email if known, else a name" }, subject: { type: "string" }, about: { type: "string", description: "what the email should say" }, account: { type: "string", enum: ["sasa@nisria.co", "maisha@nisria.co"] } }, required: ["about"] } },
 
   // ---- ACTION · SAFE EDITS (update an existing record; admin only) ----
@@ -196,7 +199,7 @@ const READ_TOOLS = new Set([
   "search_history", "find_beneficiary", "lookup_contact", "team_detail",
   "search_documents", "list_campaigns", "list_inventory",
   "read_document", "list_assets", "agent_activity", "list_groups",
-  "read_brief", "list_payroll", "list_bank_transactions",
+  "read_brief", "list_payroll", "list_bank_transactions", "read_contact_thread",
   "group_activity", "member_activity",
   "query_calendar", "check_conflicts",
   "list_learned",
@@ -450,6 +453,17 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     let rows = (data || []) as any[];
     if (input.name) { const n = String(input.name).toLowerCase(); rows = rows.filter((r) => String(r.team_members?.name || "").toLowerCase().includes(n)); }
     return { count: rows.length, payments: rows.map((r) => ({ member: r.team_members?.name || null, amount: money(r.amount), currency: r.currency, period: r.pay_period || null, paid_at: r.paid_at || null, status: r.status })) };
+  }
+  if (name === "read_contact_thread") {
+    if (tier === "team") return { error: "not available here" };
+    const cn = String(input.name || "").trim();
+    if (!cn) return { error: "give a contact name" };
+    const { data: contacts } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (contacts || []) as any[];
+    if (!list.length) return { found: false, note: `No contact matching "${cn}".` };
+    if (list.length > 1) return { found: false, note: `A few match: ${list.map((c) => c.name).join(", ")}. Which one?` };
+    const { data: msgs } = await db.from("messages").select("direction,channel,subject,body,created_at").eq("contact_id", list[0].id).order("created_at", { ascending: false }).limit(15);
+    return { found: true, contact: list[0].name, count: (msgs || []).length, messages: ((msgs || []) as any[]).map((m) => ({ dir: m.direction, channel: m.channel, subject: m.subject || null, text: String(m.body || "").slice(0, 300), at: m.created_at })) };
   }
   if (name === "list_bank_transactions") {
     if (tier === "team") return { error: "not available here" };
@@ -1174,6 +1188,31 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     await db.from("grant_applications").update(patch).eq("id", list[0].id);
     await emit({ type: "grant.status_changed", source: "agent:sasa", actor: "Nur", subject_type: "grant", subject_id: list[0].id, payload: { funder: list[0].funder, changed, via: "smart" } });
     return { ok: true, summary: humanize(`Updated the ${list[0].funder} grant: ${changed.join(", ")}.`, opts), affordance: { kind: "open", label: "View grants", href: "/grants" }, detail: { grant_id: list[0].id, changed } };
+  }
+
+  // ---- GATED: draft_all_thank_yous (batch over recent un-thanked gifts) ----
+  if (name === "draft_all_thank_yous") {
+    const { data: gifts } = await db.from("donations").select("id,amount,is_recurring,donor:donors(id,full_name,email)").eq("status", "succeeded").order("donated_at", { ascending: false }).limit(15);
+    let queued = 0, skipped = 0;
+    for (const g of ((gifts || []) as any[])) {
+      const donor = (g as any).donor;
+      if (!donor?.email) { skipped++; continue; }
+      const r = await queueThankYouGated(db, g, donor, n);
+      if (r.created) queued++;
+      if (queued >= 10) break;
+    }
+    const msg = queued ? `Drafted ${queued} thank-you${queued === 1 ? "" : "s"} into Needs You for your approval. Nothing is sent until you approve.` : `No new thank-yous to draft, recent gifts are already queued or have no email on file.`;
+    return { ok: true, summary: humanize(msg, opts), affordance: { kind: "queued", label: "Review in Needs You", href: "/" }, detail: { gated: true, queued, skipped } };
+  }
+
+  // ---- SAFE: log_payout (Givebutter->Kenya USD bridge; out of operating-spend ledger) ----
+  if (name === "log_payout") {
+    const amount = Number(input.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return { ok: false, summary: "How much was the payout?", error: "no amount" };
+    const ref = `GB-PAYOUT-${Date.now().toString(36).toUpperCase()}`;
+    const { data: row } = await db.from("payments").insert({ direction: "in", payee: "Givebutter payout", purpose: input.note ? String(input.note).slice(0, 300) : "Givebutter USD payout to Kenya", amount, currency: "USD", method: "givebutter", status: "paid", paid_at: new Date().toISOString(), category: "payout", ref, created_by: "Sasa" }).select("id").single();
+    await emit({ type: "payment.logged", source: "agent:sasa", actor: "Nur", subject_type: "payment", subject_id: row?.id || null, payload: { payout: true, amount, currency: "USD", via: "smart" } });
+    return { ok: true, summary: humanize(`Logged a Givebutter payout of USD ${money(amount)}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { id: row?.id, payout: true } };
   }
 
   // ---- SAFE EDIT: update_inventory_item ----
