@@ -203,6 +203,9 @@ export const SMART_TOOLS = [
   { name: "update_inventory_item", description: "Update an EXISTING Maisha inventory item by name: quantity, stock status, price, location, or its Folklore listing URL. Use for 'we sold 3 of the beaded necklaces', 'mark the kikoy out of stock', 'set the listing URL for X'. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, quantity: { type: "number" }, status: { type: "string", enum: ["in_stock", "low", "out", "archived"] }, unit_price: { type: "number" }, location: { type: "string" }, folklore_url: { type: "string" } }, required: ["name"] } },
   { name: "delete_document", description: "Permanently remove a filed document (e.g. a duplicate or a wrongly-filed file). Use for 'delete the duplicate KRA letter', 'remove that document'. Match by a fragment of the title; if more than one matches, ask which. The removal is logged. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "a fragment of the document title" } }, required: ["query"] } },
   { name: "set_monthly_goal", description: "Set the monthly fundraising goal the dashboard gauge measures against. Use for 'set our monthly goal to 20000', 'change the target to 15k'. Owner/founder only.", input_schema: { type: "object", properties: { amount: { type: "number" } }, required: ["amount"] } },
+  { name: "edit_brain_section", description: "Update a section of the org profile / Brain that Settings exposes (e.g. org_profile, mission, programs). Use for 'update our mission to ...', 'set the org overview'. Owner/founder only.", input_schema: { type: "object", properties: { section: { type: "string", description: "the section key, e.g. org_profile, mission, programs" }, content: { type: "string" } }, required: ["section", "content"] } },
+  { name: "delete_contact", description: "Delete a saved contact by name. Use for 'remove the contact John Doe', 'delete that duplicate contact'. Match by name; if more than one matches, ask. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "activate_member", description: "Activate a team member (set status active + activated). Use for 'activate Dorcas', 'bring Eliza back to active'. Match by name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
 ] as const;
 
 export const SMART_TOOL_NAMES = new Set(SMART_TOOLS.map((t) => t.name));
@@ -1422,6 +1425,45 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     else await db.from("org_profile").insert({ section: "monthly_goal", content: String(amount) });
     await emit({ type: "org.monthly_goal_set", source: "agent:sasa", actor: "Nur", subject_type: "org", subject_id: null, payload: { amount, via: "smart" } });
     return { ok: true, summary: humanize(`Set the monthly fundraising goal to ${money(amount)}.`, opts), affordance: { kind: "open", label: "Dashboard", href: "/" }, detail: { monthly_goal: amount } };
+  }
+
+  // ---- SAFE: edit_brain_section (org_profile section upsert; owner/founder) ----
+  if (name === "edit_brain_section") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const section = String(input.section || "").trim().toLowerCase().replace(/\s+/g, "_").slice(0, 60);
+    const content = String(input.content || "").trim();
+    if (!section || !content) return { ok: false, summary: "Tell me which section and the new content.", error: "missing" };
+    const { data: ex } = await db.from("org_profile").select("id").eq("section", section).maybeSingle();
+    if (ex?.id) await db.from("org_profile").update({ content, updated_by: "Sasa", updated_at: new Date().toISOString() }).eq("id", ex.id);
+    else await db.from("org_profile").insert({ section, content, data: {}, updated_by: "Sasa" });
+    await emit({ type: "brain.section_edited", source: "agent:sasa", actor: "Nur", subject_type: "org", subject_id: null, payload: { section, via: "smart" } });
+    return { ok: true, summary: humanize(`Updated the "${section.replace(/_/g, " ")}" section of the Brain.`, opts), affordance: { kind: "open", label: "Settings", href: "/settings" }, detail: { section } };
+  }
+
+  // ---- SAFE: delete_contact (admin) ----
+  if (name === "delete_contact") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const cn = String(input.name || "").trim();
+    if (!cn) return { ok: false, summary: "Which contact?", error: "no name" };
+    const { data: matches } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const list = (matches || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a contact called ${cn}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
+    await db.from("contacts").delete().eq("id", list[0].id);
+    await emit({ type: "contact.deleted", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: list[0].id, payload: { name: list[0].name, via: "smart" } });
+    return { ok: true, summary: humanize(`Removed ${list[0].name} from your contacts.`, opts), affordance: { kind: "open", label: "View contacts", href: "/contacts" }, detail: { contact_id: list[0].id } };
+  }
+
+  // ---- SAFE: activate_member (admin) ----
+  if (name === "activate_member") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const mn = String(input.name || "").trim();
+    if (!mn) return { ok: false, summary: "Which team member?", error: "no name" };
+    const m = await findMember(db, mn);
+    if (!m) return { ok: false, summary: humanize(`I could not find a team member called ${mn}.`, opts) };
+    await db.from("team_members").update({ activated: true, status: "active" }).eq("id", m.id);
+    await emit({ type: "team.member_activated", source: "agent:sasa", actor: "Nur", subject_type: "team_member", subject_id: m.id, payload: { name: m.name, via: "smart" } });
+    return { ok: true, summary: humanize(`Activated ${m.name}.`, opts), affordance: { kind: "open", label: "View team", href: "/team" }, detail: { team_member_id: m.id } };
   }
 
   // ---- SAFE: prepare_grants (background jobs, nothing submitted) ----
