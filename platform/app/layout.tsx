@@ -1,5 +1,5 @@
 import "./globals.css";
-import { Inter } from "next/font/google";
+import { Inter, Space_Grotesk } from "next/font/google";
 import AppFrame from "../components/AppFrame";
 import ClockProbe from "../components/ClockProbe";
 import { getCurrentUser } from "../lib/auth";
@@ -14,6 +14,15 @@ const inter = Inter({
   variable: "--font-inter",
 });
 
+// Redesign v2: Space Grotesk for display numbers / headings (the .disp2 class in
+// globals.css). Self-hosted via next/font, additive, never replaces Inter.
+const grotesk = Space_Grotesk({
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+  display: "swap",
+  variable: "--font-grotesk",
+});
+
 export const metadata = {
   title: "Nisria Command Center",
   description: "Nisria's master operations platform",
@@ -26,7 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     ? { name: user.name, org: user.org, initials: user.initials, role: user.role }
     : null;
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={`${inter.variable} ${grotesk.variable}`}>
       <head>
         {/* Set the money-hide class BEFORE first paint so the privacy blur never
             flashes the real numbers on navigation (fixes the MoneyToggle FOUC). */}

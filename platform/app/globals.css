@@ -1253,3 +1253,23 @@ details.collapse[open] .collapse-head { border-bottom: 1px solid var(--line); }
 .cw-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-type { font-size: 11px; }
 .cw-when { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* ============================================================
+   REDESIGN v2 — additive only. Does not alter any class above.
+   Space Grotesk display + graphic metric hero for drill-to-core.
+   ============================================================ */
+.disp2 { font-family: var(--font-grotesk), var(--font-display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+
+.metric-hero { position: relative; overflow: hidden; border-radius: var(--radius, 22px); padding: 24px 26px;
+  color: #eafdfc; background: linear-gradient(150deg, #06302f 0%, #0a423f 58%, #0c4a40 100%);
+  box-shadow: 0 16px 40px rgba(20,40,40,0.18), inset 0 1px 0 rgba(255,255,255,0.06); margin-bottom: 16px; }
+.metric-hero::after { content: ""; position: absolute; right: -40px; top: -50px; width: 220px; height: 220px;
+  border-radius: 50%; background: radial-gradient(circle, rgba(0,196,194,0.42), transparent 65%); filter: blur(24px); pointer-events: none; }
+.metric-hero .mh-row { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 22px; flex-wrap: wrap; }
+.metric-hero .mh-label { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(255,255,255,0.55); font-weight: 800; }
+.metric-hero .mh-num { font-family: var(--font-grotesk), var(--font-display); font-size: clamp(40px, 6vw, 56px); font-weight: 700; letter-spacing: -0.04em; line-height: 0.92; margin-top: 6px; }
+.metric-hero .mh-num .cur { font-size: 0.5em; opacity: 0.6; font-weight: 600; vertical-align: 0.28em; }
+.metric-hero .mh-sub { font-size: 13px; color: #7df3f1; font-weight: 700; margin-top: 5px; }
+.metric-hero .mh-eye { position: absolute; top: 16px; right: 18px; z-index: 3; }
+/* the headline metric uses Space Grotesk on every big number across the redesign */
+.stat .value, .feature .ftitle { font-family: var(--font-grotesk), var(--font-display); }

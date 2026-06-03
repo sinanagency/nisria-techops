@@ -68,6 +68,10 @@ export default async function MissionControl() {
   const points = cached.points.length ? cached.points : fallbackPoints({ pending: counts.needsYou, newMsgs: counts.needsReply, tasks: counts.openTasks, raisedMtd: money(raisedMtd) });
   const goalPct = Math.round((raisedMtd / MONTHLY_GOAL) * 100);
 
+  // serializable sibling set (each approval + its resolved original) so the Focus
+  // Tab's prev/next arrows step through Needs-You.
+  const sibs = (approvals || []).map((a: any) => ({ a, original: origFor(a) }));
+
   return (
     <div className="pagewrap rise">
       <div className="hero">
@@ -79,35 +83,31 @@ export default async function MissionControl() {
 
       <ActionChips />
 
-      {/* brief (clickable bullets, scrollable) + monthly gauge */}
-      <div className="grid" style={{ gridTemplateColumns: "1.5fr 1fr", marginBottom: 16 }}>
-        <div className="feature teal">
-          <div className="between" style={{ marginBottom: 10 }}>
-            <div className="flex"><div className="ficon" style={{ background: "var(--teal)", color: "#fff", width: 34, height: 34, marginBottom: 0 }}><Sparkles size={18} /></div><div className="ftitle">Sasa's brief</div></div>
-            <Refresh />
-          </div>
-          <div style={{ maxHeight: 138, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
-            {points.map((p: any, i: number) => (
-              <a key={i} href={p.href} className="briefpt">
-                <span className="dot" />
-                <span style={{ flex: 1 }}>{p.text}</span>
-                <ChevronRight size={15} className="chev" />
-              </a>
-            ))}
-          </div>
-        </div>
-        <div className="card card-pad" style={{ display: "flex", alignItems: "center", gap: 18, position: "relative" }}>
-          <MoneyHideToggle style={{ position: "absolute", top: 14, right: 14 }} />
-          <Gauge pct={goalPct} value={`${goalPct}%`} label="of goal" />
+      {/* DRILL-TO-CORE: the one number that matters leads the page, full width.
+          Raised this month + goal gauge as a single graphic headline. Everything
+          below is supporting context, demoted on purpose. */}
+      <div className="metric-hero">
+        <MoneyHideToggle style={{ position: "absolute", top: 16, right: 18, zIndex: 3 }} />
+        <div className="mh-row">
           <div>
-            <div className="muted" style={{ fontSize: 12.5 }}>Raised this month</div>
-            <Money amount={raisedMtd} style={{ display: "block", fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", marginTop: 4 }} />
-            <div className="faint" style={{ fontSize: 12, marginTop: 3 }}>goal <Money amount={MONTHLY_GOAL} /></div>
+            <div className="mh-label">Raised this month</div>
+            <Money amount={raisedMtd} className="mh-num" />
+            <div className="mh-sub">{goalPct}% of <Money amount={MONTHLY_GOAL} /> goal</div>
           </div>
+          <Gauge pct={goalPct} value={`${goalPct}%`} label="of goal" />
         </div>
       </div>
 
-      {/* KPIs — clickable */}
+      {/* NEEDS YOU — promoted to the action zone, right under the headline. This is
+          where the operator acts, so it earns the second slot, not the fifth. */}
+      <div className="card" id="needs-you" style={{ marginBottom: 16 }}>
+        <div className="card-h">Needs you <Badge tone="gold">{counts.needsYou}</Badge></div>
+        {(approvals || []).length === 0
+          ? <div className="empty">Nothing needs you yet. Sasa only surfaces real people who need a reply.</div>
+          : <div className="hscroll">{(approvals || []).map((a: any) => <ApprovalCard key={a.id} a={a} original={origFor(a)} siblings={sibs} />)}</div>}
+      </div>
+
+      {/* SUPPORTING METRICS — demoted to a quiet, scannable strip. Clickable. */}
       <div className="grid cols-4" style={{ marginBottom: 16 }}>
         <a className="card card-pad stat hover" href="/donations" style={{ position: "relative" }}><MoneyHideToggle style={{ position: "absolute", top: 14, right: 14 }} /><div className="label">Raised all-time</div><div className="value"><Money amount={raisedAll} /></div><div className="delta">{recurring} recurring gifts</div></a>
         <a className="card card-pad stat hover" href="/donors"><div className="label">Donors</div><div className="value">{num(counts.donors)}</div><div className="delta">in your network</div></a>
@@ -115,17 +115,21 @@ export default async function MissionControl() {
         <a className="card card-pad stat hover" href="/tasks"><div className="label">Open tasks</div><div className="value">{num(counts.openTasks)}</div><div className="delta">across the team</div></a>
       </div>
 
-      {/* Needs you — the important part, sideways scroll */}
-      <div className="card" id="needs-you" style={{ marginBottom: 16 }}>
-        <div className="card-h">Needs you <Badge tone="gold">{counts.needsYou}</Badge></div>
-        {(approvals || []).length === 0
-          ? <div className="empty">Nothing needs you yet. Sasa only surfaces real people who need a reply.</div>
-          : (() => {
-              // serializable sibling set (each approval + its resolved original)
-              // so the Focus Tab's prev/next arrows step through Needs-You.
-              const sibs = (approvals || []).map((a: any) => ({ a, original: origFor(a) }));
-              return <div className="hscroll">{(approvals || []).map((a: any) => <ApprovalCard key={a.id} a={a} original={origFor(a)} siblings={sibs} />)}</div>;
-            })()}
+      {/* Sasa's brief — narrative context, below the action zone. */}
+      <div className="feature teal" style={{ marginBottom: 16 }}>
+        <div className="between" style={{ marginBottom: 10 }}>
+          <div className="flex"><div className="ficon" style={{ background: "var(--teal)", color: "#fff", width: 34, height: 34, marginBottom: 0 }}><Sparkles size={18} /></div><div className="ftitle">Sasa's brief</div></div>
+          <Refresh />
+        </div>
+        <div style={{ maxHeight: 138, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+          {points.map((p: any, i: number) => (
+            <a key={i} href={p.href} className="briefpt">
+              <span className="dot" />
+              <span style={{ flex: 1 }}>{p.text}</span>
+              <ChevronRight size={15} className="chev" />
+            </a>
+          ))}
+        </div>
       </div>
 
       {/* Coming up — the unified calendar's next 7 days, one glance */}
@@ -133,14 +137,12 @@ export default async function MissionControl() {
         <CalendarWidget />
       </div>
 
-      {/* Tasks */}
+      {/* Tasks + recent activity */}
       <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 16 }}>
         <div className="card">
           <div className="card-h"><a href="/tasks" style={{ textDecoration: "none" }} className="flex">Tasks <ChevronRight size={15} /></a></div>
           <div style={{ padding: "6px 16px" }}>
             {(tasks || []).length === 0 && (
-              // empty state: message centered in the body, the "ask Sasa" entry
-              // bar pinned to the BOTTOM-center of the card (feedback).
               <div style={{ display: "flex", flexDirection: "column", minHeight: 220 }}>
                 <div className="empty" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 16px" }}>No open tasks.</div>
                 <div style={{ paddingBottom: 14 }}>
