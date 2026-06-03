@@ -75,14 +75,20 @@ async function processJob(db: any, job: any): Promise<void> {
   const msgType: string = p.msg_type || "text";
   if (!from || (!text && !mediaId)) { await markJobDone(job.id); return; }
 
-  // ACCESS CONTROL: the 727 is the OPERATOR command line. It replies ONLY to the
-  // admin allowlist (Nur and Taona via WHATSAPP_OPERATORS). Team members and
-  // everyone else are stored but never answered here, the team works through the
-  // groups (the group bot), not this private line. This keeps the powerful tool
-  // (finance, sends, group posting) in exactly two hands.
-  const { role, name: opName, rank: opRank } = await operatorOf(db, from);
-  if (role !== "admin") {
-    await emit({ type: "whatsapp.ignored", source: "whatsapp", actor: from, subject_type: "contact", subject_id: contactId, payload: { from, reason: role === "team" ? "team member, 727 is operator-only" : "not an operator" } });
+  // ACCESS CONTROL (tiered). The 727 answers:
+  //   - ADMIN (Nur + Taona via WHATSAPP_OPERATORS / OWNER_WHATSAPP): full Sasa.
+  //   - TEAM members WITH bot_access=true: a restricted team-tier session (their
+  //     tasks, calendar, intake, roster lookup). Walled from finance, donor data,
+  //     beneficiary PII, sends, and group posting (enforced in runSasa + every
+  //     tool). This is how Nur hands tasks to named staff over a private line.
+  //   - everyone else (team members without bot_access, unknown numbers): stored
+  //     but never answered here; the team works through the group bot.
+  // The powerful tools (finance, sends, group posting) stay in exactly two hands;
+  // bot_access only ever unlocks the already-walled team subset, never admin.
+  const { role, name: opName, rank: opRank, botAccess } = await operatorOf(db, from);
+  const allowed = role === "admin" || (role === "team" && botAccess === true);
+  if (!allowed) {
+    await emit({ type: "whatsapp.ignored", source: "whatsapp", actor: from, subject_type: "contact", subject_id: contactId, payload: { from, reason: role === "team" ? "team member without bot_access, 727 is invite-only" : "not an operator" } });
     await markJobDone(job.id);
     return;
   }

@@ -118,23 +118,26 @@ export function phoneKey(s: string): string {
 //   'member'  — a team operator (rare); plain admins without a rank otherwise.
 export type OperatorRole = "admin" | "team" | null;
 export type OperatorRank = "owner" | "founder" | "member" | null;
-export async function operatorOf(db: any, waId: string): Promise<{ role: OperatorRole; name: string | null; rank: OperatorRank }> {
+export async function operatorOf(db: any, waId: string): Promise<{ role: OperatorRole; name: string | null; rank: OperatorRank; botAccess?: boolean }> {
   const key = phoneKey(waId);
   if (!key) return { role: null, name: null, rank: null };
   const allow = (process.env.WHATSAPP_OPERATORS || "").split(",").map((x) => phoneKey(x)).filter(Boolean);
   const owners = (process.env.OWNER_WHATSAPP || "").split(",").map((x) => phoneKey(x)).filter(Boolean);
   const ownerName = process.env.OWNER_NAME || "Taona";
-  const { data } = await db.from("team_members").select("name,phone,status").limit(400);
+  const { data } = await db.from("team_members").select("name,phone,status,bot_access").limit(400);
   const member = (data || []).find((t: any) => phoneKey(t.phone) === key);
   // Explicit owner override always wins.
-  if (owners.includes(key)) return { role: "admin", name: member?.name || ownerName, rank: "owner" };
+  if (owners.includes(key)) return { role: "admin", name: member?.name || ownerName, rank: "owner", botAccess: true };
   if (allow.includes(key)) {
     // An allowlisted builder who is NOT on the team roster is the owner; an
     // allowlisted person who IS on the roster (Nur) is the founder.
-    if (member) return { role: "admin", name: member.name, rank: "founder" };
-    return { role: "admin", name: ownerName, rank: "owner" };
+    if (member) return { role: "admin", name: member.name, rank: "founder", botAccess: true };
+    return { role: "admin", name: ownerName, rank: "owner", botAccess: true };
   }
-  if (member && (member.status === "active" || !member.status)) return { role: "team", name: member.name, rank: "member" };
+  // A roster member is "team" tier. botAccess (the bot_access flag) decides whether
+  // the 727 worker actually ANSWERS them: the tier is the same walled team subset,
+  // but only flagged members get a private 727 line (the rest work via the group bot).
+  if (member && (member.status === "active" || !member.status)) return { role: "team", name: member.name, rank: "member", botAccess: member.bot_access === true };
   return { role: null, name: null, rank: null };
 }
 
