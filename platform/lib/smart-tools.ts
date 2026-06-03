@@ -353,10 +353,10 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (!q) return { results: [], note: "give a topic to search" };
     const like = `%${q.replace(/[,()*%]/g, "")}%`;
     let qb = db.from("documents").select("title,doc_type,folder,doc_date,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
-    // PII/sensitivity wall: a team-tier caller never sees legal docs or contracts
-    // (constitutions, agreements, registrations). Defense-in-depth for if/when
-    // search_documents is added to the team toolset.
-    if (tier === "team") qb = qb.not("folder", "eq", "legal").not("doc_type", "eq", "contract");
+    // PII/sensitivity wall: a team-tier caller only sees 'normal' documents. Bank
+    // statements, IDs, contracts, finance + legal docs are tagged sensitive/restricted
+    // (documents.sensitivity) and are admin-only.
+    if (tier === "team") qb = qb.eq("sensitivity", "normal");
     const { data } = await qb.order("doc_date", { ascending: false }).limit(12);
     return { count: (data || []).length, results: ((data || []) as any[]).map((d) => ({ title: d.title, type: d.doc_type || null, folder: d.folder || null, date: d.doc_date || null, summary: String(d.summary || "").slice(0, 160) || null })) };
   }
@@ -407,7 +407,7 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (!q) return { error: "give a document title fragment" };
     const like = `%${q.replace(/[,()*%]/g, "")}%`;
     let qb = db.from("documents").select("title,doc_type,folder,doc_date,extracted_text,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
-    if (tier === "team") qb = qb.not("folder", "eq", "legal").not("doc_type", "eq", "contract");
+    if (tier === "team") qb = qb.eq("sensitivity", "normal");
     const { data } = await qb.order("doc_date", { ascending: false }).limit(1);
     const doc = (data || [])[0] as any;
     if (!doc) return { found: false, note: `No document matching "${q}".` };
@@ -771,8 +771,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // FILE / MOVE: set the shelf on each matched document, and promote the stored
     // attachment to a shelved Library document so it shows on that shelf in the UI.
     const filed: string[] = [];
+    // filing into legal/finance also walls it from team tier (sensitivity restricted)
+    const sensitivePatch = (folder === "legal" || folder === "finance") ? { sensitivity: "restricted" } : {};
     for (const d of list) {
-      await db.from("documents").update({ folder, ...(brand ? { brand } : {}), updated_at: new Date().toISOString() }).eq("id", d.id);
+      await db.from("documents").update({ folder, ...(brand ? { brand } : {}), ...sensitivePatch, updated_at: new Date().toISOString() }).eq("id", d.id);
       const storagePath = String(d.drive_file_id || "").replace(/^ingest:/, "");
       if (storagePath && storagePath !== String(d.drive_file_id || "")) {
         const { data: asset } = await db.from("assets").select("id").eq("storage_path", storagePath).limit(1);
