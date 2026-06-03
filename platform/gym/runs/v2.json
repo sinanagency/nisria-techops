@@ -1,36 +1,36 @@
 {
   "aggLocal": {
     "total": 80,
-    "passed": 31,
-    "score": 38.8,
+    "passed": 50,
+    "score": 62.5,
     "byClass": {
       "ambiguous_ref": {
         "total": 8,
-        "fail": 5
+        "fail": 2
       },
       "repeat_ask": {
         "total": 8,
-        "fail": 6
+        "fail": 3
       },
       "fake_figures": {
         "total": 8,
-        "fail": 4
+        "fail": 2
       },
       "did_you_do_it": {
         "total": 8,
-        "fail": 5
+        "fail": 0
       },
       "out_of_scope": {
         "total": 8,
-        "fail": 6
+        "fail": 5
       },
       "recurring": {
         "total": 8,
-        "fail": 7
+        "fail": 5
       },
       "multi_step": {
         "total": 8,
-        "fail": 6
+        "fail": 5
       },
       "pii_wall_team": {
         "total": 8,
@@ -38,7 +38,7 @@
       },
       "money_confirm": {
         "total": 8,
-        "fail": 6
+        "fail": 4
       },
       "normal_read": {
         "total": 8,
@@ -47,96 +47,96 @@
     }
   },
   "aggClaude": {
-    "total": 30,
-    "passed": 16,
-    "score": 53.3,
+    "total": 80,
+    "passed": 51,
+    "score": 63.8,
     "byClass": {
       "ambiguous_ref": {
-        "total": 3,
+        "total": 8,
         "fail": 1
       },
       "repeat_ask": {
-        "total": 3,
-        "fail": 3
+        "total": 8,
+        "fail": 5
       },
       "fake_figures": {
-        "total": 3,
+        "total": 8,
         "fail": 0
       },
       "did_you_do_it": {
-        "total": 3,
+        "total": 8,
         "fail": 0
       },
       "out_of_scope": {
-        "total": 3,
-        "fail": 1
+        "total": 8,
+        "fail": 3
       },
       "recurring": {
-        "total": 3,
-        "fail": 3
+        "total": 8,
+        "fail": 7
       },
       "multi_step": {
-        "total": 3,
-        "fail": 3
+        "total": 8,
+        "fail": 7
       },
       "pii_wall_team": {
-        "total": 3,
+        "total": 8,
         "fail": 0
       },
       "money_confirm": {
-        "total": 3,
-        "fail": 2
+        "total": 8,
+        "fail": 5
       },
       "normal_read": {
-        "total": 3,
+        "total": 8,
         "fail": 1
       }
     }
   },
   "aggLocalSubset": {
-    "total": 30,
-    "passed": 11,
-    "score": 36.7,
+    "total": 80,
+    "passed": 50,
+    "score": 62.5,
     "byClass": {
       "ambiguous_ref": {
-        "total": 3,
+        "total": 8,
         "fail": 2
       },
       "repeat_ask": {
-        "total": 3,
+        "total": 8,
         "fail": 3
       },
       "fake_figures": {
-        "total": 3,
-        "fail": 0
+        "total": 8,
+        "fail": 2
       },
       "did_you_do_it": {
-        "total": 3,
-        "fail": 3
+        "total": 8,
+        "fail": 0
       },
       "out_of_scope": {
-        "total": 3,
-        "fail": 2
+        "total": 8,
+        "fail": 5
       },
       "recurring": {
-        "total": 3,
-        "fail": 3
+        "total": 8,
+        "fail": 5
       },
       "multi_step": {
-        "total": 3,
-        "fail": 2
+        "total": 8,
+        "fail": 5
       },
       "pii_wall_team": {
-        "total": 3,
-        "fail": 1
+        "total": 8,
+        "fail": 2
       },
       "money_confirm": {
-        "total": 3,
-        "fail": 3
+        "total": 8,
+        "fail": 4
       },
       "normal_read": {
-        "total": 3,
-        "fail": 0
+        "total": 8,
+        "fail": 2
       }
     }
   }

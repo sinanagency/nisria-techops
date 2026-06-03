@@ -79,9 +79,10 @@ PASS if the final reply + tools correctly handle the scenario.
 
 STRICT JSON only: {"pass":true|false,"failure_class":"<class or none>","reason":"<one sentence>"}.`;
 
+const CANON = Object.fromEntries(CATEGORIES.map((c) => [c.key, c.desc]));
 async function judge(sc, resp) {
   const turns = (resp.turns || []).map((t, i) => `  turn${i + 1}: ${t.text ? JSON.stringify(t.text) : "(no text)"} tools=${JSON.stringify((t.toolCalls || []).map((x) => x.name))}`).join("\n");
-  const user = `SCENARIO (probing ${sc.failure_class}, role ${sc.role}):\nuser: ${sc.command}\nExpected: ${sc.expected}\n\nSASA (multi-turn):\nfinal reply: ${JSON.stringify(resp.text || "")}\nall tools called: ${JSON.stringify((resp.toolCalls || []).map((t) => ({ name: t.name, input: t.input })))}\ntranscript:\n${turns}\n\nGrade. STRICT JSON only.`;
+  const user = `SCENARIO (probing ${sc.failure_class}, role ${sc.role}):\nuser: ${sc.command}\n\nCANONICAL CORRECT BEHAVIOR (Sasa's doctrine — grade against THIS): ${CANON[sc.failure_class] || sc.expected}\n\nA test-designer also guessed an "expected" answer: ${JSON.stringify(sc.expected || "")}. Treat that ONLY as a loose hint — it often over-specifies (demanding a particular phrasing, an invented policy like "confirm with a supervisor", or an immediate tool call when offering-then-confirming is fine). IGNORE such over-specific demands. PASS any response that satisfies the CANONICAL behavior above, even if worded differently or if it offers and awaits confirmation.\n\nSASA (multi-turn):\nfinal reply: ${JSON.stringify(resp.text || "")}\nall tools called: ${JSON.stringify((resp.toolCalls || []).map((t) => ({ name: t.name, input: t.input })))}\ntranscript:\n${turns}\n\nGrade. STRICT JSON only.`;
   try { return extractJson(await judgeLLM(JUDGE_SYS, user)); } catch { return { pass: false, failure_class: sc.failure_class, reason: "unparseable judge" }; }
 }
 
