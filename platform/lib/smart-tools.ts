@@ -28,6 +28,7 @@ import { now } from "./now";
 import { humanize, withHumanSystem } from "./humanize";
 import { claudeJSON } from "./anthropic";
 import { getBrief } from "./brief";
+import { haloDraft, haloPublish } from "./halo";
 import { laneFor, createIntent, queueApproval, type Lane } from "./gateway";
 import { recall, groundingText, remember, rememberUpsert } from "./memory";
 import { ownerContactIds, OWNER_PRIVATE_KIND } from "./privacy";
@@ -181,6 +182,8 @@ export const SMART_TOOLS = [
   { name: "draft_post", description: "Create a social/content post as a DRAFT (or schedule it for a date). Use for 'draft an Instagram post about the new classroom', 'schedule a post for Friday'. SAFE: it is only a draft/scheduled item, NOT published (publishing to Instagram/Facebook is a separate approved step). Channels: instagram, facebook, linkedin, outreach.", input_schema: { type: "object", properties: { title: { type: "string" }, body: { type: "string" }, channels: { type: "array", items: { type: "string" } }, scheduled_for: { type: "string", description: "YYYY-MM-DD or ISO datetime; omit for a plain draft" } }, required: ["body"] } },
   { name: "refresh_grants", description: "Trigger the grant hunter to scan for new funding opportunities now. SAFE: runs the background hunt, submits nothing. Use for 'find new grants', 'refresh the grant opportunities'.", input_schema: { type: "object", properties: {} } },
   { name: "run_group_digest", description: "Trigger the team-group daily digest to post now (the morning task summary into the groups). Admin only. Use for 'send the group digest', 'post today's task summary to the groups'.", input_schema: { type: "object", properties: {} } },
+  { name: "post_to_social", description: "Draft a social post (Facebook/Instagram) for a brand in its learned voice, via Halo. Use for 'post this to Instagram for Nisria', 'draft a Facebook post about the school kits'. Returns a draft for approval, it is NOT published until you confirm with publish_social_post. Brand: nisria, maisha, or ahadi.", input_schema: { type: "object", properties: { brand: { type: "string", enum: ["nisria", "maisha", "ahadi"] }, idea: { type: "string", description: "the post idea or the text to base the caption on" }, media_url: { type: "string", description: "optional public URL of a photo/video to attach" }, platforms: { type: "string", description: "csv, default instagram,facebook" }, hint: { type: "string" } }, required: ["brand", "idea"] } },
+  { name: "publish_social_post", description: "Publish a social post that was drafted with post_to_social, after the rep approves (or edits). Pass the post_id from the draft, and the edited caption if they changed it. Use on 'post it', 'publish that', 'yes post'.", input_schema: { type: "object", properties: { post_id: { type: "string" }, caption: { type: "string", description: "the rep's edited caption, optional" } }, required: ["post_id"] } },
   { name: "draft_email", description: "Draft an outbound email and QUEUE it into approvals for Nur. GATED: NEVER sent until Nur approves. Use for 'email <someone> about ...'. Provide recipient (name/email if known), subject, and the gist; you write the body.", input_schema: { type: "object", properties: { to: { type: "string", description: "recipient email if known, else a name" }, subject: { type: "string" }, about: { type: "string", description: "what the email should say" }, account: { type: "string", enum: ["sasa@nisria.co", "maisha@nisria.co"] } }, required: ["about"] } },
 
   // ---- ACTION · SAFE EDITS (update an existing record; admin only) ----
@@ -1378,6 +1381,41 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
     triggerWorker("/api/group/digest");
     return { ok: true, summary: humanize("Triggered the group digest, the morning task summary will post to the groups shortly.", opts), affordance: { kind: "open", label: "View groups", href: "/groups" }, detail: { triggered: true } };
+  }
+
+  // ---- GATED: post_to_social (draft via Halo; NOT published) ----
+  if (name === "post_to_social") {
+    const brand = ["nisria", "maisha", "ahadi"].includes(String(input.brand || "").toLowerCase()) ? String(input.brand).toLowerCase() : null;
+    if (!brand) return { ok: false, summary: "Which brand, Nisria, Maisha, or AHADI?", error: "no brand" };
+    const idea = String(input.idea || input.note || "").trim();
+    const mediaUrl = input.media_url ? String(input.media_url) : undefined;
+    if (!idea && !mediaUrl) return { ok: false, summary: "What should the post be about? Give me the idea, the text, or a photo.", error: "no idea" };
+    try {
+      const d = await haloDraft({ tenant: brand, note: idea || undefined, mediaUrl, platforms: input.platforms ? String(input.platforms) : "instagram,facebook", hint: input.hint ? String(input.hint) : undefined });
+      const caps = (d.drafts || []).map((x) => `*${x.platform}*: ${x.caption}${x.hashtags ? `\n${x.hashtags}` : ""}`).join("\n\n");
+      const q = d.question ? `\n\n${d.question}` : "";
+      return { ok: true, summary: humanize(`Here is a draft for ${d.brand} (${(d.drafts || []).map((x) => x.platform).join(", ")}):\n\n${caps}\n\nReply "post it" to publish, or send your edit.${q}`, opts), affordance: { kind: "open", label: "Open Content", href: "/content" }, detail: { post_id: d.postId, brand: d.brand, gated: true } };
+    } catch (e: any) {
+      return { ok: false, summary: humanize(`I could not reach the social drafter just now (${e?.message || e}).`, opts), error: String(e?.message || e) };
+    }
+  }
+
+  // ---- PUBLISH: publish_social_post (after approval, via Halo) ----
+  if (name === "publish_social_post") {
+    const postId = String(input.post_id || "").trim();
+    if (!postId) return { ok: false, summary: "I need the draft's id to publish it.", error: "no post_id" };
+    try {
+      const r = await haloPublish({ postId, caption: input.caption ? String(input.caption) : undefined });
+      const oks = (r.results || []).filter((x) => x.ok);
+      const fails = (r.results || []).filter((x) => !x.ok);
+      const parts: string[] = [];
+      if (oks.length) parts.push(`Posted to ${oks.map((x) => x.platform).join(", ")}.`);
+      for (const f of fails) parts.push(`${f.platform}: ${f.draftOnly ? "saved as a draft (that channel isn't live)" : f.error || "failed"}.`);
+      await emit({ type: "social.published", source: "agent:sasa", actor: "Nur", subject_type: "content_post", subject_id: null, payload: { postId, ok: oks.length, failed: fails.length, via: "smart" } });
+      return { ok: oks.length > 0, summary: humanize(parts.join(" ") || "Submitted to Halo.", opts), affordance: { kind: "open", label: "Open Content", href: "/content" }, detail: { status: r.status, results: r.results } };
+    } catch (e: any) {
+      return { ok: false, summary: humanize(`Publishing failed (${e?.message || e}).`, opts), error: String(e?.message || e) };
+    }
   }
 
   // ---- SAFE EDIT: update_inventory_item ----
