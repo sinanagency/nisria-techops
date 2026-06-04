@@ -430,11 +430,23 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       // (marked done, completed, created, logged, scheduled, sent) but NO matching
       // action tool returned ok=true THIS turn, the claim is false: neutralize it
       // into an honest "I have not done that yet" and let the operator confirm.
+      // The most relevant action tool that RAN this turn but returned ok=false WITH a
+      // real message (a reason or a disambiguation question, e.g. "two events match,
+      // which one?"). That message is the honest, useful answer and must reach the
+      // operator, never be overwritten by a generic hedge.
+      const toolAsk = [...toolRuns].reverse().find(
+        (t) => COMPLETION_TOOLS.has(t.name) && t.result && (t.result as any).ok === false && typeof (t.result as any).summary === "string" && (t.result as any).summary.trim(),
+      );
       if (claimsCompletionWithoutSuccess(reply, toolRuns)) {
-        reply = humanize(HONEST_NO_ACTION, { now: { long: n.long, today: n.today } });
-      } else if (isHedgeLoop(reply, opts.history)) {
-        // Third hedge in a row with nothing accomplished: break the loop honestly
-        // instead of asking the same thing again (the Dorcas-style circling).
+        // The reply claims something is done but no tool succeeded. If a tool ran and
+        // returned a specific reason/question, relay THAT; else the generic honest line.
+        reply = humanize((toolAsk?.result as any)?.summary || HONEST_NO_ACTION, { now: { long: n.long, today: n.today } });
+      } else if (isHedgeLoop(reply, opts.history) && toolRuns.length === 0) {
+        // Only a loop if the bot did NOTHING this turn and is re-hedging. A reply
+        // BACKED by a tool that ran (even a disambiguation question) is progress, not
+        // circling, so stale "I have not done it yet" history must not nuke it. This
+        // was the bug: a legitimate "two events match, which one?" got overwritten by
+        // the generic loop-break because the gpt-4o-era thread was full of hedges.
         reply = humanize(LOOP_BREAK, { now: { long: n.long, today: n.today } });
       }
       const v = await verifyReply({ userMessage: opts.command, toolRuns, reply });
