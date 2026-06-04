@@ -18,22 +18,28 @@ function sa(): SA | null {
   }
 }
 
-let _tok: { token: string; exp: number } | null = null;
+const READONLY = "https://www.googleapis.com/auth/drive.readonly";
+const READWRITE = "https://www.googleapis.com/auth/drive";
 
-// OAuth2 access token via the JWT-bearer grant (RS256-signed assertion).
-export async function driveToken(): Promise<string> {
-  if (_tok && Date.now() < _tok.exp - 60_000) return _tok.token;
+// Token cache keyed by scope + impersonated subject. Reads use the SA's own
+// identity (no subject); an ownership transfer impersonates the current owner
+// via domain-wide delegation (subject = owner@nisria.co) and needs READWRITE.
+const _toks = new Map<string, { token: string; exp: number }>();
+
+// Mint an OAuth2 access token via the JWT-bearer grant (RS256-signed assertion).
+// When `subject` is set, the SA impersonates that Workspace user (domain-wide
+// delegation must be configured for the requested scope in the admin console;
+// otherwise Google returns unauthorized_client and we surface that honestly).
+async function mintToken(scope: string, subject?: string): Promise<string> {
+  const key = `${scope}|${subject || ""}`;
+  const cached = _toks.get(key);
+  if (cached && Date.now() < cached.exp - 60_000) return cached.token;
   const s = sa();
   if (!s) throw new Error("GOOGLE_SERVICE_ACCOUNT_B64 not configured");
   const now = Math.floor(Date.now() / 1000);
   const b64u = (o: any) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const claim = {
-    iss: s.client_email,
-    scope: "https://www.googleapis.com/auth/drive.readonly",
-    aud: "https://oauth2.googleapis.com/token",
-    iat: now,
-    exp: now + 3600,
-  };
+  const claim: any = { iss: s.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 };
+  if (subject) claim.sub = subject;
   const input = `${b64u({ alg: "RS256", typ: "JWT" })}.${b64u(claim)}`;
   const sig = crypto.sign("RSA-SHA256", Buffer.from(input), s.private_key).toString("base64url");
   const jwt = `${input}.${sig}`;
@@ -45,8 +51,13 @@ export async function driveToken(): Promise<string> {
   });
   const j = await r.json();
   if (!j.access_token) throw new Error(j.error_description || j.error || "drive token failed");
-  _tok = { token: j.access_token, exp: now * 1000 + (j.expires_in || 3600) * 1000 };
+  _toks.set(key, { token: j.access_token, exp: now * 1000 + (j.expires_in || 3600) * 1000 });
   return j.access_token;
+}
+
+// OAuth2 access token for the read-only Drive engine (filing + watcher).
+export async function driveToken(): Promise<string> {
+  return mintToken(READONLY);
 }
 
 export type DriveFile = {
@@ -181,4 +192,50 @@ export function brandFor(name: string, category: string): string | null {
   if (n.includes("ahadi") || category === "AHADI") return "ahadi";
   if (n.includes("kepenzi") || category === "Kepenzi") return "kepenzi";
   return "nisria";
+}
+
+export type DriveMatch = { id: string; name: string; mimeType: string; ownerEmail: string | null; webViewLink?: string };
+
+// Find files/folders whose name contains a fragment, across the Nisria Drive.
+// Returns owner email so an ownership transfer can impersonate the right owner.
+export async function searchFiles(nameFragment: string, max = 8): Promise<DriveMatch[]> {
+  const token = await driveToken();
+  const safe = String(nameFragment).replace(/['\\]/g, " ").trim();
+  const q = encodeURIComponent(`name contains '${safe}' and trashed=false`);
+  const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,owners(emailAddress),webViewLink)&pageSize=${max}&${PARAMS}`;
+  const r = await fetch(url, { headers: { authorization: `Bearer ${token}` }, cache: "no-store" });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j?.error?.message || "drive search failed");
+  return ((j.files || []) as any[]).map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, ownerEmail: f.owners?.[0]?.emailAddress || null, webViewLink: f.webViewLink }));
+}
+
+export type TransferResult = { ok: boolean; error?: string; needsScope?: boolean };
+
+// Transfer ownership of a file/folder to a new owner WITHIN the nisria.co
+// Workspace. Google forbids cross-domain and external (personal Gmail) ownership
+// transfer, so the caller must validate the target domain first. Impersonates the
+// CURRENT owner via domain-wide delegation, which requires the read-write Drive
+// scope to be enabled on the service account's DWD in the Workspace admin console.
+// Until that scope is granted, the token mint or the API returns 401/403 and we
+// flag needsScope=true so the caller reports it honestly (never a raw stack trace).
+export async function transferOwnership(fileId: string, newOwnerEmail: string, currentOwnerEmail: string): Promise<TransferResult> {
+  let token: string;
+  try {
+    token = await mintToken(READWRITE, currentOwnerEmail);
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return { ok: false, error: msg, needsScope: /unauthorized_client|access_denied|scope|invalid_grant/i.test(msg) };
+  }
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?transferOwnership=true&supportsAllDrives=true&sendNotificationEmail=false`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ role: "owner", type: "user", emailAddress: newOwnerEmail }),
+    cache: "no-store",
+  });
+  if (r.ok) return { ok: true };
+  const j = await r.json().catch(() => ({} as any));
+  const msg = j?.error?.message || `transfer failed (${r.status})`;
+  const needsScope = r.status === 401 || r.status === 403 || /insufficient|scope|permission|delegat|consent/i.test(msg);
+  return { ok: false, error: msg, needsScope };
 }

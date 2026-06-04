@@ -1,54 +1,24 @@
 "use server";
-import { admin } from "../../lib/supabase-admin";
 import { sendEmail } from "../../lib/email";
 import { humanize } from "../../lib/humanize";
 import { now } from "../../lib/now";
-import { emit } from "../../lib/events";
 import { getCurrentUser } from "../../lib/auth";
 import { revalidatePath } from "next/cache";
-import { SEND_CAP } from "./config";
+import {
+  type Audience,
+  type RecipientCounts,
+  firstName,
+  mergeName,
+  getRecipientCounts as gatherCounts,
+  runBlast,
+} from "../../lib/outreach";
 
-export type Audience = "all" | "donors" | "contacts";
-export type RecipientCounts = { donors: number; contacts: number };
-type Recipient = { full_name: string | null; email: string };
+export type { Audience, RecipientCounts };
 type SendResult = { ok: boolean; sent: number; failed: number; message: string };
-
-const firstName = (full?: string | null) => (full || "").trim().split(/\s+/)[0] || "there";
-const mergeName = (t: string, name: string) =>
-  (t || "").replace(/\{\{\s*first_name\s*\}\}/gi, name);
-
-function dedupe(list: Recipient[]): Recipient[] {
-  const seen = new Set<string>();
-  return list.filter((r) => {
-    const key = (r.email || "").trim().toLowerCase();
-    if (!key || !key.includes("@") || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-async function gatherRecipients(audience: Audience): Promise<Recipient[]> {
-  const db = admin();
-  const out: Recipient[] = [];
-
-  if (audience === "all" || audience === "donors") {
-    const { data } = await db.from("donors").select("full_name,email").not("email", "is", null);
-    if (data) out.push(...(data as Recipient[]));
-  }
-  if (audience === "all" || audience === "contacts") {
-    const { data } = await db.from("contacts").select("full_name,email").not("email", "is", null);
-    if (data) out.push(...(data as Recipient[]));
-  }
-  return dedupe(out);
-}
 
 /** Live recipient counts for the audience picker (deduped within each segment). */
 export async function getRecipientCounts(): Promise<RecipientCounts> {
-  const [donors, contacts] = await Promise.all([
-    gatherRecipients("donors"),
-    gatherRecipients("contacts"),
-  ]);
-  return { donors: donors.length, contacts: contacts.length };
+  return gatherCounts();
 }
 
 /** Send a single test copy to the logged-in user's own inbox. */
@@ -74,7 +44,8 @@ export async function sendTest(_prev: SendResult | null, fd: FormData): Promise<
   }
 }
 
-/** Mass send to the chosen audience (donors, contacts, or both). */
+/** Mass send to the chosen audience (donors, contacts, or both). One send path
+ * shared with the gated Sasa newsletter tool, so behaviour never diverges. */
 export async function sendOutreach(_prev: SendResult | null, fd: FormData): Promise<SendResult> {
   const ctx = getCurrentUser();
   if (!ctx) return { ok: false, sent: 0, failed: 0, message: "Not authenticated" };
@@ -84,50 +55,7 @@ export async function sendOutreach(_prev: SendResult | null, fd: FormData): Prom
   const audience = (String(fd.get("audience") || "all") as Audience);
   if (!subject || !body) return { ok: false, sent: 0, failed: 0, message: "Subject and message are required" };
 
-  const all = await gatherRecipients(audience);
-  if (all.length === 0) return { ok: false, sent: 0, failed: 0, message: "No recipients found for this audience" };
-  const recipients = all.slice(0, SEND_CAP);
-
-  const n = await now();
-  let sent = 0;
-  const failures: string[] = [];
-
-  for (const r of recipients) {
-    const name = firstName(r.full_name);
-    try {
-      // Resolve {{first_name}} per recipient, then humanize so what mails has no
-      // raw token, no dash, no placeholder survivor (sendEmail also strips dashes).
-      const subj = humanize(mergeName(subject, name), { now: { long: n.long, today: n.today }, mergeValues: { first_name: name } });
-      const text = humanize(mergeName(body, name), { now: { long: n.long, today: n.today }, mergeValues: { first_name: name } });
-      await sendEmail(r.email, subj, text, { account: "sasa@nisria.co" });
-      sent++;
-    } catch {
-      failures.push(r.email);
-    }
-  }
-
-  // Record the blast for the activity trail (field-nervous-system / one-brain).
-  await admin().from("content_posts").insert({
-    channels: ["outreach"],
-    title: subject,
-    body,
-    status: "posted",
-    posted_at: new Date().toISOString(),
-    created_by: ctx.name || "Nur",
-  });
-
-  await emit({
-    type: "outreach.sent",
-    source: "outreach",
-    actor: ctx.name || "Nur",
-    payload: { subject, audience, recipients: recipients.length, sent, failed: failures.length },
-  });
-
+  const res = await runBlast({ subject, body, audience, actor: ctx.name || "Nur" });
   revalidatePath("/outreach");
-
-  const message =
-    failures.length === 0
-      ? `Delivered to ${sent} ${sent === 1 ? "recipient" : "recipients"}`
-      : `Sent ${sent}, ${failures.length} failed`;
-  return { ok: failures.length === 0, sent, failed: failures.length, message };
+  return res;
 }

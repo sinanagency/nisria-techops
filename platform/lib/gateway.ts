@@ -7,6 +7,7 @@ import { remember } from "./memory";
 import { sendEmail } from "./email";
 import { parseAttachRefs, resolveAttachments } from "./email-attachments";
 import { pushApprovalRequest } from "./notify";
+import { runBlast } from "./outreach";
 
 export type Lane = "auto" | "approve" | "escalate";
 
@@ -101,6 +102,14 @@ async function dispatch(intent: any): Promise<any> {
       const { attachments, labels } = await resolveAttachments(refs);
       await sendEmail(p.to, p.subject, p.text, { account: p.account || null, attachments });
       return { sent: true, to: p.to, attachments: labels };
+    }
+    case "outreach.blast": {
+      // A newsletter / email blast Nur approved in Needs You. Runs the one shared
+      // send engine (capped, throttled, opt-out footer). A total failure throws so
+      // the intent is marked failed; partial sends return their tally.
+      const res = await runBlast({ subject: p.subject, body: p.body, audience: p.audience, actor: p.actor || "Nur" });
+      if (!res.ok && res.sent === 0) throw new Error(res.message || "blast failed");
+      return res;
     }
     default:
       throw new Error(`Connector "${key}" not enabled yet`);

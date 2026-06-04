@@ -30,6 +30,8 @@ import { claudeJSON } from "./anthropic";
 import { getBrief } from "./brief";
 import { haloDraft, haloPublish } from "./halo";
 import { laneFor, createIntent, queueApproval, type Lane } from "./gateway";
+import { gatherRecipients, SEND_CAP } from "./outreach";
+import { searchFiles, transferOwnership } from "./drive";
 import { recall, groundingText, remember, rememberUpsert, queryMemory } from "./memory";
 import { ownerContactIds, OWNER_PRIVATE_KIND } from "./privacy";
 import { draftThankYou } from "./agents/steward";
@@ -214,6 +216,9 @@ export const SMART_TOOLS = [
   { name: "add_wishlist_item", description: "Add an item to the wishlist (a concrete need a donor could fund). SAFE: runs immediately. Use for 'add 20 school kits to the wishlist', 'we need a laptop, put it on the wishlist'. Provide a clear title; qty and unit cost are optional. Currency is KES or USD, never mixed; state it back.", input_schema: { type: "object", properties: { title: { type: "string" }, description: { type: "string" }, category: { type: "string", description: "e.g. education, shelter, equipment, medical" }, qty_needed: { type: "integer", description: "how many are needed, default 1" }, unit_cost: { type: "number", description: "cost per unit, optional" }, currency: { type: "string", enum: ["KES", "USD"], description: "required if unit_cost is given" } }, required: ["title"] } },
   { name: "update_wishlist_item", description: "Edit an existing wishlist item: rename it, change the quantity needed, cost, category, or archive it. Match by a few words of the title. SAFE: runs immediately.", input_schema: { type: "object", properties: { title: { type: "string", description: "words from the current item title" }, new_title: { type: "string" }, description: { type: "string" }, category: { type: "string" }, qty_needed: { type: "integer" }, unit_cost: { type: "number" }, currency: { type: "string", enum: ["KES", "USD"] }, status: { type: "string", enum: ["open", "partial", "fulfilled", "archived"] } }, required: ["title"] } },
   { name: "fund_wishlist_item", description: "Record that some of a wishlist item has been funded/covered (a donor paid for N of them). SAFE: runs immediately, rolls the status open -> partial -> fulfilled automatically. Use for 'mark 5 of the school kits funded', 'the laptop is covered'. Match the item by a few words of its title.", input_schema: { type: "object", properties: { title: { type: "string", description: "words from the item title" }, qty: { type: "integer", description: "how many units are now funded (added to the running total). Omit to mark the whole item fulfilled." } }, required: ["title"] } },
+  { name: "send_newsletter", description: "Compose a newsletter or email blast to many people at once and QUEUE it for Nur's approval before it sends. Use for 'send a newsletter to all donors', 'email all our contacts about ...', 'send a blast to donors saying ...'. This does NOT send immediately: it drafts the email and puts it in Needs You so Nur reviews and approves it first, then it goes out. Personalize with {{first_name}} in the subject or body and it is filled per recipient. Audience is donors, contacts, or all (both). For a single person use message_person or draft_email instead.", input_schema: { type: "object", properties: { subject: { type: "string" }, body: { type: "string", description: "the email body; you may use {{first_name}}" }, audience: { type: "string", enum: ["all", "donors", "contacts"], description: "who to send to; default all" } }, required: ["subject", "body"] } },
+  { name: "import_contacts", description: "Add MANY email contacts at once (bulk import). Use when Nur pastes or dictates a list of people to add to the contacts book, or sends a sheet of contacts to load. Each contact needs at least a name or an email; phone is optional. Skips anyone whose email is already on file. Use this to populate the contact list so newsletters have recipients. For a single contact use add_contact.", input_schema: { type: "object", properties: { contacts: { type: "array", description: "the people to add", items: { type: "object", properties: { name: { type: "string" }, email: { type: "string" }, phone: { type: "string" } } } } }, required: ["contacts"] } },
+  { name: "transfer_drive_file", description: "Transfer OWNERSHIP of a Google Drive file or folder to another nisria.co person. Use for 'move ownership of the X folder to Cynthia', 'transfer the suppliers sheet to nur@nisria.co'. IMPORTANT: Google only allows ownership transfer between nisria.co Workspace accounts, never to a personal Gmail or an outside address, so the target must be an @nisria.co email. Match the file by a fragment of its name (or pass a Drive id). This transfers ownership; to merely share a file, that is different. (Canva ownership CANNOT be transferred by any tool, there is no Canva API for it, tell Nur to do that one by hand in Canva's team settings.)", input_schema: { type: "object", properties: { file: { type: "string", description: "a fragment of the file/folder name, or its Drive id" }, to_email: { type: "string", description: "the @nisria.co email of the new owner" } }, required: ["file", "to_email"] } },
   { name: "set_bot_access", description: "Grant or revoke a team member's private WhatsApp (727) access so they can message you directly. Granting gives them the RESTRICTED team session ONLY: their own tasks, the calendar, beneficiary/inventory intake, and looking up a colleague. It NEVER gives finance, donations, donor details, pay, beneficiary case files, sending, or group posting. Use for 'give Linda access to the bot', 'let Cynthia message you directly', 'take Mark off the bot'. Match by name. This toggles the restricted 727 line only; you CANNOT grant finance, donor, or admin powers with this or any tool.", input_schema: { type: "object", properties: { name: { type: "string", description: "the team member's name" }, enabled: { type: "boolean", description: "true to grant access, false to revoke" } }, required: ["name", "enabled"] } },
   { name: "update_team_member", description: "Update a team member's profile: role, phone, responsibilities, location, status, or pay. Use for 'change Dorcas's role to Lead Tailor', 'update Eliza's number', 'set John's pay to KES 30,000'. For pay you MUST include the currency (KES or USD), NEVER mix them, and state it back. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, role: { type: "string" }, phone: { type: "string" }, responsibilities: { type: "string" }, location: { type: "string" }, status: { type: "string", enum: ["active", "inactive"] }, pay_amount: { type: "number" }, pay_currency: { type: "string", enum: ["KES", "USD"] } }, required: ["name"] } },
   { name: "add_contact", description: "Save a person's contact (phone and/or email) so you can reach them later. Use for 'save this number for John ...', 'add Mary, mary@x.com'. If that name already exists, it updates their details instead.", input_schema: { type: "object", properties: { name: { type: "string" }, phone: { type: "string" }, email: { type: "string" }, channel: { type: "string", description: "whatsapp, email, phone" } }, required: ["name"] } },
@@ -1711,6 +1716,90 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     await db.from("team_members").update({ activated: true, status: "active" }).eq("id", m.id);
     await emit({ type: "team.member_activated", source: "agent:sasa", actor: "Nur", subject_type: "team_member", subject_id: m.id, payload: { name: m.name, via: "smart" } });
     return { ok: true, summary: humanize(`Activated ${m.name}.`, opts), affordance: { kind: "open", label: "View team", href: "/team" }, detail: { team_member_id: m.id } };
+  }
+
+  // ---- GATED: send_newsletter (bulk email blast, queued for Nur's approval) ----
+  // Admin only. NEVER sends here: it drafts + queues an approval so a real blast
+  // to donors/contacts always waits for Nur's explicit go (the gated-send law).
+  // On approval the gateway runs the one shared blast engine (capped, throttled,
+  // opt-out footer). NOT in COMPLETION_TOOLS: queuing is not sending.
+  if (name === "send_newsletter") {
+    if (ctx.tier === "team") return { ok: false, summary: humanize("That is not something I can do here.", opts), error: "team tier" };
+    const subject = String(input.subject || "").trim();
+    const body = String(input.body || "").trim();
+    const audience = ["all", "donors", "contacts"].includes(input.audience) ? input.audience : "all";
+    if (!subject || !body) return { ok: false, summary: humanize("I need a subject and the message for the newsletter.", opts), error: "missing subject/body" };
+    let recips: any[] = [];
+    try { recips = await gatherRecipients(audience as any); } catch (e: any) { return { ok: false, summary: humanize("I couldn't pull the recipient list just now.", opts), error: e?.message }; }
+    if (!recips.length) {
+      const who = audience === "donors" ? "donor" : audience === "contacts" ? "contact" : "donor or contact";
+      return { ok: false, summary: humanize(`There are no ${who} email addresses on file yet, so there is no one to send to. Add contacts first (paste me a list and I'll import them), then I'll set up the newsletter.`, opts), detail: { no_recipients: true } };
+    }
+    const n2 = await now();
+    const dedupeKey = `outreach:${audience}:${subject.toLowerCase().slice(0, 80)}:${n2.today}`;
+    const intent = await createIntent({ connector: "outreach", action: "blast", params: { subject, body, audience, actor: ctx.operatorName || "Nur" }, lane: "approve", risk: "medium", requested_by: ctx.operatorName || "Nur", idempotency_key: dedupeKey });
+    const audLabel = audience === "donors" ? "donors" : audience === "contacts" ? "contacts" : "donors and contacts";
+    const cardSummary = `To ${recips.length} ${audLabel}. Subject: ${subject}. ${body.slice(0, 160)}${body.length > 160 ? "…" : ""}`;
+    const { row: ap } = await queueApproval({ kind: "outreach.blast", dedupeKey, intentMissing: !intent, row: { kind: "outreach.blast", title: `Newsletter: ${subject}`.slice(0, 120), summary: cardSummary, agent: "agent:sasa", proposed: { subject, body, audience }, intent_id: intent?.id || null, context: { dedupe_key: dedupeKey, audience, recipients: recips.length }, status: "pending" } });
+    const capNote = recips.length > SEND_CAP ? ` I'll send the first ${SEND_CAP} in this batch.` : "";
+    return { ok: true, summary: humanize(`Drafted the newsletter "${subject}" to ${recips.length} ${audLabel}.${capNote} It's waiting in Needs You for you to review and approve, nothing has gone out yet.`, opts), affordance: { kind: "open", label: "Review in Needs You", href: "/" }, detail: { queued: true, recipients: recips.length, approval_id: ap?.id } };
+  }
+
+  // ---- SAFE: import_contacts (bulk add email contacts) ----
+  if (name === "import_contacts") {
+    if (ctx.tier === "team") return { ok: false, summary: humanize("That is not something I can do here.", opts), error: "team tier" };
+    const raw = Array.isArray(input.contacts) ? input.contacts : [];
+    if (!raw.length) return { ok: false, summary: humanize("Give me the list of contacts (a name and email for each) and I'll add them.", opts), error: "no contacts" };
+    let added = 0, skipped = 0;
+    const names: string[] = [];
+    for (const c of raw.slice(0, 500)) {
+      const cname = String(c?.name || "").trim();
+      const email = String(c?.email || "").trim().toLowerCase();
+      const phone = c?.phone ? phoneKey(String(c.phone)) : null;
+      if (!cname && !email) { skipped++; continue; }
+      if (email) { const { data: ex } = await db.from("contacts").select("id").eq("email", email).limit(1); if (ex?.[0]) { skipped++; continue; } }
+      const { error } = await db.from("contacts").insert({ name: cname || email, email: email || null, phone, channel: email ? "email" : "whatsapp" });
+      if (error) { skipped++; continue; }
+      added++;
+      if (names.length < 5) names.push(cname || email);
+    }
+    await emit({ type: "contacts.imported", source: "agent:sasa", actor: ctx.operatorName || "Nur", subject_type: "contact", subject_id: null, payload: { added, skipped, via: "smart" } });
+    const tail = skipped ? `, skipped ${skipped} (already on file or no name/email)` : "";
+    return { ok: true, summary: humanize(`Added ${added} contact${added === 1 ? "" : "s"}${tail}.${added ? ` ${names.join(", ")}${added > names.length ? " and more" : ""}.` : ""}`, opts), affordance: { kind: "open", label: "View contacts", href: "/contacts" }, detail: { added, skipped } };
+  }
+
+  // ---- ACTION: transfer_drive_file (Google Drive ownership transfer) ----
+  // Admin only. Google forbids cross-domain / external transfer, so we reject a
+  // non-nisria.co target before touching Drive. Until the read-write Drive scope
+  // is granted on the SA's domain-wide delegation, the API returns 401/403 and we
+  // report that honestly (pending setup) rather than pretending it worked.
+  if (name === "transfer_drive_file") {
+    if (ctx.tier === "team") return { ok: false, summary: humanize("That is not something I can do here.", opts), error: "team tier" };
+    const fileRef = String(input.file || "").trim();
+    const toEmail = String(input.to_email || "").trim().toLowerCase();
+    if (!fileRef || !toEmail) return { ok: false, summary: humanize("Tell me which file or folder, and the nisria.co email to transfer it to.", opts), error: "missing args" };
+    if (!toEmail.endsWith("@nisria.co")) {
+      const shown = toEmail.includes("@") ? toEmail : "an outside address";
+      return { ok: false, summary: humanize(`I can only transfer ownership to a nisria.co Workspace account. Google does not allow transferring ownership to ${shown}. If they just need the files, I can share them instead, want that?`, opts), error: "external target", detail: { external: true } };
+    }
+    let fileId = "", fileName = fileRef, owner = "";
+    if (/^[a-zA-Z0-9_-]{20,}$/.test(fileRef) && !fileRef.includes(" ")) {
+      fileId = fileRef;
+    } else {
+      let matches: any[] = [];
+      try { matches = await searchFiles(fileRef); } catch (e: any) { return { ok: false, summary: humanize(`I couldn't reach Google Drive to find "${fileRef}" just now.`, opts), error: e?.message }; }
+      if (!matches.length) return { ok: false, summary: humanize(`I couldn't find a Drive file or folder matching "${fileRef}".`, opts), detail: { unresolved: true } };
+      if (matches.length > 1) return { ok: false, summary: humanize(`I found a few matches for "${fileRef}": ${matches.slice(0, 4).map((m) => m.name).join(", ")}. Which one?`, opts), detail: { ambiguous: true } };
+      fileId = matches[0].id; fileName = matches[0].name; owner = matches[0].ownerEmail || "";
+    }
+    const currentOwner = owner || "nur@nisria.co";
+    const res = await transferOwnership(fileId, toEmail, currentOwner);
+    if (!res.ok) {
+      if (res.needsScope) return { ok: false, summary: humanize(`I'm set up to transfer "${fileName}" to ${toEmail}, but the Drive write permission isn't switched on for me yet. Taona needs to grant my service account the Drive scope in the Google Workspace admin. The moment that's on, I'll complete this instantly.`, opts), detail: { pending_setup: true } };
+      return { ok: false, summary: humanize(`I couldn't transfer "${fileName}": ${res.error}`, opts), error: res.error };
+    }
+    await emit({ type: "drive.ownership_transferred", source: "agent:sasa", actor: ctx.operatorName || "Nur", subject_type: "document", subject_id: null, payload: { file: fileName, to: toEmail, via: "smart" } });
+    return { ok: true, summary: humanize(`Transferred ownership of "${fileName}" to ${toEmail}.`, opts), detail: { file: fileName, to: toEmail } };
   }
 
   // ---- SAFE: set_bot_access (grant/revoke a member's RESTRICTED 727 access) ----
