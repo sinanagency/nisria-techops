@@ -16,6 +16,7 @@ import { recall, groundingText } from "../memory";
 import { SMART_TOOLS, runSmartTool, isReadTool, type ToolResult } from "../smart-tools";
 import { verifyReply } from "../verifier";
 import { anthropicViaOpenAI, brainOverrideActive } from "../openai-fallback";
+import { pushIncident } from "../notify";
 
 const MODEL = "claude-sonnet-4-5";
 const KEY = () => process.env.ANTHROPIC_API_KEY || "";
@@ -221,6 +222,10 @@ async function callClaude(system: string, messages: any[], tools: any[]) {
   // of credit). If Claude is unreachable, surface the real error so it is visible
   // and fixable, instead of degrading to a worse model. Permanent key = the rinq
   // Anthropic key. (claudeFailed/openAIConfigured retained above for clarity.)
+  // LOUD, not silent: alert the operators (builder first) the moment the brain is
+  // down, so a dead key / outage is caught immediately instead of being discovered
+  // through Nur's broken chat. Fire-and-forget, deduped 30min per component.
+  void pushIncident("Sasa brain (Claude)", `Claude unreachable, no fallback: ${lastErr}`).catch(() => {});
   throw new Error(lastErr);
 }
 

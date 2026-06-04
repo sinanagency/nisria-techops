@@ -203,6 +203,52 @@ const CASES: Case[] = [
       { label: "no bare 'yes it is done' claim without complete_task", pass: hasTool(o, "complete_task") || hasTool(o, "list_tasks") || !/\b(yes,? (it'?s|that'?s) done|already done|marked (it )?done)\b/i.test(o.text) },
     ],
   },
+
+  // ===========================================================================
+  // STALL-LOOP REGRESSION (2026-06-04). These are Nur's REAL messages from the day
+  // the bot ran on the gpt-4o fallback (Anthropic out of credit) and went crazy:
+  // it answered "I have not done it yet / please confirm if you want me to proceed"
+  // forever instead of acting. The fix was the rinq key + removing the gpt-4o
+  // fallback. These cases lock that in: a direct imperative on a SAFE action tool
+  // must CALL the tool and must NOT emit the stall phrasing. If anyone reintroduces
+  // a weaker model or the fallback, these fail loudly.
+  // ===========================================================================
+  {
+    name: "STALL-LOOP: 'assign these tasks to me' must create tasks, not ask to confirm",
+    command: "Assign these tasks to me: - assign tasks to Cynthia - assign tasks to Mark - assign tasks to Violet - write newsletter - write new social media post",
+    assert: (o) => [
+      { label: "calls create_task", pass: hasTool(o, "create_task") },
+      { label: "does NOT stall ('I have not... yet' / 'please confirm if you want me to proceed')", pass: !/i have not (added|created|done).*yet|please confirm if you want me to proceed|confirm if you want me to|i won'?t say i did/i.test(o.text) },
+    ],
+  },
+  {
+    name: "STALL-LOOP: 'add this to the calendar' must create the event",
+    command: "Add this to the calendar: - Call with Edith, today at 9 PM",
+    assert: (o) => [
+      { label: "calls create_event", pass: hasTool(o, "create_event") },
+      { label: "does NOT stall asking to confirm the date it was given", pass: !/i have not added.*yet|please confirm the (correct )?date|confirm if you want me to/i.test(o.text) },
+    ],
+  },
+  {
+    name: "STALL-LOOP: recurring self-assignment must create a task",
+    command: "Assign this task to me: - Send a newsletter every Monday",
+    assert: (o) => [
+      { label: "calls create_task", pass: hasTool(o, "create_task") },
+      { label: "does NOT stall", pass: !/i have not (added|created).*yet|please confirm if you want me to proceed/i.test(o.text) },
+    ],
+  },
+  {
+    name: "STALL-LOOP: 'change the time of the call with Edith to 9 PM' must edit, not stall",
+    history: [
+      { role: "user", content: "Add this to the calendar: Call with Edith, today at 9 PM" },
+      { role: "assistant", content: "Done. Call with Edith is on your calendar today at 21:00." },
+    ],
+    command: "Change the time of the call with Edith to 9 PM",
+    assert: (o) => [
+      { label: "calls an event/task edit tool (move_event/update_event/update_task)", pass: hasTool(o, "move_event") || hasTool(o, "update_event") || hasTool(o, "update_task") || hasTool(o, "create_event") },
+      { label: "does NOT stall ('I have not actually done that yet')", pass: !/i have not (actually )?(done|added|changed) (that|it).*yet|please confirm/i.test(o.text) },
+    ],
+  },
 ];
 
 export async function GET(req: NextRequest) {
