@@ -19,7 +19,7 @@ export { SYSTEM_HUMAN, withHumanSystem, humanize, stripDashes } from "./humanize
 export const NO_DASHES =
   "Never use em-dashes (—) or en-dashes (–). Use a comma, period, or colon instead. This is a hard brand rule.";
 
-import { anthropicViaOpenAI, openAIConfigured } from "./openai-fallback";
+// OpenAI fallback import removed (owner directive 2026-06-04): no gpt-4o failover.
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
@@ -58,16 +58,10 @@ async function anthropicPOST(payload: Record<string, any>): Promise<any> {
     claudeFailed = true;
   }
 
-  // FAILOVER to OpenAI when Anthropic is down (rate-limited, dead key, overloaded,
-  // network). Text and image payloads translate cleanly; a PDF "document" block
-  // can't, so the translator throws and we surface the original Claude error.
-  if (claudeFailed && openAIConfigured()) {
-    try {
-      return await anthropicViaOpenAI(payload);
-    } catch (e: any) {
-      throw new Error(`${lastErr} (OpenAI fallback also failed: ${e?.message || e})`);
-    }
-  }
+  // OpenAI (gpt-4o) failover DISABLED — owner directive 2026-06-04. Never silently
+  // answer as gpt-4o (it over-refuses and stalls). Surface the real Claude error so
+  // it is visible and fixable. Permanent key = the rinq Anthropic key.
+  void claudeFailed;
   throw new Error(lastErr);
 }
 

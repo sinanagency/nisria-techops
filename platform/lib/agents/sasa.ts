@@ -15,7 +15,7 @@ import { humanize, withHumanSystem } from "../humanize";
 import { recall, groundingText } from "../memory";
 import { SMART_TOOLS, runSmartTool, isReadTool, type ToolResult } from "../smart-tools";
 import { verifyReply } from "../verifier";
-import { anthropicViaOpenAI, openAIConfigured, brainOverrideActive } from "../openai-fallback";
+import { anthropicViaOpenAI, brainOverrideActive } from "../openai-fallback";
 
 const MODEL = "claude-sonnet-4-5";
 const KEY = () => process.env.ANTHROPIC_API_KEY || "";
@@ -215,15 +215,12 @@ async function callClaude(system: string, messages: any[], tools: any[]) {
     claudeFailed = true;
   }
 
-  if (claudeFailed && openAIConfigured()) {
-    try {
-      // Translator wants raw Anthropic tools (no cache_control) and plain system text.
-      return await anthropicViaOpenAI({ max_tokens: 1400, system, tools, messages });
-    } catch (e: any) {
-      // Both providers down: surface the ORIGINAL Claude error (the real cause).
-      throw new Error(`${lastErr} (OpenAI fallback also failed: ${e?.message || e})`);
-    }
-  }
+  // OpenAI (gpt-4o) fallback DISABLED — owner directive 2026-06-04. The bot must
+  // NEVER silently answer as gpt-4o: it over-refuses and stalls (the "I have not
+  // done it yet / please confirm" loop Nur hit was gpt-4o while Anthropic was out
+  // of credit). If Claude is unreachable, surface the real error so it is visible
+  // and fixable, instead of degrading to a worse model. Permanent key = the rinq
+  // Anthropic key. (claudeFailed/openAIConfigured retained above for clarity.)
   throw new Error(lastErr);
 }
 
