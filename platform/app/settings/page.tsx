@@ -55,19 +55,10 @@ export default async function Settings() {
 
   return (
     <Shell title="Settings" sub="The Brain, organization, accounts, automation, and voice">
+      {/* ── Organization ─────────────────────────────────────────────
+          Who Nisria is. Identity facts + the configurable fundraising goal. */}
+      <SectionLabel first>Organization</SectionLabel>
       <div className="grid cols-2">
-        {/* One ingestion pipeline — drop everything, Sasa routes it (P7) */}
-        <IngestDock />
-
-        {/* The Brain — first-run onboarding, re-runnable + editable, voice + multi-entry */}
-        <BrainOnboarding saved={saved} entries={entries} />
-
-        {/* Grant readiness — funder-required inputs + the standard documents */}
-        <GrantReadiness saved={saved} docs={(grantDocs || []) as any[]} initialStatus={grantStatus} entries={entries} />
-
-        {/* Brand logos — upload with a live preview, used in signature + docs (P8) */}
-        <LogoUploader logos={logos} />
-
         {/* organization */}
         <div className="card">
           <div className="card-h"><span className="flex"><Building2 size={15} /> Organization</span></div>
@@ -80,20 +71,54 @@ export default async function Settings() {
           </div>
         </div>
 
-        {/* configurable monthly fundraising goal — the dashboard gauge target */}
+        {/* configurable monthly fundraising goal, the dashboard gauge target */}
         <MonthlyGoalEditor goal={monthlyGoal} />
+      </div>
 
-        {/* automation */}
-        <a className="card hover" href="/agents" style={{ textDecoration: "none" }}>
-          <div className="card-h"><span className="flex"><Bot size={15} /> Automation</span><ChevronRight size={15} /></div>
-          <div className="card-pad" style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
-            {enabled} of {(connectors || []).length} connectors on. Tune what the agents can do on their own, toggle connectors, and watch the activity stream in <span style={{ color: "var(--teal-700)", fontWeight: 600 }}>Agents</span>.
+      {/* ── The Brain ────────────────────────────────────────────────
+          Sasa's knowledge: ingestion, onboarding/voice, grant readiness. */}
+      <SectionLabel>The Brain</SectionLabel>
+      <div className="grid cols-2">
+        {/* One ingestion pipeline, drop everything, Sasa routes it (P7) */}
+        <IngestDock />
+
+        {/* The Brain, first-run onboarding, re-runnable + editable, voice + multi-entry */}
+        <BrainOnboarding saved={saved} entries={entries} />
+
+        {/* Grant readiness, funder-required inputs + the standard documents */}
+        <GrantReadiness saved={saved} docs={(grantDocs || []) as any[]} initialStatus={grantStatus} entries={entries} />
+
+        {/* brand voice */}
+        <div className="card">
+          <div className="card-h"><span className="flex"><MessageSquareQuote size={15} /> Brand voice</span><Badge tone="teal">learned</Badge></div>
+          <div style={{ padding: "4px 18px 14px" }}>
+            {(voice || []).length === 0 && <div className="empty">No voice guidance yet.</div>}
+            {(voice || []).map((v: any, i: number) => (
+              <div key={i} style={{ padding: "10px 0", borderTop: i ? "1px solid var(--line)" : "none" }}>
+                <div className="strong" style={{ fontSize: 12.5 }}>{v.title}</div>
+                <div className="faint" style={{ fontSize: 11.5, lineHeight: 1.5, marginTop: 2 }}>{(v.content || "").slice(0, 150)}…</div>
+              </div>
+            ))}
+            <div className="faint" style={{ fontSize: 11.5, marginTop: 10 }}>Sasa learns your voice from every reply you approve.</div>
           </div>
-        </a>
+        </div>
+      </div>
 
-        {/* integrations — Zanii stub (P12). Shape now, real code drops in later. */}
-        <IntegrationsCard zanii={zanii} />
+      {/* ── Brand & signature ────────────────────────────────────────
+          Visual identity that goes out the door: logos + email signatures. */}
+      <SectionLabel>Brand &amp; signature</SectionLabel>
+      <div className="grid cols-2">
+        {/* Brand logos, upload with a live preview, used in signature + docs (P8) */}
+        <LogoUploader logos={logos} />
 
+        {/* email signature, branded, per account, auto-appended, with logo (R2-5 #44 / P8) */}
+        <SignatureEditor accounts={(accounts || []) as any[]} logos={logos} />
+      </div>
+
+      {/* ── Channels & integrations ──────────────────────────────────
+          Where Sasa reaches the world: connected accounts + integrations. */}
+      <SectionLabel>Channels &amp; integrations</SectionLabel>
+      <div className="grid cols-2">
         {/* connected accounts */}
         <div className="card">
           <div className="card-h"><span className="flex"><Mail size={15} /> Connected accounts</span><Badge tone="gray">{(accounts || []).length}</Badge></div>
@@ -115,24 +140,41 @@ export default async function Settings() {
           </div>
         </div>
 
-        {/* email signature — branded, per account, auto-appended, with logo (R2-5 #44 / P8) */}
-        <SignatureEditor accounts={(accounts || []) as any[]} logos={logos} />
+        {/* integrations, Zanii stub (P12). Shape now, real code drops in later. */}
+        <IntegrationsCard zanii={zanii} />
+      </div>
 
-        {/* brand voice */}
-        <div className="card">
-          <div className="card-h"><span className="flex"><MessageSquareQuote size={15} /> Brand voice</span><Badge tone="teal">learned</Badge></div>
-          <div style={{ padding: "4px 18px 14px" }}>
-            {(voice || []).length === 0 && <div className="empty">No voice guidance yet.</div>}
-            {(voice || []).map((v: any, i: number) => (
-              <div key={i} style={{ padding: "10px 0", borderTop: i ? "1px solid var(--line)" : "none" }}>
-                <div className="strong" style={{ fontSize: 12.5 }}>{v.title}</div>
-                <div className="faint" style={{ fontSize: 11.5, lineHeight: 1.5, marginTop: 2 }}>{(v.content || "").slice(0, 150)}…</div>
-              </div>
-            ))}
-            <div className="faint" style={{ fontSize: 11.5, marginTop: 10 }}>Sasa learns your voice from every reply you approve.</div>
+      {/* ── Automation ───────────────────────────────────────────────
+          What the agents may do on their own. Links into the Agents surface. */}
+      <SectionLabel>Automation</SectionLabel>
+      <div className="grid cols-2">
+        {/* automation */}
+        <a className="card hover" href="/agents" style={{ textDecoration: "none" }}>
+          <div className="card-h"><span className="flex"><Bot size={15} /> Automation</span><ChevronRight size={15} /></div>
+          <div className="card-pad" style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
+            {enabled} of {(connectors || []).length} connectors on. Tune what the agents can do on their own, toggle connectors, and watch the activity stream in <span style={{ color: "var(--teal-700)", fontWeight: 600 }}>Agents</span>.
           </div>
-        </div>
+        </a>
       </div>
     </Shell>
+  );
+}
+
+// A quiet, consistent section heading for grouping the settings surface.
+// Presentation-only; matches the uppercase faint-label convention used elsewhere.
+function SectionLabel({ children, first }: { children: React.ReactNode; first?: boolean }) {
+  return (
+    <div
+      className="faint disp2"
+      style={{
+        fontSize: 11.5,
+        fontWeight: 700,
+        textTransform: "uppercase",
+        letterSpacing: ".08em",
+        margin: first ? "2px 2px 12px" : "26px 2px 12px",
+      }}
+    >
+      {children}
+    </div>
   );
 }

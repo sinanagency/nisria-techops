@@ -1,5 +1,5 @@
 import Shell from "../../components/Shell";
-import { Card, Badge } from "../../components/ui";
+import { Card, Badge, Stat } from "../../components/ui";
 import DocReader from "../../components/DocReader";
 import { admin, date } from "../../lib/supabase-admin";
 import { ShieldCheck, Landmark, Globe2, FileCheck2, Scale, Building2, ChevronRight, CalendarClock } from "lucide-react";
@@ -87,34 +87,69 @@ export default async function Legal() {
 
   return (
     <Shell title="Legal & Compliance" sub={`${docs.length} compliance documents on file · entity status verified`} action={<Badge tone="green"><ShieldCheck size={11} /> 501(c)(3) active</Badge>}>
-      {/* entity status — the two legal entities, side by side */}
-      <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 16 }}>
-        <div className="card card-pad">
-          <div className="flex" style={{ gap: 9, marginBottom: 6 }}><span className="aico teal" style={{ width: 30, height: 30, borderRadius: 9 }}><Landmark size={15} /></span><div><div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>{US.name}</div><div className="faint" style={{ fontSize: 12 }}>United States</div></div></div>
-          <div className="stack" style={{ gap: 0 }}>
-            <Fact label="Status"><Badge tone="green">{US.status}</Badge></Fact>
-            <Fact label="IRS clause">{US.clause}</Fact>
-            <Fact label="EIN" mono>{US.ein}</Fact>
-            <Fact label="Effective">{US.effective}</Fact>
-            <Fact label="Registered address">{US.address}</Fact>
+      {/* COMPLIANCE STATUS HEADER (Law 5): lead with the posture that matters.
+          Both legal entities are registered and in good standing; the right rail
+          states the recurring obligations being tracked. All values are the
+          authoritative entity facts above, no new query. */}
+      <div className="feature dark" style={{ marginBottom: 16 }}>
+        <div className="between" style={{ alignItems: "flex-start", gap: 22, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="fmeta" style={{ marginTop: 0, marginBottom: 8, letterSpacing: "0.14em", textTransform: "uppercase", fontSize: 11, fontWeight: 800 }}>Registration status</div>
+            <div className="disp2" style={{ fontSize: 36, fontWeight: 700, lineHeight: 1.0 }}>Both entities registered, in good standing</div>
+            <div className="flex" style={{ gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+              <Badge tone="green"><Landmark size={11} /> US 501(c)(3) active</Badge>
+              <Badge tone="green"><Globe2 size={11} /> Kenya CBO registered</Badge>
+              <Badge tone="gold"><CalendarClock size={11} /> {OBLIGATIONS.length} recurring filings tracked</Badge>
+            </div>
           </div>
-          <div className="faint" style={{ fontSize: 11.5, lineHeight: 1.5, marginTop: 10 }}>{US.obligations}</div>
-        </div>
-        <div className="card card-pad">
-          <div className="flex" style={{ gap: 9, marginBottom: 6 }}><span className="aico peri" style={{ width: 30, height: 30, borderRadius: 9 }}><Globe2 size={15} /></span><div><div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>{KE.name}</div><div className="faint" style={{ fontSize: 12 }}>Kenya</div></div></div>
-          <div className="stack" style={{ gap: 0 }}>
-            <Fact label="Registration no.">{KE.reg}</Fact>
-            <Fact label="Certificate">{KE.cert}</Fact>
-            <Fact label="Registered">{KE.registered}</Fact>
-            <Fact label="Location">{KE.location}</Fact>
-            <Fact label="Banking">{KE.banks}</Fact>
+          <div className="stack" style={{ gap: 6, minWidth: 220, flex: "1 1 220px", maxWidth: 360, textAlign: "right" }}>
+            <div className="fmeta" style={{ marginTop: 0, letterSpacing: "0.14em", textTransform: "uppercase", fontSize: 11, fontWeight: 800 }}>Documents on file</div>
+            <div className="disp2" style={{ fontSize: 40, fontWeight: 700, lineHeight: 0.95 }}>{docs.length}</div>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: "#7df3f1" }}>across registration, governance, leases and certificates</div>
           </div>
-          <div className="faint" style={{ fontSize: 11.5, lineHeight: 1.5, marginTop: 10 }}>Operates under By Nisria Inc; ground spend deployed in Kenya, mostly via M-Pesa.</div>
         </div>
       </div>
 
-      {/* recurring compliance obligations */}
-      <Card title="Compliance obligations" action={<Badge tone="gold"><CalendarClock size={11} /> recurring filings</Badge>}>
+      {/* status strip: the headline facts per entity as stat cards */}
+      <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 16 }}>
+        <Stat label="US tax-exempt status" value={<span style={{ fontSize: 18 }} className="disp2">501(c)(3)</span>} delta={`EIN ${US.ein} · effective ${US.effective}`} />
+        <Stat label="Kenya CBO registration" value={<span style={{ fontSize: 18 }} className="disp2">{KE.reg}</span>} delta={`Cert. ${KE.cert} · ${KE.registered}`} />
+        <Stat label="Recurring filings" value={<span className="disp2">{OBLIGATIONS.length}</span>} delta="annual obligations tracked" />
+        <Stat label="Compliance documents" value={<span className="disp2">{docs.length}</span>} delta="self-populating from the register" />
+      </div>
+
+      {/* entity registration: the two legal entities as cards with status badges + dates */}
+      <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 16 }}>
+        <Card title={<span className="flex"><Landmark size={15} /> Entity registration · United States</span> as any} action={<Badge tone="green"><ShieldCheck size={11} /> active</Badge>}>
+          <div className="card-pad" style={{ paddingTop: 16, paddingBottom: 16 }}>
+            <div className="flex" style={{ gap: 9, marginBottom: 6 }}><span className="aico teal" style={{ width: 30, height: 30, borderRadius: 9 }}><Landmark size={15} /></span><div><div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>{US.name}</div><div className="faint" style={{ fontSize: 12 }}>United States</div></div></div>
+            <div className="stack" style={{ gap: 0 }}>
+              <Fact label="Status"><Badge tone="green">{US.status}</Badge></Fact>
+              <Fact label="IRS clause">{US.clause}</Fact>
+              <Fact label="EIN" mono>{US.ein}</Fact>
+              <Fact label="Effective">{US.effective}</Fact>
+              <Fact label="Registered address">{US.address}</Fact>
+            </div>
+            <div className="faint" style={{ fontSize: 11.5, lineHeight: 1.5, marginTop: 10 }}>{US.obligations}</div>
+          </div>
+        </Card>
+        <Card title={<span className="flex"><Globe2 size={15} /> Entity registration · Kenya</span> as any} action={<Badge tone="green"><ShieldCheck size={11} /> registered</Badge>}>
+          <div className="card-pad" style={{ paddingTop: 16, paddingBottom: 16 }}>
+            <div className="flex" style={{ gap: 9, marginBottom: 6 }}><span className="aico peri" style={{ width: 30, height: 30, borderRadius: 9 }}><Globe2 size={15} /></span><div><div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>{KE.name}</div><div className="faint" style={{ fontSize: 12 }}>Kenya</div></div></div>
+            <div className="stack" style={{ gap: 0 }}>
+              <Fact label="Registration no.">{KE.reg}</Fact>
+              <Fact label="Certificate">{KE.cert}</Fact>
+              <Fact label="Registered">{KE.registered}</Fact>
+              <Fact label="Location">{KE.location}</Fact>
+              <Fact label="Banking">{KE.banks}</Fact>
+            </div>
+            <div className="faint" style={{ fontSize: 11.5, lineHeight: 1.5, marginTop: 10 }}>Operates under By Nisria Inc; ground spend deployed in Kenya, mostly via M-Pesa.</div>
+          </div>
+        </Card>
+      </div>
+
+      {/* recurring compliance obligations: governance filings with cadence + status */}
+      <Card title={<span className="flex"><CalendarClock size={15} /> Recurring filings & obligations</span> as any} action={<Badge tone="gold"><CalendarClock size={11} /> annual cadence</Badge>}>
         <div className="stack" style={{ gap: 0 }}>
           {OBLIGATIONS.map((o) => (
             <div key={o.label} className="between" style={{ padding: "12px 22px", borderTop: "1px solid var(--line)", gap: 12 }}>
@@ -122,7 +157,7 @@ export default async function Legal() {
                 <div style={{ fontWeight: 600, fontSize: 13.5 }}>{o.label}</div>
                 <div className="faint" style={{ fontSize: 12, marginTop: 1 }}>{o.who} · {o.note}</div>
               </div>
-              <Badge tone="gray">{o.cadence}</Badge>
+              <Badge tone="gray"><CalendarClock size={10} /> {o.cadence}</Badge>
             </div>
           ))}
         </div>

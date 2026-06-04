@@ -200,24 +200,40 @@ export default async function TeamMember360({ params }: { params: { id: string }
     <Shell
       title={name}
       sub={m.role || TYPE_LABEL[type]}
-      action={
-        <span className="flex" style={{ gap: 6, alignItems: "center" }}>
-          <Badge tone="teal">{TYPE_LABEL[type] || type}</Badge>
-          <Badge tone={statusTone(m.status === "active" ? "active" : m.status === "exited" ? "lost" : "")}>{m.status || "active"}</Badge>
-          {/* 727 access toggle: grants only the restricted team line (tasks, calendar,
-              intake). Never finance/donor/PII. In sync with the bot's set_bot_access. */}
-          <Badge tone={m.bot_access ? "green" : "gray"}>{m.bot_access ? "727 on" : "727 off"}</Badge>
+    >
+      <TabTitle title={name} />
+
+      {/* record header: avatar + name + role + status, with the 727 toggle on the right */}
+      <div className="card card-pad" style={{ marginBottom: 16 }}>
+        <div className="between" style={{ flexWrap: "wrap", gap: 14 }}>
+          <div className="flex" style={{ gap: 14, minWidth: 0 }}>
+            <div className="avatar" style={{ width: 56, height: 56, fontSize: 22 }}>{name.charAt(0).toUpperCase()}</div>
+            <div style={{ minWidth: 0 }}>
+              <div className="disp2" style={{ fontWeight: 700, fontSize: 21 }}>{name}</div>
+              <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>{m.role || TYPE_LABEL[type]}</div>
+              <div className="flex" style={{ gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                <Badge tone="teal">{TYPE_LABEL[type] || type}</Badge>
+                <Badge tone={statusTone(m.status === "active" ? "active" : m.status === "exited" ? "lost" : "")}>{m.status || "active"}</Badge>
+                {/* 727 access toggle: grants only the restricted team line (tasks, calendar,
+                    intake). Never finance/donor/PII. In sync with the bot's set_bot_access. */}
+                <Badge tone={m.bot_access ? "green" : "gray"}>{m.bot_access ? "727 on" : "727 off"}</Badge>
+              </div>
+            </div>
+          </div>
           <form action={setBotAccess}>
             <input type="hidden" name="id" value={id} />
             <input type="hidden" name="enabled" value={m.bot_access ? "false" : "true"} />
             <button className="pill" type="submit" title="Grant or revoke this member's private WhatsApp line (restricted: their tasks, calendar, intake only)">
-              {m.bot_access ? "Revoke bot access" : "Give bot access"}
+              <Bot size={14} /> {m.bot_access ? "Revoke bot access" : "Give bot access"}
             </button>
           </form>
-        </span>
-      }
-    >
-      <TabTitle title={name} />
+        </div>
+
+        {/* quick actions wiring preserved */}
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+          <TeamQuickActions member={m} />
+        </div>
+      </div>
 
       {/* at-a-glance task breakdown */}
       <div className="grid cols-4" style={{ marginBottom: 16 }}>
@@ -243,40 +259,32 @@ export default async function TeamMember360({ params }: { params: { id: string }
       </div>
 
       <div className="grid" style={{ gridTemplateColumns: "1fr 1.6fr" }}>
-        {/* profile column */}
+        {/* LEFT details rail: contact, role, pay info */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="card card-pad">
-            <div className="flex" style={{ marginBottom: 14, gap: 13 }}>
-              <div className="avatar" style={{ width: 52, height: 52, fontSize: 20 }}>{name.charAt(0).toUpperCase()}</div>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 17 }}>{name}</div>
-                <div className="muted" style={{ fontSize: 12.5 }}>{m.role || TYPE_LABEL[type]}</div>
+          {/* contact + role + pay details */}
+          <div className="card">
+            <div className="card-h"><span className="flex"><Briefcase size={14} /> Details</span></div>
+            <div style={{ padding: "4px 18px 14px" }}>
+              <div className="stack" style={{ gap: 0 }}>
+                <Row icon={Briefcase} label="Type"><Badge tone="teal">{TYPE_LABEL[type] || type}</Badge></Row>
+                <Row icon={DollarSign} label="Pay">
+                  {m.pay_amount != null ? <span className="strong"><Money amount={m.pay_amount} currency={m.pay_currency} />{paySuffix}</span> : null}
+                </Row>
+                <Row icon={DollarSign} label="Pay type">{m.pay_type ? PAY_TYPE_LABEL[m.pay_type] || m.pay_type : null}</Row>
+                <Row icon={Calendar} label="Tenure">{t}</Row>
+                <Row icon={Calendar} label="Started">{date(m.engagement_start)}</Row>
+                <Row icon={Briefcase} label="Engagement">{m.engagement_type}</Row>
+                {m.email && <Row icon={Mail} label="Email">{m.email}</Row>}
+                {m.phone && <Row icon={Phone} label="Phone">{m.phone}</Row>}
+                {m.location && <Row icon={MapPin} label="Location">{m.location}</Row>}
               </div>
-            </div>
 
-            {/* quick actions */}
-            <div style={{ marginBottom: 14 }}>
-              <TeamQuickActions member={m} />
+              {tags.length > 0 && (
+                <div className="flex" style={{ flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+                  {tags.map((tag, i) => <span key={i} className="chip"><Tag size={11} /> {tag}</span>)}
+                </div>
+              )}
             </div>
-
-            <div className="stack" style={{ gap: 0 }}>
-              <Row icon={Briefcase} label="Type"><Badge tone="teal">{TYPE_LABEL[type] || type}</Badge></Row>
-              <Row icon={DollarSign} label="Pay">
-                {m.pay_amount != null ? <span className="strong"><Money amount={m.pay_amount} currency={m.pay_currency} />{paySuffix}</span> : null}
-              </Row>
-              <Row icon={Calendar} label="Tenure">{t}</Row>
-              <Row icon={Calendar} label="Started">{date(m.engagement_start)}</Row>
-              <Row icon={Briefcase} label="Engagement">{m.engagement_type}</Row>
-              {m.email && <Row icon={Mail} label="Email">{m.email}</Row>}
-              {m.phone && <Row icon={Phone} label="Phone">{m.phone}</Row>}
-              {m.location && <Row icon={MapPin} label="Location">{m.location}</Row>}
-            </div>
-
-            {tags.length > 0 && (
-              <div className="flex" style={{ flexWrap: "wrap", gap: 6, marginTop: 12 }}>
-                {tags.map((tag, i) => <span key={i} className="chip"><Tag size={11} /> {tag}</span>)}
-              </div>
-            )}
           </div>
 
           {/* responsibilities */}
@@ -310,13 +318,13 @@ export default async function TeamMember360({ params }: { params: { id: string }
               ))}
             </div>
           </div>
-
-          {/* pay history (collapsed by default) */}
-          <TeamPayHistory payments={payments} currency={m.pay_currency || "USD"} />
         </div>
 
-        {/* tasks + timeline column */}
+        {/* RIGHT main: pay history + tasks + activity */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {/* pay history (collapsed by default) */}
+          <TeamPayHistory payments={payments} currency={m.pay_currency || "USD"} />
+
           {/* tasks */}
           <div className="card">
             <div className="card-h">

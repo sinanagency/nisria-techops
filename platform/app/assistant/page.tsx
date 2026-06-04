@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import Shell from "../../components/Shell";
+import { Sparkles, Send } from "lucide-react";
 
 type Msg = { role: "user" | "assistant"; content: string };
 const SUGGESTIONS = [
@@ -13,13 +13,13 @@ const SUGGESTIONS = [
 
 export default function Assistant() {
   const [msgs, setMsgs] = useState<Msg[]>([
-    { role: "assistant", content: "Hi Nur 👋 I'm your Nisria assistant. Ask me about fundraising, donors, campaigns, tasks, or have me draft a post or email. What do you need?" },
+    { role: "assistant", content: "Hi Nur. I'm your Nisria assistant. Ask me about fundraising, donors, campaigns, tasks, or have me draft a post or email. What do you need?" },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [msgs, busy]);
+  useEffect(() => { logRef.current?.scrollTo({ top: 1e9, behavior: "smooth" }); }, [msgs, busy]);
 
   async function send(text: string) {
     const t = text.trim();
@@ -31,31 +31,48 @@ export default function Assistant() {
       const j = await r.json();
       setMsgs((m) => [...m, { role: "assistant", content: j.reply || "(no reply)" }]);
     } catch {
-      setMsgs((m) => [...m, { role: "assistant", content: "⚠️ Couldn't reach the assistant." }]);
+      setMsgs((m) => [...m, { role: "assistant", content: "Couldn't reach the assistant." }]);
     } finally { setBusy(false); }
   }
 
   return (
-    <Shell title="AI Assistant" sub="Chat with the AI that knows your whole operation">
-      <div className="card card-pad chat">
-        <div className="chat-log" ref={logRef}>
-          {msgs.map((m, i) => (
-            <div key={i} className={`bubble ${m.role === "user" ? "user" : "ai"}`}>{m.content}</div>
-          ))}
-          {busy && <div className="bubble ai muted">thinking…</div>}
+    <div className="pagewrap rise">
+      <div className="hero">
+        <div>
+          <div className="eyebrow"><Sparkles size={14} style={{ verticalAlign: -2 }} /> AI Assistant</div>
+          <h1>Ask me anything.</h1>
         </div>
+      </div>
+
+      <div className="card smartconsole">
+        <div className="dock-log" ref={logRef} style={{ flex: 1, minHeight: 360 }}>
+          {msgs.map((m, i) => (
+            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: m.role === "user" ? "flex-end" : "flex-start" }}>
+              <div className={`bubble ${m.role === "user" ? "user" : "ai"}`}>{m.content}</div>
+            </div>
+          ))}
+          {busy && <div className="bubble ai typing">thinking…</div>}
+        </div>
+
         {msgs.length <= 1 && (
-          <div className="flex" style={{ flexWrap: "wrap", marginTop: 10 }}>
+          <div className="dock-suggest" style={{ padding: "0 4px 12px" }}>
             {SUGGESTIONS.map((s) => (
               <button key={s} className="pill" onClick={() => send(s)}>{s}</button>
             ))}
           </div>
         )}
-        <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(input); }}>
-          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask anything, or say 'draft a post about…'" />
-          <button className="btn" type="submit" disabled={busy}>Send</button>
+
+        <form className="dock-foot" style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }} onSubmit={(e) => { e.preventDefault(); send(input); }}>
+          <textarea
+            value={input}
+            placeholder="Ask anything, or say 'draft a post about…'"
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }}
+            rows={1}
+          />
+          <button className="send" type="submit" disabled={busy || !input.trim()}><Send size={17} /></button>
         </form>
       </div>
-    </Shell>
+    </div>
   );
 }

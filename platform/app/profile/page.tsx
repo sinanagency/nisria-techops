@@ -36,48 +36,68 @@ export default async function Profile() {
 
   const Stat = ({ n, label, href }: { n: number; label: string; href?: string }) => {
     const inner = (
-      <div className="card" style={{ flex: 1 }}>
-        <div className="card-pad" style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1 }}>{n}</div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{label}</div>
-        </div>
+      <div className="card card-pad stat" style={{ flex: 1 }}>
+        <div className="label">{label}</div>
+        <div className="value disp2">{n}</div>
       </div>
     );
     return href ? <Link href={href} style={{ flex: 1, textDecoration: "none", color: "inherit" }}>{inner}</Link> : inner;
   };
 
+  const Field = ({ label, value }: { label: string; value: React.ReactNode }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 16, padding: "13px 0", borderBottom: "1px solid var(--line)" }}>
+      <span className="muted" style={{ fontSize: 12.5 }}>{label}</span>
+      <span style={{ fontSize: 13.5, textAlign: "right", minWidth: 0 }}>{value}</span>
+    </div>
+  );
+
   return (
     <Shell title="Profile" sub="Who you are on the platform, and your work at a glance">
-      <div className="card">
-        <div className="card-pad" style={{ display: "flex", gap: 18, alignItems: "center" }}>
-          <div aria-hidden style={{
-            width: 64, height: 64, borderRadius: "50%", flexShrink: 0,
-            background: "var(--nisria)", color: "#fff",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 24, fontWeight: 700,
-          }}>{initials}</div>
+      {/* Identity header: avatar + name + role, lead of the page */}
+      <div className="feature teal">
+        <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
+          <div className="avatar" aria-hidden style={{ width: 64, height: 64, fontSize: 24, flexShrink: 0, background: "rgba(255,255,255,0.85)", color: "var(--teal-700)" }}>
+            {initials}
+          </div>
           <div style={{ minWidth: 0 }}>
-            <div className="between" style={{ gap: 10 }}>
-              <span className="strong" style={{ fontSize: 19 }}>{profile?.name || user.name}</span>
-              <Badge>{ROLE_LABEL[user.role] || user.role}</Badge>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="ftitle" style={{ fontSize: 22 }}>{profile?.name || user.name}</span>
+              <Badge tone="teal">{ROLE_LABEL[user.role] || user.role}</Badge>
             </div>
-            <div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{user.org}</div>
-            {profile?.role && <div style={{ fontSize: 13.5, marginTop: 8 }}>{profile.role}</div>}
-            {profile?.email && <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{profile.email}</div>}
+            <div className="fmeta" style={{ fontSize: 13.5 }}>{profile?.role || user.org}</div>
           </div>
         </div>
-        {profile?.responsibilities && (
-          <div className="card-pad" style={{ borderTop: "1px solid var(--hairline)", fontSize: 13, color: "var(--ink-2)" }}>
-            {profile.responsibilities}
-          </div>
-        )}
       </div>
 
+      {/* Work at a glance */}
       <div style={{ display: "flex", gap: 12, marginTop: 14 }}>
         <Stat n={assignedOpen} label="Assigned to me · open" href="/tasks?mine=1" />
         <Stat n={assignedDone} label="Assigned to me · done" href="/tasks?mine=1" />
         <Stat n={createdMine} label="Created by me" href="/tasks?mine=1" />
       </div>
+
+      {/* Account details */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="card-h">Account details</div>
+        <div className="card-pad" style={{ paddingTop: 6, paddingBottom: 6 }}>
+          <Field label="Name" value={profile?.name || user.name} />
+          <Field label="Role" value={<Badge tone="teal">{ROLE_LABEL[user.role] || user.role}</Badge>} />
+          {profile?.role && <Field label="Title" value={profile.role} />}
+          <Field label="Organisation" value={user.org} />
+          {profile?.email && <Field label="Email" value={profile.email} />}
+          {profile?.member_type && <Field label="Member type" value={profile.member_type} />}
+        </div>
+      </div>
+
+      {/* Responsibilities */}
+      {profile?.responsibilities && (
+        <div className="card" style={{ marginTop: 14 }}>
+          <div className="card-h">Responsibilities</div>
+          <div className="card-pad" style={{ fontSize: 13.5, color: "var(--ink-2)", lineHeight: 1.55 }}>
+            {profile.responsibilities}
+          </div>
+        </div>
+      )}
 
       {!profile && (
         <div className="card" style={{ marginTop: 14 }}>
