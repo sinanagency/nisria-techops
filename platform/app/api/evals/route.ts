@@ -265,6 +265,14 @@ export async function GET(req: NextRequest) {
     const r = await evalSasaMulti({ command: probe });
     return NextResponse.json({ command: probe, finalText: r.finalText, tools: r.allToolCalls.map((t) => t.name) });
   }
+  // ?realprobe=<command> -> REAL runSasa against live data (use ONLY for read-only-safe
+  // commands, e.g. an ambiguous "cancel" that hits a multi-match disambiguation and
+  // deletes nothing). Returns the real final reply Nur would get.
+  const realprobe = req.nextUrl.searchParams.get("realprobe");
+  if (realprobe) {
+    const r = await runSasa({ command: realprobe, contactId: "00000000-0000-0000-0000-000000000000", operatorName: "Nur", operatorRank: "founder" });
+    return NextResponse.json({ command: realprobe, reply: r.reply });
+  }
 
   // ?confirm=1 -> live integration test of confirm-before-write: a WhatsApp-style
   // "log KES ..." must STAGE a pending action and write NOTHING to payments yet.
