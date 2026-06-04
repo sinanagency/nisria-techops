@@ -240,8 +240,8 @@ const CASES: Case[] = [
   {
     name: "STALL-LOOP: 'change the time of the call with Edith to 9 PM' must edit, not stall",
     history: [
-      { role: "user", content: "Add this to the calendar: Call with Edith, today at 9 PM" },
-      { role: "assistant", content: "Done. Call with Edith is on your calendar today at 21:00." },
+      { role: "user", content: "Add this to the calendar: Call with Edith, today at 8 PM" },
+      { role: "assistant", content: "Done. Call with Edith is on your calendar today at 20:00." },
     ],
     command: "Change the time of the call with Edith to 9 PM",
     assert: (o) => [

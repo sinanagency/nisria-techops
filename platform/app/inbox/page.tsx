@@ -19,6 +19,13 @@ function timeShort(iso: string) {
   if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
+// Full stamp for a message bubble: date AND time (e.g. "Jun 3, 9:16 PM"), today shows just the time.
+function whenFull(iso: string) {
+  const d = new Date(iso); const now = new Date();
+  const t = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return t;
+  return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${t}`;
+}
 
 const FILTERS = [
   { k: "needs", label: "Needs reply", icon: Mail },
@@ -134,7 +141,7 @@ export default async function Inbox({ searchParams }: { searchParams: { c?: stri
                   <div key={m.id} className="card" style={{ padding: 14, boxShadow: "none", background: m.direction === "out" ? "var(--teal-50)" : "var(--surface-2)", marginLeft: m.direction === "out" ? 40 : 0, marginRight: m.direction === "out" ? 0 : 40 }}>
                     <div className="between" style={{ marginBottom: 5 }}>
                       <span style={{ fontWeight: 600, fontSize: 12.5 }}>{m.direction === "out" ? "Nisria" : (sel.contact?.name || "Them")}{m.handled_by?.startsWith("agent") ? " · via Sasa" : ""}</span>
-                      <span className="faint" style={{ fontSize: 11 }}>{date(m.created_at)}</span>
+                      <span className="faint" style={{ fontSize: 11 }}>{whenFull(m.created_at)}</span>
                     </div>
                     {m.subject && <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{m.subject}</div>}
                     <div style={{ fontSize: 13, lineHeight: 1.6, color: "var(--ink-2)", whiteSpace: "pre-wrap" }}>{cleanEmail(m.body || "")}</div>
