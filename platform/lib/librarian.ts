@@ -35,20 +35,21 @@ type Cluster = {
   conflict_note?: string;
 };
 type EntityOut = { fact_id: string; entities: { type: string; name: string; summary?: string }[] };
-type LibResult = { clusters: Cluster[]; entities: EntityOut[] };
 
-const SYS = `You are the librarian of an organisation's memory (the "brain"). You receive a JSON array of stored facts, each { id, kind, topic, title, content }. Your job is hygiene, not invention. Never use em-dashes or en-dashes, only commas, periods, colons.
+const SYS_CONSOLIDATE = `You are the librarian of an organisation's memory (the "brain"). You receive a JSON array of stored facts, each { id, kind, topic, title, content }. Your job is hygiene, not invention. Never use em-dashes or en-dashes, only commas, periods, colons.
 
-Return ONLY a JSON object: { "clusters": [...], "entities": [...] }.
+Return ONLY a JSON object: { "clusters": [...] }.
 
-CLUSTERS. Group facts that are about the SAME atomic thing (the same account, the same person's role, the same policy). For each cluster of 2+ facts:
+Group facts that are about the SAME atomic thing (the same account, the same person's role, the same policy). For each cluster of 2+ facts:
 - "member_ids": the ids in the cluster.
 - "conflict": true if the members state DIFFERENT values for the same attribute (e.g. two different bank names for the same account, two different legal names, two different amounts). false if they are just duplicates or fragments of one consistent fact.
-- If conflict is false: "canonical_content" = ONE clear sentence that captures the full merged fact (combine the non-overlapping details), "canonical_title" = a short label, "topic" = a stable slug like "bank-statements-stanbic". "confidence" = "high" only when you are certain they are the same fact.
+- If conflict is false: "canonical_content" = ONE clear sentence capturing the full merged fact (combine the non-overlapping details), "canonical_title" = a short label, "topic" = a stable slug like "bank-statements-stanbic". "confidence" = "high" only when you are certain they are the same fact.
 - If conflict is true: still give "topic" and a "conflict_note" explaining what disagrees. Do NOT invent a canonical; a human will resolve it.
-Only output clusters with 2+ members. Do not cluster facts that are genuinely about different things. Singletons are fine to leave out entirely.
+Only output clusters with 2+ members. Do not cluster facts that are genuinely about different things. Most facts are singletons and belong in no cluster.`;
 
-ENTITIES. For EVERY fact (by id), list the concrete entities it is about. For each: "type" (person | org | account | program | place | thing), "name" (the canonical name), optional "summary" (one short line of who/what). Skip vague references. Output as [{ "fact_id": "...", "entities": [ ... ] }]. Omit facts that mention no concrete entity.`;
+const SYS_ENTITIES = `You extract entities from an organisation's stored facts. You receive a JSON array of facts, each { id, title, content }. Never use em-dashes or en-dashes.
+
+Return ONLY a JSON object: { "entities": [...] }. For EVERY fact (by id), list the concrete entities it is about. For each entity: "type" (person | org | account | program | place | thing), "name" (the canonical name), optional "summary" (one short line of who/what). Skip vague references. Shape: [{ "fact_id": "...", "entities": [ { "type": "...", "name": "...", "summary": "..." } ] }]. Omit facts that mention no concrete entity.`;
 
 async function findOrCreateEntity(db: any, type: string, name: string, summary?: string): Promise<string | null> {
   const clean = String(name || "").trim();
@@ -89,14 +90,27 @@ export async function runLibrarian(): Promise<{ ok: boolean; clusters: number; m
 
   if (facts.length < 2) return finish({}, "not enough facts to curate");
 
-  const res = await claudeJSON<LibResult>(SYS, JSON.stringify(facts), 4000);
-  if (!res) return finish({}, "librarian model call failed (no JSON / model unavailable)");
+  // Phase 1: consolidation. All facts in one call so cross-row duplicates cluster.
+  // Output is compact (only 2+ member clusters), so it does not truncate at scale.
+  const consol = await claudeJSON<{ clusters: Cluster[] }>(SYS_CONSOLIDATE, JSON.stringify(facts.map((f) => ({ id: f.id, kind: f.kind, topic: f.topic, title: f.title, content: f.content }))), 4000);
+
+  // Phase 2: entity extraction. Chunked (20 facts/call) so the large per-fact output
+  // never hits the token cap, however big the brain grows.
+  const entityOut: EntityOut[] = [];
+  const CHUNK = 20;
+  for (let i = 0; i < facts.length; i += CHUNK) {
+    const batch = facts.slice(i, i + CHUNK).map((f) => ({ id: f.id, title: f.title, content: f.content }));
+    const er = await claudeJSON<{ entities: EntityOut[] }>(SYS_ENTITIES, JSON.stringify(batch), 3000);
+    if (er?.entities?.length) entityOut.push(...er.entities);
+  }
+
+  if (!consol && !entityOut.length) return finish({}, "librarian model call failed (no JSON / model unavailable)");
 
   const ids = new Set(facts.map((f) => f.id));
   let merged = 0, flagged = 0, clusters = 0, entitiesUpserted = 0, linksMade = 0;
 
   // --- consolidation + contradiction guard ---
-  for (const cl of res.clusters || []) {
+  for (const cl of consol?.clusters || []) {
     const members = (cl.member_ids || []).filter((id) => ids.has(id));
     if (members.length < 2) continue;
     clusters++;
@@ -119,7 +133,7 @@ export async function runLibrarian(): Promise<{ ok: boolean; clusters: number; m
   }
 
   // --- entity graph ---
-  for (const e of res.entities || []) {
+  for (const e of entityOut) {
     if (!ids.has(e.fact_id)) continue;
     for (const ent of e.entities || []) {
       const entId = await findOrCreateEntity(db, ent.type, ent.name, ent.summary);
