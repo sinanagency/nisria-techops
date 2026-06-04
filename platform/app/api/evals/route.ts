@@ -5,7 +5,7 @@
 //
 // GET /api/_eval  -> { allPass, passed, total, results: [...] }
 import { NextRequest, NextResponse } from "next/server";
-import { evalSasa, runSasa } from "../../../lib/agents/sasa";
+import { evalSasa, evalSasaMulti, runSasa } from "../../../lib/agents/sasa";
 import { admin } from "../../../lib/supabase-admin";
 import { commitPaymentRow, runSmartTool } from "../../../lib/smart-tools";
 
@@ -254,6 +254,16 @@ const CASES: Case[] = [
 export async function GET(req: NextRequest) {
   if ((req.headers.get("x-eval-secret") || "") !== (process.env.GROUP_BOT_SECRET || "\0")) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  // ?probe=<command> -> run the FULL multi-turn pipeline (model + tool execution via
+  // synthetic results + honesty guard + OpenAI verifier) and return the real final
+  // human-facing text. Zero DB writes (evalSasaMulti uses stub tools). For debugging
+  // the exact reply Nur sees, e.g. "does 'add this task' confirm or hedge?".
+  const probe = req.nextUrl.searchParams.get("probe");
+  if (probe) {
+    const r = await evalSasaMulti({ command: probe });
+    return NextResponse.json({ command: probe, finalText: r.finalText, tools: r.allToolCalls.map((t) => t.name) });
   }
 
   // ?confirm=1 -> live integration test of confirm-before-write: a WhatsApp-style
