@@ -6,6 +6,7 @@ import Calendar from "../../components/Calendar";
 import { getCalendar } from "../../lib/calendar";
 import { gcalConfigured } from "../../lib/gcal";
 import { now } from "../../lib/now";
+import { CalendarDays } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -22,13 +23,52 @@ export default async function CalendarPage() {
   const events = await getCalendar({ from, to, tier: "admin" });
   const monthKey = `${y}-${String(m).padStart(2, "0")}`;
 
+  // Summary computed purely from the already-fetched month (no extra fetch).
+  // "This week" is the next 7 days from today; "next event" is the first dated
+  // item from today forward. Both are presentation only.
+  const todayIso = n.today;
+  const weekEndDate = new Date(Date.UTC(y, m - 1, Number(n.today.split("-")[2]) + 7));
+  const weekEndIso = weekEndDate.toISOString().slice(0, 10);
+  const ahead = events
+    .filter((e) => e.date >= todayIso)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const thisWeekCount = ahead.filter((e) => e.date <= weekEndIso).length;
+  const nextEvent = ahead[0];
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const fmtDate = (iso: string) => {
+    const [yy, mm, dd] = iso.split("-").map(Number);
+    return `${MONTHS[mm - 1]} ${dd}${yy !== y ? `, ${yy}` : ""}`;
+  };
+
   return (
     <div className="pagewrap rise">
-      <div className="hero" style={{ marginBottom: 10 }}>
+      <div className="hero" style={{ marginBottom: 14 }}>
         <div>
           <div className="eyebrow">Command center</div>
           <h1>Calendar</h1>
         </div>
+        {(nextEvent || thisWeekCount > 0) && (
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div className="feature teal" style={{ padding: "14px 18px", minWidth: 200 }}>
+              <div className="ficon"><CalendarDays size={18} /></div>
+              <div className="disp2" style={{ fontSize: 26, lineHeight: 1.05 }}>{thisWeekCount}</div>
+              <div className="fmeta">{thisWeekCount === 1 ? "item" : "items"} in the next 7 days</div>
+            </div>
+            {nextEvent && (
+              <div className="feature peri" style={{ padding: "14px 18px", minWidth: 220, maxWidth: 320 }}>
+                <div style={{ marginBottom: 8 }}>
+                  <span className="badge peri">Next up</span>
+                </div>
+                <div className="ftitle" style={{ fontSize: 15, lineHeight: 1.2 }}>{nextEvent.title}</div>
+                <div className="fmeta">
+                  {fmtDate(nextEvent.date)}
+                  {nextEvent.time ? `, ${nextEvent.time}` : ""}
+                  {nextEvent.type ? ` · ${nextEvent.type}` : ""}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <Calendar initialMonth={monthKey} initialEvents={events} googleLinked={gcalConfigured()} />
     </div>

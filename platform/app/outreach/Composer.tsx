@@ -69,18 +69,15 @@ export default function Composer({
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
-      <header className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">Outreach</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Send a newsletter or email blast to your donors and contacts. Each greeting personalizes to
-          the recipient's first name. Write once, reach everyone.
-        </p>
-      </header>
+    <div>
+      <p className="mb-8 max-w-2xl text-sm text-neutral-500">
+        Send a newsletter or email blast to your donors and contacts. Each greeting personalizes to
+        the recipient's first name. Write once, reach everyone.
+      </p>
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_minmax(320px,420px)]">
         {/* Composer */}
-        <div className="space-y-6">
+        <div className="card space-y-6" style={{ padding: 22 }}>
           {/* Audience */}
           <div>
             <label className="block text-sm font-medium text-neutral-700">Audience</label>
@@ -139,7 +136,7 @@ export default function Composer({
               onChange={(e) => setSubject(e.target.value)}
               type="text"
               className="mt-1 w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-900"
-              placeholder="Subject line — you can use {{first_name}}"
+              placeholder="Subject line, you can use {{first_name}}"
             />
           </div>
 

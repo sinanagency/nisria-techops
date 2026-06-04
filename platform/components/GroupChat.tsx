@@ -9,12 +9,12 @@ import Link from "next/link";
 import { useTabs } from "./tabs-context";
 import SubmitButton from "./SubmitButton";
 import {
-  Users, ChevronLeft, ChevronRight, ChevronDown, Search, Maximize2, Send,
+  Users, ChevronLeft, ChevronRight, Search, Maximize2, Send,
   FileText, Image as ImageIcon, Mic, ExternalLink, X,
 } from "lucide-react";
 import { postToGroupAction } from "../app/team/actions";
 
-export type GroupRef = { name: string; last: string };
+export type GroupRef = { name: string; last: string; count?: number };
 type Msg = { id: string; body: string; name: string; mine: boolean; at: string; href: string | null };
 
 // A fixed palette so each sender keeps a stable colour (WhatsApp does the same).
@@ -158,14 +158,31 @@ export function GroupChatPane({ group, fullscreen }: { group: string; fullscreen
   );
 }
 
-// The Groups-page widget: client-side group switcher (edge arrows + dropdown,
-// smooth, no reload) + Maximize into the FocusSheet with all groups as siblings.
+// Short relative "last activity" label for the group list (presentation only).
+function lastActivity(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!isFinite(ms)) return "";
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day === 1) return "yesterday";
+  if (day < 7) return `${day}d ago`;
+  try { return new Date(iso).toLocaleDateString([], { day: "numeric", month: "short" }); } catch { return ""; }
+}
+
+// The Groups-page widget: a clean master/detail surface. Left, the list of team
+// groups (name + last activity + message count). Right, the chat pane. Selecting
+// a group switches the conversation in place (no reload). Maximize opens the
+// canonical FocusSheet with every group as a sibling, so the overlay's prev/next
+// arrows step between groups (same as Need You). All load + send wiring preserved.
 export default function GroupChat({ groups, initial }: { groups: GroupRef[]; initial: string }) {
   const { openSheet } = useTabs();
   const [sel, setSel] = useState(initial);
   const idx = groups.findIndex((g) => g.name === sel);
   const prev = groups[idx - 1], next = groups[idx + 1];
-  const [menu, setMenu] = useState(false);
 
   // Build the FocusSheet for a group, with every group as a sibling so the
   // overlay's prev/next arrows step between groups in place (like Need You).
@@ -176,37 +193,50 @@ export default function GroupChat({ groups, initial }: { groups: GroupRef[]; ini
   }), [groups]);
 
   return (
-    <div style={{ position: "relative" }}>
-      {/* edge arrows */}
-      {prev && <button aria-label="Previous group" onClick={() => setSel(prev.name)} className="wa-edge" style={{ left: -6 }}><ChevronLeft size={20} /></button>}
-      {next && <button aria-label="Next group" onClick={() => setSel(next.name)} className="wa-edge" style={{ right: -6 }}><ChevronRight size={20} /></button>}
-
-      {/* header: group name + switcher + maximize */}
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px" }}>
-          <span className="aico teal"><Users size={15} /></span>
-          <button onClick={() => setMenu((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", fontWeight: 700, fontSize: 15, color: "var(--ink)", fontFamily: "var(--font-body)" }}>
-            {sel} <ChevronDown size={15} />
-          </button>
-          <div style={{ flex: 1 }} />
-          <button aria-label="Maximize" className="iconbtn" onClick={() => openSheet(buildSheet(sel))} title="Open full screen"><Maximize2 size={16} /></button>
+    <div className="grid" style={{ gridTemplateColumns: "300px 1fr", gap: 12, alignItems: "start" }}>
+      {/* LEFT: the group list */}
+      <aside className="card" style={{ overflow: "hidden", display: "flex", flexDirection: "column", alignSelf: "start", maxHeight: "calc(62vh + 116px)" }}>
+        <div className="card-h" style={{ position: "sticky", top: 0, zIndex: 1, background: "var(--surface-elevated)" }}>
+          <span className="flex" style={{ gap: 8 }}><Users size={15} style={{ color: "var(--teal-700)" }} /> Groups</span>
+          <span className="badge gray">{groups.length}</span>
         </div>
-        {menu && (
-          <div style={{ borderTop: "1px solid var(--line)", padding: 6, maxHeight: 280, overflowY: "auto" }}>
-            {groups.map((g) => (
-              <button key={g.name} onClick={() => { setSel(g.name); setMenu(false); }} className="actrow" style={{ width: "100%", textAlign: "left", border: "none", background: g.name === sel ? "var(--canvas)" : "transparent", cursor: "pointer", borderRadius: 8 }}>
-                <span className="aico teal"><Users size={14} /></span>
-                <div className="abody"><div className="atitle">{g.name}</div><div className="ameta">last {new Date(g.last).toLocaleDateString()}</div></div>
+        <div style={{ overflowY: "auto", padding: 6, flex: 1 }}>
+          {groups.map((g) => {
+            const active = g.name === sel;
+            return (
+              <button
+                key={g.name}
+                onClick={() => setSel(g.name)}
+                aria-current={active ? "true" : undefined}
+                className="actrow"
+                style={{ width: "100%", textAlign: "left", border: "none", background: active ? "var(--canvas)" : "transparent", cursor: "pointer", borderRadius: 10, borderLeft: active ? "3px solid var(--teal)" : "3px solid transparent" }}
+              >
+                <span className="aico teal" style={{ position: "relative" }}><Users size={15} /></span>
+                <div className="abody">
+                  <div className="atitle" style={{ fontWeight: active ? 700 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
+                  <div className="ameta">{lastActivity(g.last)}{typeof g.count === "number" ? ` · ${g.count} msg` : ""}</div>
+                </div>
               </button>
-            ))}
-          </div>
-        )}
-      </div>
+            );
+          })}
+        </div>
+      </aside>
 
-      {/* inline chat */}
-      <div className="card" style={{ overflow: "hidden" }}>
+      {/* RIGHT: the chat for the selected group */}
+      <section className="card" style={{ overflow: "hidden", position: "relative" }}>
+        <div className="card-h">
+          <span className="flex" style={{ gap: 9, minWidth: 0 }}>
+            <span className="aico teal" style={{ flex: "0 0 auto" }}><Users size={15} /></span>
+            <span className="disp2" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sel}</span>
+          </span>
+          <span className="flex" style={{ gap: 6, flex: "0 0 auto" }}>
+            <button aria-label="Previous group" className="iconbtn sm" disabled={!prev} onClick={() => prev && setSel(prev.name)} title="Previous group" style={{ opacity: prev ? 1 : 0.4 }}><ChevronLeft size={16} /></button>
+            <button aria-label="Next group" className="iconbtn sm" disabled={!next} onClick={() => next && setSel(next.name)} title="Next group" style={{ opacity: next ? 1 : 0.4 }}><ChevronRight size={16} /></button>
+            <button aria-label="Open full screen" className="iconbtn sm" onClick={() => openSheet(buildSheet(sel))} title="Open full screen"><Maximize2 size={16} /></button>
+          </span>
+        </div>
         <GroupChatPane group={sel} />
-      </div>
+      </section>
     </div>
   );
 }

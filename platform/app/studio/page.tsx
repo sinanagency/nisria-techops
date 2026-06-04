@@ -22,9 +22,22 @@ export default async function Studio() {
       sub="Drop screenshots or files, say what you need, and the Studio assembles a branded, printable document grounded in Nisria's history."
       action={<Badge tone="teal"><Wand2 size={11} /> AI document studio</Badge>}
     >
-      <StudioConsole />
+      {/* The generation console leads, framed as the hero feature: this is the
+          intake zone where you describe a document and the AI assembles it. */}
+      <div className="feature teal" style={{ marginBottom: 18, padding: 18 }}>
+        <div className="flex" style={{ gap: 10, marginBottom: 14 }}>
+          <div className="ficon" style={{ background: "var(--teal)", color: "#fff", width: 36, height: 36, marginBottom: 0 }}><Wand2 size={18} /></div>
+          <div>
+            <div className="ftitle disp2" style={{ fontSize: 19 }}>Assemble a document</div>
+            <div className="fmeta">Describe it, drop any inputs, and the Studio drafts a branded, printable result grounded in Nisria's history.</div>
+          </div>
+        </div>
+        <StudioConsole />
+      </div>
 
-      <Card title="Recent documents" action={<Badge tone="gray">{docs.length}</Badge>}>
+      {/* Everything generated lands below as a card grid: type badge, brand,
+          date, and open / download on each. */}
+      <Card title="Generated documents" action={<Badge tone="gray">{docs.length}</Badge>}>
         <div className="card-pad">
           {docs.length === 0 ? (
             <div className="empty">
