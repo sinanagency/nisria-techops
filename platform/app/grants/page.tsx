@@ -9,9 +9,23 @@ import { admin, money, date } from "../../lib/supabase-admin";
 import { now } from "../../lib/now";
 import { advanceStatus, declineGrant } from "./actions";
 import { PursueButton } from "../../components/GrantQuickActions";
+import FilterBar, { FilterField, Segment } from "../../components/FilterBar";
 import { Compass, Send, X, Award, Layers, Search, Trophy } from "lucide-react";
 
 export const dynamic = "force-dynamic";
+
+// Stage values the agent actually writes to grant_applications.status. These are
+// the only values worth exposing as a filter, since they are what the data holds
+// (drafting/review collapse into "prepared" on the board but remain distinct
+// statuses in the row). Each maps the omnibar to a real slice of the grants set.
+const STATUS_OPTS: { v: string; label: string }[] = [
+  { v: "researching", label: "Researching" },
+  { v: "drafting", label: "Drafting" },
+  { v: "review", label: "Prepared · review" },
+  { v: "submitted", label: "Submitted" },
+  { v: "won", label: "Won" },
+  { v: "lost", label: "Lost" },
+];
 
 // R4-3: a grant whose deadline is in the PAST is dead. Do not surface it as
 // actionable. `grant_applications.deadline` is a real date; a grant_opportunity
@@ -74,7 +88,18 @@ function railClass(colKey: string, status: string): string {
   return "is-research";
 }
 
-export default async function Grants() {
+export default async function Grants({
+  searchParams,
+}: {
+  searchParams?: { [key: string]: string | string[] | undefined };
+}) {
+  // normalize incoming filter params (URL-driven, Law 10)
+  const sp = searchParams || {};
+  const one = (k: string) => (Array.isArray(sp[k]) ? (sp[k] as string[])[0] : (sp[k] as string | undefined)) || "";
+  const q = one("q").trim();
+  const statusFilter = one("status");
+  const funderFilter = one("funder").trim();
+
   const db = admin();
   const [{ data }, { data: oppsRaw }, n] = await Promise.all([
     db.from("grant_applications").select("*").order("deadline", { ascending: true }).limit(300),
@@ -82,7 +107,23 @@ export default async function Grants() {
     now(),
   ]);
   const todayIso = n.today;
-  const grants: any[] = data || [];
+  const allGrants: any[] = data || [];
+
+  // Apply the omnibar filters to the already-loaded set (small dataset, no new
+  // query). Everything downstream (funnel header, active band, kanban) derives
+  // from `grants`, so filtering here narrows all of them consistently while the
+  // page structure stays intact.
+  let grants: any[] = allGrants;
+  if (statusFilter) grants = grants.filter((g: any) => (g.status || "researching").toLowerCase() === statusFilter);
+  if (funderFilter) {
+    const needle = funderFilter.toLowerCase();
+    grants = grants.filter((g: any) => clean(g.funder).toLowerCase().includes(needle) || clean(g.program).toLowerCase().includes(needle));
+  }
+  if (q) {
+    const needle = q.toLowerCase();
+    grants = grants.filter((g: any) => clean(g.funder).toLowerCase().includes(needle) || clean(g.program).toLowerCase().includes(needle));
+  }
+  const isFiltered = !!(q || statusFilter || funderFilter);
 
   // R4-3: drop dead opportunities (close_date strictly before today) from the
   // feed so nothing expired is offered as actionable; keep the top 12 live ones.
@@ -138,6 +179,24 @@ export default async function Grants() {
   const wonValue = wonGrants.reduce((sum: number, g: any) => sum + Number(g.amount_awarded || 0), 0);
   const openCount = researchingCount + inProgressCount + submittedCount;
 
+  // Uniform filter omnibar (Law 10). Fields map 1:1 to the querystring params
+  // the server filters on above, so the chip builder is fully functional with
+  // the existing data logic. Only fields that actually narrow the grants set are
+  // exposed: stage (status) and funder/program (a real grant field).
+  const filterFields: FilterField[] = [
+    { key: "status", label: "Stage", type: "select", options: STATUS_OPTS },
+    { key: "funder", label: "Funder", type: "text" },
+  ];
+  const filterSegments: Segment[] = [
+    { label: "All", patch: { status: undefined }, on: !statusFilter },
+    { label: "Researching", patch: { status: "researching" }, on: statusFilter === "researching" },
+    { label: "Prepared", patch: { status: "review" }, on: statusFilter === "review" },
+    { label: "Submitted", patch: { status: "submitted" }, on: statusFilter === "submitted" },
+    { label: "Won", patch: { status: "won" }, on: statusFilter === "won" },
+    { label: "Lost", patch: { status: "lost" }, on: statusFilter === "lost" },
+  ];
+  const filterValues: Record<string, string> = { q, status: statusFilter, funder: funderFilter };
+
   return (
     <Shell
       title="Grants"
@@ -149,6 +208,16 @@ export default async function Grants() {
         </span>
       }
     >
+      <FilterBar
+        basePath="/grants"
+        fields={filterFields}
+        values={filterValues}
+        segments={filterSegments}
+        count={grants.length}
+        searchKey="q"
+        searchPlaceholder="Search funder or program…"
+      />
+
       {/* PIPELINE SUMMARY (Law 5): lead with the number that matters. The
           headline is the funding value still in play; the funnel row below
           counts grants by stage. All values derive from the grants already
@@ -276,8 +345,14 @@ export default async function Grants() {
       {grants.length === 0 ? (
         <Card title="Grant pipeline">
           <div className="empty">
-            <div style={{ marginBottom: 6 }}>No grant applications yet.</div>
-            <div className="faint" style={{ fontSize: 13 }}>Tap “Add grant” above to start the pipeline, or let the grant hunter pursue strong finds. The Grant agent then auto-prepares each one for your review.</div>
+            {isFiltered ? (
+              <div>No grant applications match these filters.</div>
+            ) : (
+              <>
+                <div style={{ marginBottom: 6 }}>No grant applications yet.</div>
+                <div className="faint" style={{ fontSize: 13 }}>Tap “Add grant” above to start the pipeline, or let the grant hunter pursue strong finds. The Grant agent then auto-prepares each one for your review.</div>
+              </>
+            )}
           </div>
         </Card>
       ) : (

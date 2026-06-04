@@ -1,23 +1,13 @@
 import Shell from "../../components/Shell";
 import { Card, Table, Badge, Col, statusTone } from "../../components/ui";
 import { admin, date } from "../../lib/supabase-admin";
-import { Search, Heart, Check, Clock, Repeat } from "lucide-react";
+import { Heart, Check, Clock, Repeat } from "lucide-react";
 import { draftThankYouFor, draftAllThankYous } from "./actions";
 import DonationPeek from "../../components/DonationPeek";
 import { Money, MoneyHideToggle } from "../../components/Money";
+import FilterBar, { FilterField } from "../../components/FilterBar";
 
 export const dynamic = "force-dynamic";
-
-// Build a querystring for a filter pill while preserving the other active filters.
-function qs(current: Record<string, string>, patch: Record<string, string | undefined>) {
-  const next: Record<string, string> = { ...current };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === undefined || v === "") delete next[k];
-    else next[k] = v;
-  }
-  const s = new URLSearchParams(next).toString();
-  return s ? `/donations?${s}` : "/donations";
-}
 
 const STATUS_OPTS = ["succeeded", "pending", "refunded", "failed"];
 const RANGE_OPTS: { v: string; label: string }[] = [
@@ -39,13 +29,6 @@ export default async function Donations({
   const recurring = one("recurring"); // yes | no | ""
   const status = one("status"); // succeeded | pending | refunded | failed | ""
   const range = one("range") || "all"; // 30 | 90 | 365 | all
-
-  // querystring base (used to build pill links without losing other filters)
-  const active: Record<string, string> = {};
-  if (q) active.q = q;
-  if (recurring) active.recurring = recurring;
-  if (status) active.status = status;
-  if (range && range !== "all") active.range = range;
 
   const db = admin();
   const { data } = await db
@@ -169,6 +152,23 @@ export default async function Donations({
     </>
   );
 
+  // Modern filter omnibar config (Filtering v2). Fields map 1:1 to the
+  // querystring params the server already filters on, so the chip builder is
+  // fully functional with the existing data logic. Only real filterable params
+  // are exposed: status, cadence (recurring), and period (range). No sort param
+  // is read server-side, so no sort dropdown is offered.
+  const filterFields: FilterField[] = [
+    { key: "status", label: "Status", type: "select", options: STATUS_OPTS.map((s) => ({ v: s, label: s })) },
+    { key: "recurring", label: "Cadence", type: "select", options: [{ v: "yes", label: "Monthly" }, { v: "no", label: "One-off" }] },
+    { key: "range", label: "Period", type: "select", op: "within", options: RANGE_OPTS.filter((r) => r.v !== "all").map((r) => ({ v: r.v, label: r.label })) },
+  ];
+  const filterValues: Record<string, string> = {
+    q,
+    status,
+    recurring,
+    range: range === "all" ? "" : range,
+  };
+
   return (
     <Shell
       title="Donations"
@@ -228,46 +228,14 @@ export default async function Donations({
       </div>
 
       {/* filters */}
-      <div className="card card-pad" style={{ marginBottom: 16 }}>
-        <div className="stack" style={{ gap: 14 }}>
-          {/* search */}
-          <form method="GET" action="/donations" className="flex" style={{ gap: 8 }}>
-            <input type="hidden" name="recurring" value={recurring} />
-            <input type="hidden" name="status" value={status} />
-            <input type="hidden" name="range" value={range} />
-            <input name="q" defaultValue={q} placeholder="Search donor name…" style={{ maxWidth: 320 }} />
-            <button className="btn ghost sm" type="submit"><Search size={14} /> Search</button>
-            {q && (
-              <a className="pill" href={qs(active, { q: undefined })}>Clear “{q}”</a>
-            )}
-          </form>
-
-          {/* recurring */}
-          <div className="flex wrap" style={{ gap: 6 }}>
-            <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", minWidth: 76 }}>Recurring</span>
-            <a className={`pill ${!recurring ? "on" : ""}`} href={qs(active, { recurring: undefined })}>All</a>
-            <a className={`pill ${recurring === "yes" ? "on" : ""}`} href={qs(active, { recurring: "yes" })}>Monthly</a>
-            <a className={`pill ${recurring === "no" ? "on" : ""}`} href={qs(active, { recurring: "no" })}>One-off</a>
-          </div>
-
-          {/* status */}
-          <div className="flex wrap" style={{ gap: 6 }}>
-            <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", minWidth: 76 }}>Status</span>
-            <a className={`pill ${!status ? "on" : ""}`} href={qs(active, { status: undefined })}>All</a>
-            {STATUS_OPTS.map((s) => (
-              <a key={s} className={`pill ${status === s ? "on" : ""}`} href={qs(active, { status: s })}>{s}</a>
-            ))}
-          </div>
-
-          {/* range */}
-          <div className="flex wrap" style={{ gap: 6 }}>
-            <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", minWidth: 76 }}>Period</span>
-            {RANGE_OPTS.map((r) => (
-              <a key={r.v} className={`pill ${range === r.v ? "on" : ""}`} href={qs(active, { range: r.v === "all" ? undefined : r.v })}>{r.label}</a>
-            ))}
-          </div>
-        </div>
-      </div>
+      <FilterBar
+        basePath="/donations"
+        fields={filterFields}
+        values={filterValues}
+        count={rows.length}
+        searchKey="q"
+        searchPlaceholder="Search donor name…"
+      />
 
       <Card title="All donations">
         <Table

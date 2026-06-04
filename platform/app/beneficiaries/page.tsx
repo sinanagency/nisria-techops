@@ -4,7 +4,8 @@ import { admin, money, date } from "../../lib/supabase-admin";
 import { Money } from "../../components/Money";
 import BeneficiaryPeek from "../../components/BeneficiaryPeek";
 import BeneficiaryIntake from "../../components/BeneficiaryIntake";
-import { Search, Lock } from "lucide-react";
+import FilterBar, { FilterField, Segment } from "../../components/FilterBar";
+import { Lock } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,14 @@ function qs(current: Record<string, string>, patch: Record<string, string | unde
 }
 
 const STATUS_OPTS = ["active", "graduated", "transitioned", "paused", "exited", "inactive"];
+// Real program enum (matches actions.ts PROGRAMS); labels mirror the 360 view.
+const PROGRAM_OPTS: { v: string; label: string }[] = [
+  { v: "safe_house", label: "Safe house" },
+  { v: "education", label: "Education" },
+  { v: "rescue", label: "Rescue" },
+  { v: "nutrition", label: "Nutrition" },
+  { v: "other", label: "Other" },
+];
 
 export default async function Beneficiaries({
   searchParams,
@@ -146,6 +155,23 @@ export default async function Beneficiaries({
 
   const sub = `${rows.length} ${rows.length === 1 ? "record" : "records"} · private to you and Nur`;
 
+  // Uniform filter omnibar (Law 10). Fields map 1:1 to the querystring params
+  // the server already filters on, so the chip builder stays fully grounded in
+  // the existing data logic. Cohort views ride along as saved-view segments.
+  const filterFields: FilterField[] = [
+    { key: "program", label: "Program", type: "select", options: PROGRAM_OPTS },
+    { key: "status", label: "Status", type: "select", options: STATUS_OPTS.map((s) => ({ v: s, label: s })) },
+    { key: "consent", label: "Public", type: "select", options: [{ v: "public", label: "Consented" }, { v: "private", label: "Private only" }] },
+    { key: "photo", label: "Photo", type: "select", options: [{ v: "with", label: "With photo" }, { v: "without", label: "No photo" }] },
+  ];
+  const filterSegments: Segment[] = [
+    { label: "Everyone", patch: { cat: undefined, status: undefined, program: undefined, consent: undefined, photo: undefined }, on: !isFiltered },
+    { label: "Rescue children", patch: { cat: KWETU, status: "active" }, on: cohortActive("rescue") },
+    { label: "Alumni", patch: { cat: undefined, status: "transitioned" }, on: cohortActive("alumni") },
+    { label: "Microfund women", patch: { cat: MICRO, status: undefined }, on: cohortActive("micro") },
+  ];
+  const filterValues: Record<string, string> = { q, program, status, consent, cat, photo };
+
   return (
     <Shell title="Beneficiaries" sub={sub} action={<Badge tone="gold">{publicCount} public profiles live</Badge>}>
       {/* HEADLINE — the one number this surface exists to show: lives on the
@@ -187,45 +213,16 @@ export default async function Beneficiaries({
         </a>
       </div>
 
-      {/* filters */}
-      <div className="card card-pad" style={{ marginBottom: 16 }}>
-        <div className="stack" style={{ gap: 14 }}>
-          {/* search */}
-          <form method="GET" action="/beneficiaries" className="flex" style={{ gap: 8 }}>
-            <input type="hidden" name="program" value={program} />
-            <input type="hidden" name="status" value={status} />
-            <input type="hidden" name="consent" value={consent} />
-            <input name="q" defaultValue={q} placeholder="Search name, ref or location…" style={{ maxWidth: 320 }} />
-            <button className="btn ghost sm" type="submit"><Search size={14} /> Search</button>
-            {q && <a className="pill" href={qs(active, { q: undefined })}>Clear &ldquo;{q}&rdquo;</a>}
-          </form>
-
-          {/* status */}
-          <div className="flex wrap" style={{ gap: 6 }}>
-            <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", minWidth: 76 }}>Status</span>
-            <a className={`pill ${!status ? "on" : ""}`} href={qs(active, { status: undefined })}>All</a>
-            {STATUS_OPTS.map((s) => (
-              <a key={s} className={`pill ${status === s ? "on" : ""}`} href={qs(active, { status: s })}>{s}</a>
-            ))}
-          </div>
-
-          {/* consent */}
-          <div className="flex wrap" style={{ gap: 6 }}>
-            <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", minWidth: 76 }}>Public</span>
-            <a className={`pill ${!consent ? "on" : ""}`} href={qs(active, { consent: undefined })}>All</a>
-            <a className={`pill ${consent === "public" ? "on" : ""}`} href={qs(active, { consent: "public" })}>Consented</a>
-            <a className={`pill ${consent === "private" ? "on" : ""}`} href={qs(active, { consent: "private" })}>Private only</a>
-          </div>
-
-          {/* photo */}
-          <div className="flex wrap" style={{ gap: 6 }}>
-            <span className="faint" style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", minWidth: 76 }}>Photo</span>
-            <a className={`pill ${!photo ? "on" : ""}`} href={qs(active, { photo: undefined })}>All</a>
-            <a className={`pill ${photo === "with" ? "on" : ""}`} href={qs(active, { photo: "with" })}>With photo</a>
-            <a className={`pill ${photo === "without" ? "on" : ""}`} href={qs(active, { photo: "without" })}>No photo</a>
-          </div>
-        </div>
-      </div>
+      {/* filters — the uniform omnibar (Law 10) */}
+      <FilterBar
+        basePath="/beneficiaries"
+        fields={filterFields}
+        values={filterValues}
+        segments={filterSegments}
+        count={rows.length}
+        searchKey="q"
+        searchPlaceholder="Search name, ref or location…"
+      />
 
       <Card title="All beneficiaries" action={<Badge tone="gold">consent-gated for public</Badge>}>
         <Table
