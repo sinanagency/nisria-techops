@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
 import { sendTextAndLog, phoneKey } from "../../../../lib/whatsapp";
+import { pushDailyBrief } from "../../../../lib/notify";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -63,7 +64,7 @@ async function run(force: boolean) {
 
   // Roster + operator allowlist (Nur + builder).
   const ops = (process.env.WHATSAPP_OPERATORS || "").split(",").map((x) => phoneKey(x)).filter(Boolean);
-  const { data: mem } = await db.from("team_members").select("id,name,phone,status").limit(400);
+  const { data: mem } = await db.from("team_members").select("id,name,phone,status,bot_access").limit(400);
   const roster = (mem || []) as any[];
   const isOp = (m: any) => ops.includes(phoneKey(m.phone));
 
@@ -108,9 +109,19 @@ async function run(force: boolean) {
     results.push({ to: phoneKey(m.phone).slice(-4), via: "text", ok: !!r?.id, tasks: mine.length });
   }
 
-  // NOTE: 727 only serves the two principals (Nur + builder). Field staff are NOT
-  // DM'd a brief here; their tasks reach them via the GROUP bot. Staff overdue
-  // surfaces to Nur as the team-overdue roll-up above, so she can chase in-group.
+  // 2) Team members WITH bot_access: each has their own restricted 727 line now,
+  // so they get the daily_brief TEMPLATE (a count + "reply LIST") for THEIR due
+  // tasks. They are off-window, so the template path is required; free-form text
+  // would silently fail. Members WITHOUT bot_access still get nothing here: their
+  // tasks reach them via the GROUP bot, and Nur sees them in the roll-up above.
+  for (const m of roster) {
+    if (isOp(m)) continue; // operators already handled above
+    if (m.bot_access !== true) continue; // no 727 line: group bot covers them
+    const mine = byAssignee.get(m.id) || [];
+    if (!mine.length) continue;
+    const ok = await pushDailyBrief(db, phoneKey(m.phone), mine.length);
+    results.push({ to: phoneKey(m.phone).slice(-4), via: "template", ok, tasks: mine.length });
+  }
 
   await emit({ type: "reminder.operator_brief", source: "cron", actor: "system", subject_type: "contact", subject_id: null, payload: { date: today, recipients: results.length, needsYou, teamOverdue: teamOverdue.length, results } });
   return { ok: true, date: today, recipients: results.length, needsYou, teamOverdue: teamOverdue.length, sent: results, nothing: results.length === 0 };

@@ -56,25 +56,31 @@ export async function pushTaskAlert(
       return { pinged: [], deduped: true };
     }
     const ops = operatorKeys();
-    const { data: members } = await db.from("team_members").select("id,name,phone,status").limit(400);
+    const { data: members } = await db.from("team_members").select("id,name,phone,status,bot_access").limit(400);
     const roster = (members || []) as any[];
-    // 727 ONLY serves the two principals (Nur + the builder). Field staff get
-    // their tasks via the GROUP bot, never an unsolicited 727 DM. So:
-    //   - Nur (the operator on the roster) is always a recipient.
-    //   - the assignee is added ONLY IF the assignee is also an operator.
-    //   - a task assigned to a NON-operator staffer => no 727 push at all
-    //     (return empty; the group bot @mentions them in their group instead).
+    // WHO HAS A 727 LINE (updated after the tiered-access change): the two
+    // principals (Nur + the builder) ALWAYS, plus any team member granted
+    // bot_access. A bot_access staffer now has their own restricted 727 session,
+    // so an urgent task assigned to them DOES ping them on that line. A staffer
+    // with NO bot_access still has no 727 line: their tasks reach them via the
+    // GROUP bot, so we send no DM (return empty).
     const nur = roster.find((m) => ops.includes(phoneKey(m.phone)));
     const nurWa = nur ? phoneKey(nur.phone) : (ops[0] || null);
     const assignee = task.assignee_id ? roster.find((m) => m.id === task.assignee_id) : null;
     const assigneeIsOperator = assignee ? ops.includes(phoneKey(assignee.phone)) : false;
-    // Assigned to a staffer who does not use 727: this is not a 727 event.
-    if (assignee && !assigneeIsOperator) return { pinged: [] };
-    const assigneeWa = assigneeIsOperator ? phoneKey(assignee.phone) : null;
+    const assigneeHasBot = assignee ? assignee.bot_access === true : false;
+    // Assigned to a staffer with no 727 line at all: not a 727 event.
+    if (assignee && !assigneeIsOperator && !assigneeHasBot) return { pinged: [] };
+    const assigneeWa = assignee && (assigneeIsOperator || assigneeHasBot) ? phoneKey(assignee.phone) : null;
 
-    // Recipients: the operator assignee + Nur, de-duplicated. (Nur's own or an
-    // unassigned reminder pings just Nur; a task on the builder pings him + Nur.)
-    const recipients = Array.from(new Set([assigneeWa, nurWa].filter(Boolean))) as string[];
+    // Recipients. An operator/builder task pings the assignee + Nur (she co-owns
+    // the principal lane). A pure team-member task (bot_access, not an operator)
+    // pings JUST that member on their own line: Nur hears it in the morning
+    // roll-up, not as a real-time double-ping every time she delegates.
+    const teamMemberTask = !!assignee && assigneeHasBot && !assigneeIsOperator;
+    const recipients = teamMemberTask
+      ? ([assigneeWa].filter(Boolean) as string[])
+      : (Array.from(new Set([assigneeWa, nurWa].filter(Boolean))) as string[]);
     if (!recipients.length) return { pinged: [] };
 
     const adj = kind === "escalation" ? "an overdue" : task.priority === "high" ? "an urgent" : "a new";
