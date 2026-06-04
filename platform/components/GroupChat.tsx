@@ -14,8 +14,37 @@ import {
 } from "lucide-react";
 import { postToGroupAction } from "../app/team/actions";
 
-export type GroupRef = { name: string; last: string; count?: number };
-type Msg = { id: string; body: string; name: string; mine: boolean; at: string; href: string | null };
+export type GroupRef = { name: string; last: string; count?: number; avatar?: string | null; subject?: string | null };
+
+// Initials for a group monogram when there is no real WhatsApp avatar yet. Use the
+// distinctive part after a "•" ("Nisria • Rescue & Rehab" -> "RR"), else the name.
+function groupInitials(name: string): string {
+  const core = name.includes("•") ? name.split("•").pop()!.trim() : name;
+  const words = core.replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+  return (((words[0]?.[0] || "") + (words[1]?.[0] || "")).toUpperCase()) || "G";
+}
+
+// The group icon: the real WhatsApp group photo when we have it (groups.avatar_url),
+// otherwise a deterministic coloured monogram so each group reads distinct (not the
+// old identical generic icon on every row).
+function GroupIcon({ g, size = 36 }: { g?: GroupRef | null; size?: number }) {
+  if (g?.avatar) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={g.avatar} alt="" style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flex: "0 0 auto" }} />;
+  }
+  const c = colorFor(g?.name || "Group");
+  return (
+    <span style={{ width: size, height: size, borderRadius: "50%", background: c, color: "#fff", display: "grid", placeItems: "center", fontWeight: 700, fontSize: Math.round(size * 0.36), flex: "0 0 auto", letterSpacing: "-0.02em" }}>
+      {groupInitials(g?.name || "G")}
+    </span>
+  );
+}
+type Media = { url: string; mime: string };
+type Msg = { id: string; body: string; name: string; mine: boolean; at: string; href: string | null; media?: Media | null };
+
+// a body that is only a media placeholder ("[image]", "[document] file.pdf",
+// "[case photo] ...") carries no real text once we have the actual attachment.
+const PLACEHOLDER_BODY = /^\[(image|photo|document|case photo|voice note)\]/i;
 
 // A fixed palette so each sender keeps a stable colour (WhatsApp does the same).
 const NAME_COLORS = ["#1f8a70", "#b5683b", "#7a5cc7", "#c2417a", "#2b6cb0", "#9a7d0a", "#0e7c86", "#a23b72", "#3f7d20", "#b23a48", "#5a4fcf", "#0f766e"];
@@ -138,9 +167,36 @@ export function GroupChatPane({ group, fullscreen }: { group: string; fullscreen
                   </div>
                 )}
                 <div style={{ maxWidth: "78%", background: m.mine ? "var(--teal)" : "var(--surface-elevated)", color: m.mine ? "#fff" : "var(--ink)", border: m.mine ? "none" : "1px solid var(--line)", borderRadius: 12, padding: "7px 11px", boxShadow: "0 1px 1px rgba(0,0,0,0.04)" }}>
-                  {mi && <span style={{ opacity: 0.85, marginRight: 5, verticalAlign: "middle" }}>{mi}</span>}
-                  <Body text={m.body} q={q} />
-                  <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2, textAlign: "right" }}>{fmtTime(m.at)}</div>
+                  {(() => {
+                    const body = (m.body || "").trim();
+                    const isPlaceholder = PLACEHOLDER_BODY.test(body);
+                    const isImage = m.media && (/^image\//i.test(m.media.mime) || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(m.media.url));
+                    const docName = body.replace(/^\[(document|image|photo|case photo|voice note)\]\s*/i, "").trim();
+                    return (
+                      <>
+                        {/* real attachment posted in the group, rendered inline */}
+                        {m.media && isImage && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <a href={m.media.url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
+                            <img src={m.media.url} alt={docName || "photo"} style={{ maxWidth: "100%", maxHeight: 280, borderRadius: 10, display: "block" }} />
+                          </a>
+                        )}
+                        {m.media && !isImage && (
+                          <a href={m.media.url} target="_blank" rel="noreferrer" className="chip" style={{ display: "inline-flex", gap: 6, marginBottom: docName ? 4 : 0, color: m.mine ? "#fff" : "var(--teal-700)", maxWidth: "100%" }}>
+                            <FileText size={13} /> <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName || "Document"}</span>
+                          </a>
+                        )}
+                        {/* show the text body unless it is only a media placeholder we already rendered */}
+                        {!(m.media && isPlaceholder) && (
+                          <>
+                            {mi && !m.media && <span style={{ opacity: 0.85, marginRight: 5, verticalAlign: "middle" }}>{mi}</span>}
+                            <Body text={m.body} q={q} />
+                          </>
+                        )}
+                        <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2, textAlign: "right" }}>{fmtTime(m.at)}</div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -183,6 +239,7 @@ export default function GroupChat({ groups, initial }: { groups: GroupRef[]; ini
   const [sel, setSel] = useState(initial);
   const idx = groups.findIndex((g) => g.name === sel);
   const prev = groups[idx - 1], next = groups[idx + 1];
+  const selRef = groups[idx];
 
   // Build the FocusSheet for a group, with every group as a sibling so the
   // overlay's prev/next arrows step between groups in place (like Need You).
@@ -211,9 +268,9 @@ export default function GroupChat({ groups, initial }: { groups: GroupRef[]; ini
                 className="actrow"
                 style={{ width: "100%", textAlign: "left", border: "none", background: active ? "var(--canvas)" : "transparent", cursor: "pointer", borderRadius: 10, borderLeft: active ? "3px solid var(--teal)" : "3px solid transparent" }}
               >
-                <span className="aico teal" style={{ position: "relative" }}><Users size={15} /></span>
+                <GroupIcon g={g} size={36} />
                 <div className="abody">
-                  <div className="atitle" style={{ fontWeight: active ? 700 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</div>
+                  <div className="atitle" style={{ fontWeight: active ? 700 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.subject || g.name}</div>
                   <div className="ameta">{lastActivity(g.last)}{typeof g.count === "number" ? ` · ${g.count} msg` : ""}</div>
                 </div>
               </button>
@@ -226,8 +283,8 @@ export default function GroupChat({ groups, initial }: { groups: GroupRef[]; ini
       <section className="card" style={{ overflow: "hidden", position: "relative" }}>
         <div className="card-h">
           <span className="flex" style={{ gap: 9, minWidth: 0 }}>
-            <span className="aico teal" style={{ flex: "0 0 auto" }}><Users size={15} /></span>
-            <span className="disp2" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sel}</span>
+            <GroupIcon g={selRef} size={32} />
+            <span className="disp2" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selRef?.subject || sel}</span>
           </span>
           <span className="flex" style={{ gap: 6, flex: "0 0 auto" }}>
             <button aria-label="Previous group" className="iconbtn sm" disabled={!prev} onClick={() => prev && setSel(prev.name)} title="Previous group" style={{ opacity: prev ? 1 : 0.4 }}><ChevronLeft size={16} /></button>

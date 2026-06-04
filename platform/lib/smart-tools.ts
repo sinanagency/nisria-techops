@@ -22,6 +22,7 @@
 // All generated text passes through humanize() before it is stored or shown.
 
 import { admin, money } from "./supabase-admin";
+import { formatPersonName } from "./names";
 import { sendText, phoneKey, operatorOf } from "./whatsapp";
 import { emit } from "./events";
 import { now } from "./now";
@@ -1059,8 +1060,16 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
 
   // ---- SAFE: add_beneficiary (PRIVATE, never donor-facing) ----
   if (name === "add_beneficiary") {
-    const full_name = String(input.full_name || "").trim();
-    if (!full_name) return { ok: false, summary: "I need the child or family name.", error: "no name" };
+    const raw_name = String(input.full_name || "").trim();
+    if (!raw_name) return { ok: false, summary: "I need the child or family name.", error: "no name" };
+    // Normalize the intake name: lead with the PRIMARY person and pull any
+    // dependents out of the name so we never store a sentence like "Mercy Wanjiku
+    // and her children Princess and Tony" as a single beneficiary. The dependents
+    // ride along in the case notes instead, and are NOT logged as their own cases.
+    const fmt = formatPersonName(raw_name);
+    const full_name = fmt.name || raw_name;
+    const dependents = fmt.dependents;
+    const depNote = dependents.length ? `Dependents: ${dependents.join(", ")}` : "";
     const PROGRAMS = ["safe_house", "education", "rescue", "nutrition", "other"];
     const program = PROGRAMS.includes(input.program) ? input.program : "other";
     const region = input.region ? String(input.region).slice(0, 120) : null;
@@ -1086,6 +1095,16 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       // so without this it re-logs the same child as a new case on every message.
       // If an open case with this name already exists for this group, do nothing.
       const chan = ctx.sourceGroup ? `group:${ctx.sourceGroup}` : "group";
+      // FRAGMENT GUARD: a bare single-name intake (no surname) that is already
+      // listed as a dependent on a recent family case in this group is NOT a new
+      // case, it is that family's child. This stops "Princess" / "Tony" becoming
+      // their own thin cases after "Mercy Wanjiku and her children Princess and Tony".
+      if (!/\s/.test(full_name)) {
+        const { data: famCase } = await db.from("beneficiaries").select("id,full_name,triage_notes").eq("intake_stage", "under_review").eq("case_channel", chan).ilike("triage_notes", `%${full_name}%`).limit(1);
+        if (famCase?.[0]) {
+          return { ok: true, summary: humanize(`${full_name} is already recorded as a dependent on ${famCase[0].full_name}'s case, not logged separately.`, opts), detail: { case_id: famCase[0].id, dependent_of: famCase[0].full_name, deduped: true } };
+        }
+      }
       const { data: existingCase } = await db.from("beneficiaries").select("id,ref_code").eq("intake_stage", "under_review").eq("case_channel", chan).ilike("full_name", full_name).limit(1);
       if (existingCase?.[0]) {
         // Still try to attach any just-dropped photos to the existing case.
@@ -1096,6 +1115,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       const { data: crow } = await db.from("beneficiaries").insert({
         ref_code, full_name, program, region, location: region, ...rich,
         needs: input.needs ? String(input.needs).slice(0, 600) : null,
+        triage_notes: depNote || null,
         status: "inactive", intake_stage: "under_review", consent_public: false,
         intake_date: n.today, case_channel: ctx.sourceGroup ? `group:${ctx.sourceGroup}` : "group",
         referred_by: ctx.operatorName || null,

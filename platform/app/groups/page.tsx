@@ -27,9 +27,16 @@ export default async function Groups({ searchParams }: { searchParams: { g?: str
     if (!lastByGroup.has(name)) lastByGroup.set(name, m.created_at);
     countByGroup.set(name, (countByGroup.get(name) || 0) + 1);
   }
+  // real group identity (subject + WhatsApp avatar) the bot publishes; when absent
+  // the UI falls back to a coloured monogram, so the list never looks identical.
+  const { data: gmeta } = await db.from("groups").select("name,subject,avatar_url");
+  const metaByName = new Map<string, any>((gmeta || []).map((g: any) => [g.name, g]));
   const groups: GroupRef[] = [...lastByGroup.entries()]
     .sort((a, b) => t(b[1]) - t(a[1]))
-    .map(([name, last]) => ({ name, last, count: countByGroup.get(name) || 0 }));
+    .map(([name, last]) => {
+      const meta = metaByName.get(name);
+      return { name, last, count: countByGroup.get(name) || 0, avatar: meta?.avatar_url || null, subject: meta?.subject || null };
+    });
   const sampleSize = (recent || []).length;
 
   if (groups.length === 0) {

@@ -138,6 +138,37 @@ async function postLink(state) {
   } catch (e) { log.warn({ err: e?.message }, "postLink failed"); }
 }
 
+// publish each WhatsApp group's real identity (subject + avatar + size) to the
+// portal so it shows proper group icons + the true subject, instead of deriving a
+// name from message history and drawing one generic icon for all. Avatars come from
+// sock.profilePictureUrl, best-effort per group, never throwing the loop. Also
+// primes the name->jid map (so this can replace the old prime on connect).
+async function postGroups(sock) {
+  try {
+    const all = await sock.groupFetchAllParticipating();
+    const groups = [];
+    for (const g of Object.values(all || {})) {
+      remember(g.id, g.subject);
+      let avatar = null;
+      try { avatar = await sock.profilePictureUrl(g.id, "image"); } catch { /* no avatar / private */ }
+      groups.push({
+        name: g.subject,
+        subject: g.subject,
+        jid: g.id,
+        avatar_url: avatar,
+        participant_count: Array.isArray(g.participants) ? g.participants.length : (g.size || null),
+      });
+    }
+    if (!groups.length) return;
+    await fetch(`${PLATFORM_URL}/api/group/membership`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-group-secret": SECRET },
+      body: JSON.stringify({ groups, ts: new Date().toISOString() }),
+    });
+    log.info({ groups: groups.length }, "group identity published");
+  } catch (e) { log.warn({ err: e?.message }, "postGroups failed"); }
+}
+
 // resolve a portal group name to a WhatsApp jid: exact first, then contains
 function resolveJid(name) {
   const n = String(name || "").toLowerCase().trim();
@@ -229,10 +260,9 @@ async function start() {
     if (connection === "open") {
       log.info("connected. listening to team groups.");
       postLink({ qr: null, connected: true, status: "connected" });
-      // prime the name->jid map so portal sends can target groups by name
-      sock.groupFetchAllParticipating()
-        .then((groups) => { for (const g of Object.values(groups || {})) remember(g.id, g.subject); log.info({ groups: nameToJid.size }, "groups primed"); })
-        .catch(() => {});
+      // prime the name->jid map AND publish real group identity (subject + avatar)
+      // to the portal for proper group icons. postGroups remembers as it goes.
+      postGroups(sock).catch(() => {});
       // start outbox polling (replace any prior timer bound to an old socket)
       if (pollTimer) clearInterval(pollTimer);
       pollTimer = setInterval(() => pollOutbox(sock), POLL_MS);

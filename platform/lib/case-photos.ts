@@ -45,7 +45,7 @@ export async function storeCaseGroupPhoto(
   group: string,
   senderName: string | null,
   contactId: string | null,
-): Promise<string | null> {
+): Promise<{ id: string | null; path: string } | null> {
   const path = `case-intake/${group.toLowerCase().replace(/[^\w]+/g, "-")}/${Date.now().toString(36)}-${Math.abs(buf.length)}.jpg`;
   try {
     await db.storage.from("assets").upload(path, buf, { contentType: mime, upsert: true });
@@ -65,7 +65,7 @@ export async function storeCaseGroupPhoto(
   if (open && asset?.id && !open.photo_asset_id) {
     await db.from("beneficiaries").update({ photo_asset_id: asset.id }).eq("id", open.id);
   }
-  return asset?.id ?? null;
+  return { id: asset?.id ?? null, path };
 }
 
 // On case creation: claim the recent PENDING case photos from this group, link

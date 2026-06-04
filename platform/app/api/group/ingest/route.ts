@@ -157,12 +157,14 @@ export async function POST(req: NextRequest) {
       learnMemberPhone(db, senderPhone, senderName).catch(() => {});
       try {
         const { storeCaseGroupPhoto } = await import("../../../../lib/case-photos");
-        await storeCaseGroupPhoto(db, buf, mediaMime, group, senderName, contactId);
+        const stored = await storeCaseGroupPhoto(db, buf, mediaMime, group, senderName, contactId);
         await db.from("messages").insert({
           contact_id: contactId, channel: "whatsapp", direction: "in",
           body: `[case photo]${text ? ` ${text}` : ""}`.slice(0, 6000),
           handled_by: "group-bot", status: "seen", sender_type: "group",
           account: group, external_id: messageId || null,
+          // link the stored photo so it renders inline in the case group chat
+          media_path: stored?.path || null, media_mime: mediaMime,
         });
       } catch (e: any) {
         // best-effort: never crash the bot loop, but LOG it (honesty law). A
@@ -195,6 +197,8 @@ export async function POST(req: NextRequest) {
           body: `[${label}] ${mediaName || ""}`.trim().slice(0, 6000),
           handled_by: "group-bot", status: "seen", sender_type: "group",
           account: group, external_id: messageId || null,
+          // link the stored object so the chat renders it inline (not a bare "[image]")
+          media_path: path, media_mime: mediaMime,
         });
         const { createBatch } = await import("../../../../lib/ingest");
         await createBatch({

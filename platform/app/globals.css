@@ -108,16 +108,23 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 700; lett
 .brand .logo { height: 30px; width: auto; border-radius: 8px; display: block; box-shadow: 0 3px 10px rgba(0,196,194,0.30); }
 .brand .mark { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--teal); color: #fff; font-size: 15px; font-weight: 800; }
 
-.navpills { display: flex; align-items: center; gap: 2px; overflow: visible; }
-.navpill { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px; border-radius: var(--radius-pill); color: var(--ink-2); font-weight: 500; font-size: 13.5px; cursor: pointer; border: 0; background: none; font-family: inherit; transition: all .16s var(--ease); white-space: nowrap; }
-.navpill .ico { display: grid; place-items: center; color: var(--muted); }
-.navpill:hover { background: rgba(255,255,255,0.55); color: var(--ink); }
-.navpill.active { background: rgba(0,196,194,0.16); color: var(--teal-700); box-shadow: inset 0 0 0 1px rgba(0,196,194,0.30); }
+.navpills { display: flex; align-items: center; gap: 3px; overflow: visible; }
+/* tidy pill: Space Grotesk label (the blueprint's display face on nav), quiet
+   resting state, a crisp clear active state. No border at rest so the strip
+   reads clean; the active pill gets a soft teal fill, not a 1px inset outline. */
+.navpill { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 13px; border-radius: var(--radius-pill); color: var(--ink-2); font-family: var(--font-grotesk), var(--font-display); font-weight: 600; font-size: 13px; letter-spacing: -0.01em; cursor: pointer; border: 0; background: none; transition: background .16s var(--ease), color .16s var(--ease); white-space: nowrap; }
+.navpill .ico { display: grid; place-items: center; color: var(--muted); transition: color .16s var(--ease); }
+.navpill:hover { background: rgba(255,255,255,0.6); color: var(--ink); }
+.navpill:hover .ico { color: var(--ink-2); }
+.navpill.active { background: var(--teal-50); color: var(--teal-700); }
 .navpill.active .ico { color: var(--teal-700); }
-.navpill .caret { opacity: .6; margin-left: -2px; }
-.smartbtn { background: var(--teal-50); color: var(--teal-700); }
-.smartbtn:hover { background: var(--teal-100); }
-.smartbtn.active { background: var(--teal); color: #fff; }
+.navpill .caret { opacity: .55; margin-left: -2px; }
+/* Smart = the one filled action in the strip. Crisp clean edge, no border,
+   single glow shadow, like the blueprint's .btn--primary. */
+.smartbtn { background: var(--grad-teal); color: #fff; box-shadow: 0 6px 16px var(--glow), inset 0 1px 0 rgba(255,255,255,0.25); }
+.smartbtn .ico, .smartbtn svg { color: #fff; }
+.smartbtn:hover { background: var(--grad-teal); color: #fff; box-shadow: 0 9px 22px var(--glow), inset 0 1px 0 rgba(255,255,255,0.25); }
+.smartbtn.active { background: var(--grad-teal); color: #fff; }
 
 /* live activity pill in the top nav (R3-3 / P5). Calm when idle, lit when busy,
    a brief glow when a new event lands so the chrome reflects agent activity. */
@@ -137,8 +144,11 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 700; lett
 @media (max-width: 1180px) { .omnibox span, .omnibox kbd { display: none; } .omnibox { min-width: 0; padding: 0 11px; } }
 
 .nav-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-.iconbtn { width: 38px; height: 38px; border-radius: var(--radius-pill); border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); cursor: pointer; display: grid; place-items: center; transition: all .15s var(--ease); }
-.iconbtn:hover { background: var(--canvas); border-color: var(--line-2); }
+/* right-side icon buttons: quiet ghost circles, crisp clean edge, no heavy
+   border at rest. Match the navpill scale (36px) so the strip reads as one row. */
+.iconbtn { width: 36px; height: 36px; border-radius: var(--radius-pill); border: 1px solid var(--line); background: var(--glass-2); color: var(--ink-2); cursor: pointer; display: grid; place-items: center; transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease); }
+.iconbtn:hover { background: #fff; border-color: var(--line-2); color: var(--ink); }
+.iconbtn.active { background: var(--teal-50); border-color: transparent; color: var(--teal-700); }
 .iconbtn.dark { background: var(--ink); color: #fff; border-color: var(--ink); }
 .backbtn { width: 32px; height: 32px; border: 0; background: transparent; color: var(--muted); margin-right: 2px; }
 .backbtn:hover { background: rgba(255,255,255,0.55); color: var(--ink); }
@@ -147,7 +157,8 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 700; lett
 .notif-dot { position: absolute; top: -3px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: var(--radius-pill); background: var(--danger); color: #fff; font-size: 10px; font-weight: 800; line-height: 1; display: grid; place-items: center; border: 2px solid var(--canvas); box-shadow: 0 2px 6px rgba(229,72,77,.4); }
 .linkbtn { background: none; border: 0; padding: 0; margin: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
 .linkbtn:hover { color: var(--teal); text-decoration: underline; text-underline-offset: 2px; }
-.avatar { width: 38px; height: 38px; border-radius: var(--radius-pill); background: linear-gradient(140deg, var(--teal), var(--peri)); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 14px; cursor: pointer; }
+.avatar { width: 36px; height: 36px; border-radius: var(--radius-pill); background: var(--grad-teal); color: #fff; display: grid; place-items: center; font-family: var(--font-grotesk), var(--font-display); font-weight: 700; font-size: 13.5px; letter-spacing: -0.01em; cursor: pointer; border: 0; box-shadow: 0 4px 12px var(--glow), inset 0 1px 0 rgba(255,255,255,0.25); transition: box-shadow .16s var(--ease), transform .14s var(--spring); }
+.avatar:hover { box-shadow: 0 7px 18px var(--glow), inset 0 1px 0 rgba(255,255,255,0.25); transform: translateY(-1px); }
 
 /* dropdown (Records) */
 .dropwrap { position: relative; }
@@ -628,9 +639,29 @@ label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
 .gcol-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; padding: 2px 4px 4px; flex: 1; min-height: 0; scrollbar-width: thin; }
 .gcol-empty { color: var(--faint); font-size: 12.5px; padding: 10px 4px; }
 
-/* opportunities horizontal row */
-.gopps { display: flex; gap: 12px; overflow-x: auto; padding: 4px 2px 12px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
-.gopps > * { flex: 0 0 280px; width: 280px; scroll-snap-align: start; }
+/* opportunities horizontal row — lives INSIDE a .card, so it carries the same
+   22px side padding as the active-grants band (.agrant-grid) and renders its
+   cards in the .agrant language, not the glass kanban language, so the section
+   reads as one coherent system rather than a bolt-on (#opps-harmonize). */
+.gopps { display: flex; gap: 12px; overflow-x: auto; padding: 16px 22px 18px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+.gopps > * { flex: 0 0 272px; width: 272px; scroll-snap-align: start; }
+
+/* Harmonize the Opportunities cards with the active-grants (.agrant) cards and
+   the kanban: same radius, the same flat framed surface, the same border/shadow
+   tokens, the same type scale and badge treatment. Scoped to .gopps so the
+   kanban .gcard (which keeps its glass + left accent rail) is untouched. */
+.gopps .gcard {
+  padding: 15px 16px; border-radius: var(--radius-sm);
+  background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none;
+  border: 1px solid var(--line); box-shadow: var(--shadow-sm);
+  gap: 10px;
+}
+.gopps .gcard:hover { border-color: var(--line-2); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+/* no left accent rail inside the framed band — the .agrant cards have none, and
+   the relevance badge already carries the state, so the rail read as bolt-on. */
+.gopps .gcard::before { display: none; }
+.gopps .gcard-funder { font-size: 14px; line-height: 1.3; }
+.gopps .gcard-prog { color: var(--faint); margin-top: -2px; }
 
 /* ----- the calm grant card (#35) ----- one accent, tight hierarchy ----- */
 .gcard {
@@ -1348,8 +1379,10 @@ h1, h2, h3, .hero h1, .card-h, .feature .ftitle, .stat .value, .gauge .gval, .ct
 /* badges: dot glow + crisper */
 .badge { font-weight: 800; letter-spacing: 0.01em; }
 
-/* pills + segmented refinement */
-.pill.on, .navpill.active { box-shadow: var(--e-sm); }
+/* pills + segmented refinement. The .pill.on (dark fill) earns a drop shadow;
+   the nav active pill is a flat soft-teal fill, so it stays shadowless and
+   clean. The Smart button keeps its own glow (defined above). */
+.pill.on { box-shadow: var(--e-sm); }
 
 /* tables: airier, hover tint */
 table td, table th { padding: 12px 14px; }

@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
 
   const { data: raw } = await db
     .from("messages")
-    .select("id,body,direction,created_at,contact:contacts(id,name)")
+    .select("id,body,direction,created_at,media_path,media_mime,contact:contacts(id,name)")
     .eq("channel", "whatsapp").eq("sender_type", "group").eq("account", group)
     .order("created_at", { ascending: false }).limit(500);
 
@@ -31,9 +31,21 @@ export async function GET(req: NextRequest) {
   const byName = new Map<string, string>();
   for (const t of (team || []) as any[]) byName.set(String(t.name || "").toLowerCase(), t.id);
 
+  // sign the stored media so photos/docs posted in the group render inline in the
+  // chat (private bucket). One batched signing call for every message that carries
+  // a media_path, keyed back by path.
+  const paths = [...new Set(((raw || []) as any[]).map((m) => m.media_path).filter(Boolean))] as string[];
+  const urlByPath = new Map<string, string>();
+  if (paths.length) {
+    const { data: signed } = await db.storage.from("assets").createSignedUrls(paths, 3600);
+    for (const s of (signed || []) as any[]) if (s?.signedUrl && s?.path) urlByPath.set(s.path, s.signedUrl);
+  }
+
   const messages = ((raw || []) as any[]).reverse().filter((m) => {
     const b = (m.body || "").trim();
-    return b && !SYSTEM.test(b);
+    // keep a message if it has real text OR a media attachment (a bare "[image]"
+    // with a media_path is now a real, renderable photo, not noise).
+    return (b && !SYSTEM.test(b)) || !!m.media_path;
   }).map((m) => {
     const c = Array.isArray(m.contact) ? m.contact[0] : m.contact;
     const out = m.direction === "out";
@@ -41,7 +53,9 @@ export async function GET(req: NextRequest) {
     const mine = out || OWNER.test(name);
     const tid = byName.get(String(name).toLowerCase());
     const href = mine ? null : (tid ? `/team/${tid}` : c?.id ? `/contacts/${c.id}` : null);
-    return { id: m.id, body: m.body || "", name, mine, at: m.created_at, href };
+    const url = m.media_path ? urlByPath.get(m.media_path) || null : null;
+    const media = url ? { url, mime: m.media_mime || "" } : null;
+    return { id: m.id, body: m.body || "", name, mine, at: m.created_at, href, media };
   });
 
   return NextResponse.json({ group, messages });
