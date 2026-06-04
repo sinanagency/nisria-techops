@@ -14,7 +14,7 @@ import { now } from "../now";
 import { humanize, withHumanSystem } from "../humanize";
 import { recall, groundingText } from "../memory";
 import { SMART_TOOLS, runSmartTool, isReadTool, type ToolResult } from "../smart-tools";
-import { verifyReply } from "../verifier";
+// OpenAI verifier removed (owner directive 2026-06-04): no gpt-4o-mini in the reply path.
 import { anthropicViaOpenAI, brainOverrideActive } from "../openai-fallback";
 import { pushIncident } from "../notify";
 
@@ -449,16 +449,14 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         // the generic loop-break because the gpt-4o-era thread was full of hedges.
         reply = humanize(LOOP_BREAK, { now: { long: n.long, today: n.today } });
       }
-      const v = await verifyReply({ userMessage: opts.command, toolRuns, reply });
-      if (!v.grounded) {
-        reply = humanize(
-          v.corrected || "I want to be accurate before I state anything firm. Tell me the exact amount and who it was for, and I will log precisely that.",
-          { now: { long: n.long, today: n.today } },
-        );
-      } else if (v.unverified && unverifiableFigure(reply, opts.command, toolRuns)) {
-        // The verifier was unavailable AND the reply states a money figure with no
-        // in-turn source. Do not assert it as checked: append an honest caveat.
-        reply = `${reply}\n\nI could not double-check that figure just now, so please confirm it before you rely on it.`;
+      // OpenAI (gpt-4o-mini) verifier REMOVED — owner directive 2026-06-04. It was
+      // "the openai one", and it mangled legitimate replies. The DETERMINISTIC honesty
+      // guard above already neutralizes false completion claims with no external model.
+      // Money safety is preserved WITHOUT OpenAI: if the reply states a figure that is
+      // not grounded in this turn's user words or a tool result, append a plain caveat
+      // rather than asserting it as checked.
+      if (unverifiableFigure(reply, opts.command, toolRuns)) {
+        reply = `${reply}\n\nPlease double check that figure before you rely on it, I have not verified it against a record.`;
       }
       // HONESTY in degraded mode: if this turn ran on the OpenAI backup (Claude
       // unavailable), say so. The empty-credits incident showed a silent backup
