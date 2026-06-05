@@ -324,11 +324,16 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (input.assignee_name) { const m = await findMember(db, input.assignee_name); if (m) qb = qb.eq("assignee_id", m.id); }
     const { data } = await qb.order("due_on", { ascending: true }).limit(60);
     const today = (await now()).today;
-    let rows = ((data || []) as any[]).map((t) => {
+    // Build with internal _q for filtering, then strip _q before returning so
+    // the model never sees "q2"/"q3" and parrots it to the user (owner-private
+    // framework leak, audited 2026-06-05).
+    let scored: any[] = ((data || []) as any[]).map((t) => {
       const q = coveyQuadrant(t, today);
-      return { title: t.title, status: t.status, priority: t.priority, due: t.due_on, time: t.due_time || null, assignee: t.assignee?.name || null, important: t.important === true, type: t.task_type || "specific", quadrant: q.quadrant, quadrant_label: q.label };
+      const urgent = q.quadrant === "q1" || q.quadrant === "q3";
+      return { title: t.title, status: t.status, priority: t.priority, due: t.due_on, time: t.due_time || null, assignee: t.assignee?.name || null, important: t.important === true, urgent, type: t.task_type || "specific", _q: q.quadrant };
     });
-    if (["q1", "q2", "q3", "q4"].includes(input.quadrant)) rows = rows.filter((r) => r.quadrant === input.quadrant);
+    if (["q1", "q2", "q3", "q4"].includes(input.quadrant)) scored = scored.filter((r) => r._q === input.quadrant);
+    const rows = scored.map(({ _q, ...rest }) => rest);
     return { count: rows.length, open_tasks: rows };
   }
   if (name === "list_wishlist") {
@@ -777,7 +782,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     let flag = "";
     if (due_on) { const h = await holidayOn(due_on); if (h) flag = ` Heads up, ${due_on} is ${h}, a public holiday, so the team is off that day.`; }
     const timed = due_time ? ` I'll ping at ${due_time} on the day.` : "";
-    return { ok: true, summary: humanize(`Created the task "${title}", ${who}. That's ${covey.label}, so ${covey.advice}.${timed}${flag}`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: task?.id, assignee: member?.name, quadrant: covey.quadrant, important, task_type, due_time, holiday: flag ? true : false } };
+    return { ok: true, summary: humanize(`Created the task "${title}", ${who}. That's ${covey.label}, so ${covey.advice}.${timed}${flag}`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: task?.id, assignee: member?.name, important, urgent, task_type, due_time, holiday: flag ? true : false } };
   }
 
   // ---- SAFE: complete_task ----
