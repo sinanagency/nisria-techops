@@ -36,6 +36,15 @@ const RED_FLAGS: { pattern: RegExp; signal: string }[] = [
   // definition a moment Sasa failed to act and gave up. Surface to medic.
   { pattern: /i'?m going in circles/i,                   signal: "loop_break_fired" },
   { pattern: /i'?m stuck, not making progress/i,         signal: "stuck_no_progress" },
+  // FAMILY D: money-shaped completion claim. Phrase looks like "Done. Logged
+  // KES 3,625…" / "Recorded $241 to X". This may be true OR false; the medic's
+  // job is to verify via DB query (was a matching payment row inserted within
+  // ±5min of this send?). Detected on the Fargo Courier 13:11 incident 2026-06-05,
+  // where Sasa claimed "Done. Logged KES 3,625 to Fargo Courier" with no
+  // record_payment ok=true backing it — the row did not insert until 13:19:37.
+  // The medic resolves true/false by reading the payments table at audit time.
+  { pattern: /\b(?:done\.?\s+)?(?:logged|recorded|saved|created)\s+(?:[A-Z]{3}\s*[\d,\.]+|\$\s*[\d,\.]+|KSh\s*[\d,\.]+)/i, signal: "claimed_logged_money" },
+  { pattern: /\bi(?:'?ve| have)\s+(?:logged|recorded|saved)\s+(?:the\s+)?(?:[A-Z]{3}\s*[\d,\.]+|\$\s*[\d,\.]+|payment)/i, signal: "claimed_logged_payment" },
 ];
 
 export function detectFumble(body: string): string | null {

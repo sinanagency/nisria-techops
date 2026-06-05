@@ -95,22 +95,48 @@ const COMPLETION_TOOLS = new Set([
   "approve_case", "decline_case", "move_case", "edit_case", "merge_case", "delete_case",
 ]);
 
-// True if the reply asserts a completed action while NO completion-class tool
-// returned ok=true this turn. A future/question phrasing is excluded.
+// CLAIM-SHAPE → REQUIRED TOOL CATEGORY. Any completion-class tool's ok=true used
+// to back ANY completion claim, which let a "Done. Logged KES 3,625" through on
+// the back of an unrelated remember_fact / brain auto-capture (Fargo Courier
+// incident 2026-06-05, 13:11). Now the guard requires a CATEGORY-MATCHED tool.
+const PAYMENT_TOOLS = new Set(["record_payment", "update_payment", "delete_payment"]);
+const TASK_TOOLS = new Set(["create_task", "update_task", "complete_task", "reopen_task", "delete_task"]);
+const CASE_TOOLS = new Set(["approve_case", "decline_case", "move_case", "edit_case", "merge_case", "delete_case"]);
+const EVENT_TOOLS = new Set(["create_event", "move_event", "delete_event"]);
+const CONTACT_TOOLS = new Set(["add_contact", "update_contact", "add_team_member", "update_team_member", "add_beneficiary", "update_beneficiary"]);
+const SHAPE_MONEY = /\b(?:KES|USD|\$|KSh|Ksh)\s*[\d,\.]+|[\d,]+(?:\.\d+)?\s*(?:KES|USD|\$|KSh)\b/i;
+const SHAPE_TASK = /\b(?:task|reminder|todo)\b/i;
+const SHAPE_CASE = /\b(?:case|beneficiary|merged?\s+\w+'?s?\s+case)\b/i;
+const SHAPE_EVENT = /\b(?:meeting|event|visit|travel|appointment|reminder on)\b/i;
+const SHAPE_CONTACT = /\b(?:contact|team member|saved\s+(?:his|her|their)\s+(?:number|email|phone))\b/i;
+
+// True if the reply asserts a completed action while NO category-matched
+// completion-class tool returned ok=true this turn. A future/question phrasing
+// is excluded.
 function claimsCompletionWithoutSuccess(reply: string, toolRuns: { name: string; result: any }[]): boolean {
   const text = reply.toLowerCase();
-  // Only consider it a CLAIM if it reads as already-done, not future/conditional.
   const claimsDone = (DONE_CLAIM.test(reply) || DONE_SIMPLE.test(reply));
   if (!claimsDone) return false;
-  // Exclude clear future/question framings ("I will ...", "should I ...", "do you
-  // want me to ...", "let me ..."), which are honest and must not be neutralized.
   const future = /\b(?:i will|i'?ll|let me|should i|shall i|do you want me|want me to|would you like me|can i)\b/i.test(reply);
   if (future) return false;
-  // Exclude a SECOND-PERSON reference to the user finishing ("when you are done",
-  // "you're done", "once you have completed"), which is not a claim that SASA did
-  // anything. Only a first-person / impersonal "done" is a self-completion claim.
   const aboutUser = /\b(?:when |once |after |if )?you(?:'?re| are| have| 've)?\s+(?:done|complete|completed|finished?)\b/i.test(reply);
   if (aboutUser && !/\b(?:i'?ve|i have|marked|logged|recorded|created|that'?s done|it'?s done)\b/i.test(reply)) return false;
+  // CATEGORY MATCH: if the reply's shape names a category (money, task, case,
+  // event, contact), the backing tool must be in that category, not a random
+  // completion tool. Without this, an unrelated remember_fact success backed a
+  // payment-logged claim (Fargo Courier 13:11 incident).
+  const hasMoneyShape = SHAPE_MONEY.test(reply);
+  const hasTaskShape = SHAPE_TASK.test(reply);
+  const hasCaseShape = SHAPE_CASE.test(reply);
+  const hasEventShape = SHAPE_EVENT.test(reply);
+  const hasContactShape = SHAPE_CONTACT.test(reply);
+  const okIn = (s: Set<string>) => toolRuns.some((t) => s.has(t.name) && (t.result as any)?.ok === true);
+  if (hasMoneyShape && !okIn(PAYMENT_TOOLS)) return true;
+  if (hasTaskShape && !okIn(TASK_TOOLS)) return true;
+  if (hasCaseShape && !okIn(CASE_TOOLS)) return true;
+  if (hasEventShape && !okIn(EVENT_TOOLS)) return true;
+  if (hasContactShape && !okIn(CONTACT_TOOLS)) return true;
+  // Generic done-claim with no specific category: any completion tool backs it.
   const anySuccess = toolRuns.some((t) => COMPLETION_TOOLS.has(t.name) && (t.result as any)?.ok === true);
   return !anySuccess && text.length > 0;
 }
@@ -341,6 +367,8 @@ How tools work:
 - ACTION tools change the platform and run ONLY on an explicit request: record_payment, create_task, add_team_member, add_inventory_item, add_beneficiary. GATED sends (draft_thank_you, draft_email) NEVER reach a real person; they queue a draft into Needs You for approval.
 - FIX MISTAKES: you can undo and correct. delete_payment removes a payment you logged wrong, update_payment corrects its amount/currency/category/payee, complete_task marks a task done, delete_task removes a wrong task. When she says something is wrong, or to remove, undo, or change it, just do it (these only ever touch records you logged, never her bank-statement history).
 - PAYMENT ATTRIBUTION + CONTEXT (mandatory, do NOT ask permission): when she adds an attribution or a context detail to a payment you just logged ("Dorcas managed it", "Mark handled this one", "that was via SendWave", "it was for the Eid food run", "tag this to the rescue program"), you ALREADY have the tool: call update_payment with new_purpose set to the existing purpose + the new fact (e.g. existing "rice for Eid purchases" becomes "rice for Eid purchases, handled by Dorcas"). For payment method use new_purpose too if there's no dedicated field. DO NOT respond with "would you like me to note that separately" or "is logging the payments enough for now": that question is a refusal-shaped hedge, the answer is always yes, just do it. Target the most recent payment by match_payee unless she names another. If she added attribution that covers multiple just-logged payments ("Dorcas managed all of these"), call update_payment once per matching payment.
+- STALE-INTENT CONFIRMATION GUARD (mandatory): when you have an unconfirmed staged action (a "Ready to log…, reply yes" you sent more than one turn ago) AND ${who} replies with a "yes" that mentions a DIFFERENT topic or attribute ("yes it is also part of Eid purchases" while the stale stage was a courier shipment), DO NOT apply the yes to the stale intent. Either ask plainly which one she means, or commit the most recent staged intent if context makes it unambiguous, never the older one. The Fargo Courier 13:11 incident happened because a stale shipment-confirm intent ate a "yes" that was clearly about cows and chickens. If a "yes" turn contains substantive new context that doesn't match the staged intent, treat the staged intent as cancelled, restart staging on the topic of the new context.
+- DONE MEANS YOU RAN THE TOOL THIS TURN AND IT RETURNED ok=true (mandatory, ABSOLUTE): "Done. Logged…", "Logged it", "Recorded it", "Saved it", "Created it", "Updated it" may ONLY appear in your reply if the category-matched action tool ran THIS turn and returned ok=true. For a money/payment claim, that means record_payment or update_payment, not remember_fact, not query_memory, not any unrelated tool. If you staged a payment in a previous turn and the user has not yet said yes, you have NOT logged it; the honest line is "Ready to log… reply yes to confirm." If you THOUGHT you logged something earlier in this conversation but cannot find the matching tool result in this exact turn, do NOT say "Done", say "I staged that earlier but I do not see a confirmation, want me to log it now?" and call record_payment if she says yes.
 - EDIT THE PORTAL: you can update records, not only create them. update_beneficiary changes a child's status, needs, program, region, or contact (never their funding or any money figure). update_task reassigns a task or changes its due date, priority, or title. update_team_member changes someone's role, phone, responsibilities, location, status, or pay (for pay you MUST have the currency, KES or USD, and you state it back, never mixed). add_contact saves a person's number or email and update_contact corrects one. When she tells you to change one of these, find the record by name and do it; if no one matches or more than one does, ask which before changing anything. Money totals, donations, and grants are read-only to you, you never edit those by chat.
 - MANAGE CASES: a case is a potential beneficiary still in intake (on the Cases page). You have full control of these, the same as the buttons Nur has there. move_case sends a case to a different stage (prospect, under review, pending funds, declined). edit_case renames a case, sets its dependents (the children/family on it), or changes its needs, region, or program. merge_case folds one case into another as a dependent and removes the duplicate, the fix when a child was logged as their own case but belongs to a family ("merge Princess into Mercy Wanjiku"). delete_case removes a duplicate or mistaken case. To ACCEPT a case use approve_case, to set it aside use decline_case. These only ever touch a case, never an accepted beneficiary. Match by name, and if no case matches or more than one does, ask which before doing anything.
 - TEAM 727 ACCESS: you can give or take away a team member's private WhatsApp line with set_bot_access. Granting lets them message you directly and get help with their OWN tasks, the calendar, and logging intakes, nothing more. Use it for "give Linda access to the bot", "let Cynthia message me directly", "take Mark off the bot". Granting this is fine for Nur to ask, it only ever opens the restricted team line. It does NOT, and no tool does, give a team member finance, donations, donor details, pay, beneficiary files, sending, or group posting. If she asks for one of those (for example "let Violet see the finances" or "give Cynthia the campaigns"), say plainly you cannot switch that on, because that crosses into money and confidential data: it needs a real change to the system and Taona's sign-off as the owner. Offer to note it for Taona. Never pretend you granted finance or donor access.
