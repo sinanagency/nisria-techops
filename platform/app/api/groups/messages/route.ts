@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
 
   const { data: raw } = await db
     .from("messages")
-    .select("id,body,direction,created_at,media_path,media_mime,contact:contacts(id,name)")
+    .select("id,body,direction,created_at,media_path,media_mime,subject,contact:contacts(id,name)")
     .eq("channel", "whatsapp").eq("sender_type", "group").eq("account", group)
     .order("created_at", { ascending: false }).limit(500);
 
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
     const b = (m.body || "").trim();
     // keep a message if it has real text OR a media attachment (a bare "[image]"
     // with a media_path is now a real, renderable photo, not noise).
-    return (b && !SYSTEM.test(b)) || !!m.media_path;
+    return (b && !SYSTEM.test(b)) || !!m.media_path || String(m.subject || "").indexOf("|") > 0;
   }).map((m) => {
     const c = Array.isArray(m.contact) ? m.contact[0] : m.contact;
     const out = m.direction === "out";
@@ -53,8 +53,25 @@ export async function GET(req: NextRequest) {
     const mine = out || OWNER.test(name);
     const tid = byName.get(String(name).toLowerCase());
     const href = mine ? null : (tid ? `/team/${tid}` : c?.id ? `/contacts/${c.id}` : null);
-    const url = m.media_path ? urlByPath.get(m.media_path) || null : null;
-    const media = url ? { url, mime: m.media_mime || "" } : null;
+    // Resolve media from EITHER mechanism: the subject "mime|path" stash (served via
+    // the authenticated /api/asset route, the canonical path for new messages) OR the
+    // media_path column with a signed URL (used by the backfill and the case photos).
+    // Prefer subject, fall back to media_path. Unified richer shape {url,kind,mime,name}.
+    let media: { url: string; kind: "image" | "document"; mime: string; name: string } | null = null;
+    const subj = String(m.subject || "");
+    const bar = subj.indexOf("|");
+    const nameFromBody = (m.body || "").replace(/^\[(image|document|photo|case photo)\]\s*/i, "").trim();
+    if (bar > 0 && subj.slice(bar + 1)) {
+      const mime = subj.slice(0, bar);
+      const path = subj.slice(bar + 1);
+      media = { url: `/api/asset?path=${encodeURIComponent(path)}`, kind: mime.startsWith("image/") ? "image" : "document", mime, name: nameFromBody || "file" };
+    } else if (m.media_path) {
+      const url = urlByPath.get(m.media_path) || null;
+      if (url) {
+        const mime = m.media_mime || "";
+        media = { url, kind: mime.startsWith("image/") ? "image" : "document", mime, name: nameFromBody || "file" };
+      }
+    }
     return { id: m.id, body: m.body || "", name, mine, at: m.created_at, href, media };
   });
 

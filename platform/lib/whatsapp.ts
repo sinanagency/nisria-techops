@@ -34,6 +34,18 @@ export function sendText(to: string, body: string) {
   return send({ to, type: "text", text: { body: String(body).slice(0, 4096), preview_url: false } });
 }
 
+// Send a MEDIA message (24h window) BY LINK. WhatsApp fetches the URL itself, so
+// the link MUST be publicly fetchable by Meta's servers: a Supabase signed URL
+// works; the login-gated /api/asset does NOT (Meta cannot authenticate the
+// session cookie). `to` is the recipient's wa_id. Use sendImage for photos and
+// sendDocument for PDFs/files (filename is shown to the recipient).
+export function sendImage(to: string, link: string, caption?: string) {
+  return send({ to, type: "image", image: { link, ...(caption ? { caption: String(caption).slice(0, 1024) } : {}) } });
+}
+export function sendDocument(to: string, link: string, filename: string, caption?: string) {
+  return send({ to, type: "document", document: { link, filename: String(filename || "file").slice(0, 240), ...(caption ? { caption: String(caption).slice(0, 1024) } : {}) } });
+}
+
 // Template message (works outside the 24h window, AND inside it). This is the
 // ONLY reliable path for a PROACTIVE, unsolicited push (a task alert, a morning
 // brief, an incident): free-form sendText silently fails outside the 24h window,

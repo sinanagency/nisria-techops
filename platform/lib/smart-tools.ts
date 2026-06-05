@@ -23,7 +23,7 @@
 
 import { admin, money } from "./supabase-admin";
 import { formatPersonName } from "./names";
-import { sendText, phoneKey, operatorOf } from "./whatsapp";
+import { sendText, sendImage, sendDocument, phoneKey, operatorOf } from "./whatsapp";
 import { emit } from "./events";
 import { now } from "./now";
 import { humanize, withHumanSystem } from "./humanize";
@@ -189,6 +189,7 @@ export const SMART_TOOLS = [
   { name: "post_to_group", description: "Post a message into a team WhatsApp GROUP via the group bot. SAFE: queues the send (the group bot delivers it). Use when Nur asks to tell a group something, or to follow up with a person in their group. Provide the group name and the exact text to post. The text may @mention a person.", input_schema: { type: "object", properties: { group: { type: "string", description: "the group name, e.g. 'Maisha Operations'" }, text: { type: "string", description: "the message to post" } }, required: ["group", "text"] } },
 
   { name: "message_person", description: "Send a WhatsApp message to ONE specific person (Nur, a team member, or a known contact) directly from this line. Use ONLY when the operator EXPLICITLY tells you to message / tell / send / let someone know something, e.g. 'tell Nur the meeting moved to 3', 'message Mark to bring the receipts', 'let Grace know the funds are in'. The exact words to send come from the operator's instruction, never invented. Resolve the recipient by name (or a number if given). If you cannot find a number, ASK for it. If more than one person matches the name, ASK which one. WhatsApp can only reach someone who has messaged this line in the last 24 hours; if it cannot be delivered, say so plainly. Do NOT use this for posting into a group (that is post_to_group) or for email (that is draft_email).", input_schema: { type: "object", properties: { to: { type: "string", description: "the person's name (e.g. 'Nur') or a phone number" }, text: { type: "string", description: "the exact message to send, in the operator's intended words" } }, required: ["to", "text"] } },
+  { name: "send_file_to_person", description: "Send a FILED document or photo from the portal to ONE person's WhatsApp. Use when asked to send/forward a file to someone, e.g. 'send me the I&M statement', 'forward me the lease PDF', 'send Nur that photo Mark posted', 'whatsapp me the registration certificate'. Finds the file by a word from its title/topic in the filed Library, then delivers the ACTUAL file to the person's WhatsApp. If the operator asks for it themselves ('send me ...'), the recipient is them. Resolve the file by a distinctive word; if more than one matches, ASK which. Admin only. The recipient must have messaged this line in the last 24 hours (WhatsApp window); if not, say so.", input_schema: { type: "object", properties: { to: { type: "string", description: "the recipient's name (e.g. 'Nur') or a phone number; for 'send me ...' use the operator asking" }, query: { type: "string", description: "a word or two from the document/photo title or topic (e.g. 'I&M statement', 'lease', 'registration')" } }, required: ["to", "query"] } },
 
   // ---- ACTION · CALENDAR (manage the operator's Google Calendar / events) ----
   { name: "create_event", description: "Put something on the calendar: a meeting, team travel, a site visit, a reminder, a one-off event. SAFE: lands on the calendar immediately and syncs to the Google Calendar so it shows on her phone. Use for 'put the donor meeting on Tuesday at 3', 'block Thursday for the Kibera visit', 'add a team day on the 14th', 'I am traveling Friday'. Provide a clear title and date. Add a time for a timed event, leave it off for an all-day one. Before scheduling team travel, you may check_conflicts first so you can flag a holiday.", input_schema: { type: "object", properties: { title: { type: "string" }, date: { type: "string", description: "YYYY-MM-DD" }, end_date: { type: "string", description: "YYYY-MM-DD for a multi-day event, optional" }, time: { type: "string", description: "HH:MM 24h start time, omit for all-day" }, end_time: { type: "string", description: "HH:MM 24h end time, optional" }, location: { type: "string" }, notes: { type: "string" }, kind: { type: "string", enum: ["event", "meeting", "travel", "visit", "reminder"] }, recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly"], description: "set for a repeating event; the next instance is created automatically once this one passes" } }, required: ["title", "date"] } },
@@ -943,6 +944,62 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: job } = await db.from("jobs").insert({ kind: "group.send", payload: { group, text }, status: "queued" }).select("id").single();
     await emit({ type: "group.send_queued", source: "agent:sasa", actor: "Nur", subject_type: "job", subject_id: job?.id || null, payload: { group, text: text.slice(0, 200) } });
     return { ok: true, summary: humanize(`Queued for the ${group} group. The group bot will post it.`, opts), affordance: { kind: "open", label: "View groups", href: "/groups" }, detail: { job_id: job?.id, group } };
+  }
+
+  // ---- ACTION: send_file_to_person (deliver a FILED doc/photo to someone's WhatsApp) ----
+  // Reuses the filing layer: documents are already stored + indexed on arrival, so
+  // this finds one by title/topic and sends the ACTUAL file. Ingested files live in
+  // the assets bucket (drive_file_id = "ingest:<path>") and need a RAW signed URL
+  // (Meta fetches it; the login-gated /api/asset would 401 for Meta). 24h window
+  // applies: a free-form media send only reaches someone who messaged this line.
+  if (name === "send_file_to_person") {
+    const toRaw = String(input.to || "").trim();
+    const query = String(input.query || "").trim();
+    if (!toRaw || !query) return { ok: false, summary: humanize("Tell me who to send it to and which file (a word from its title).", opts), error: "missing to/query" };
+    // resolve the recipient's wa_id (same matching as message_person)
+    let number: string | null = null, toName = toRaw;
+    if (phoneKey(toRaw).length >= 9) { number = phoneKey(toRaw); }
+    else {
+      const likeP = `%${toRaw.replace(/[,()*%]/g, "")}%`;
+      const [t, c] = await Promise.all([
+        db.from("team_members").select("name,phone,status").ilike("name", likeP).not("phone", "is", null).limit(6),
+        db.from("contacts").select("name,phone").ilike("name", likeP).not("phone", "is", null).limit(6),
+      ]);
+      const matches = [
+        ...((t.data || []) as any[]).filter((m) => m.status === "active" || !m.status).map((m) => ({ name: m.name, phone: m.phone })),
+        ...((c.data || []) as any[]).map((m) => ({ name: m.name, phone: m.phone })),
+      ].filter((m) => phoneKey(m.phone).length >= 9);
+      const seen = new Set<string>();
+      const uniq = matches.filter((m) => { const k = phoneKey(m.phone); if (seen.has(k)) return false; seen.add(k); return true; });
+      if (!uniq.length) return { ok: false, summary: humanize(`I do not have a WhatsApp number for ${toRaw}. What is the number?`, opts), detail: { unresolved: true } };
+      if (uniq.length > 1) return { ok: false, summary: humanize(`More than one match: ${uniq.slice(0, 4).map((m) => m.name).join(", ")}. Which one?`, opts), detail: { ambiguous: true } };
+      number = phoneKey(uniq[0].phone); toName = uniq[0].name;
+    }
+    // find the filed document/photo
+    const likeD = `%${query.replace(/[,()*%]/g, "")}%`;
+    const { data: docs } = await db.from("documents").select("title,mime,drive_file_id,drive_url").or(`title.ilike.${likeD},extracted_text.ilike.${likeD}`).order("created_at", { ascending: false }).limit(6);
+    const dlist = (docs || []) as any[];
+    if (!dlist.length) return { ok: false, summary: humanize(`I could not find a filed document matching "${query}". Try another word from its title.`, opts), detail: { matched: 0 } };
+    if (dlist.length > 1) return { ok: false, summary: humanize(`I found ${dlist.length}: ${dlist.slice(0, 4).map((d) => `"${d.title}"`).join(", ")}. Which one?`, opts), detail: { ambiguous: true, titles: dlist.map((d) => d.title) } };
+    const doc = dlist[0];
+    // resolve a Meta-fetchable URL
+    let link: string | null = null;
+    const dfid = String(doc.drive_file_id || "");
+    if (dfid.startsWith("ingest:")) {
+      const path = dfid.slice("ingest:".length);
+      const { data: signed } = await db.storage.from("assets").createSignedUrl(path, 3600);
+      link = signed?.signedUrl || null;
+    } else if (doc.drive_url) {
+      link = String(doc.drive_url);
+    }
+    if (!link) return { ok: false, summary: humanize(`I found "${doc.title}" but I cannot produce a sendable copy right now.`, opts), error: "no link", detail: { title: doc.title } };
+    const mime = String(doc.mime || "");
+    const res: any = mime.startsWith("image/")
+      ? await sendImage(number!, link, doc.title || undefined)
+      : await sendDocument(number!, link, doc.title || "file");
+    if (!res?.id) return { ok: false, summary: humanize(`I could not deliver "${doc.title}" to ${toName} (${res?.error || "send failed"}). They may need to message this line first (24h window).`, opts), error: res?.error || "send failed" };
+    await emit({ type: "whatsapp.file_sent", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: null, payload: { to_last4: number!.slice(-4), title: doc.title, mime } });
+    return { ok: true, summary: humanize(`Sent "${doc.title}" to ${toName} on WhatsApp.`, opts), detail: { title: doc.title, to: toName } };
   }
 
   // ---- ACTION: file_document (confirm placement, or file/move into a Library folder) ----

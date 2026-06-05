@@ -198,8 +198,11 @@ export async function POST(req: NextRequest) {
           body: `[${label}] ${mediaName || ""}`.trim().slice(0, 6000),
           handled_by: "group-bot", status: "seen", sender_type: "group",
           account: group, external_id: messageId || null,
-          // link the stored object so the chat renders it inline (not a bare "[image]")
+          // link the stored object so the chat renders it inline. Write BOTH: the
+          // media_path/media_mime columns AND the subject "mime|path" stash, so the
+          // groups feed resolves the photo/doc whichever path it reads.
           media_path: path, media_mime: mediaMime,
+          subject: `${mediaMime}|${path}`,
         });
         const { createBatch } = await import("../../../../lib/ingest");
         await createBatch({

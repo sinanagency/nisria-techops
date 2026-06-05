@@ -39,8 +39,8 @@ function GroupIcon({ g, size = 36 }: { g?: GroupRef | null; size?: number }) {
     </span>
   );
 }
-type Media = { url: string; mime: string };
-type Msg = { id: string; body: string; name: string; mine: boolean; at: string; href: string | null; media?: Media | null };
+type MsgMedia = { url: string; kind: "image" | "document"; mime: string; name: string } | null;
+type Msg = { id: string; body: string; name: string; mine: boolean; at: string; href: string | null; media?: MsgMedia };
 
 // a body that is only a media placeholder ("[image]", "[document] file.pdf",
 // "[case photo] ...") carries no real text once we have the actual attachment.
@@ -168,30 +168,23 @@ export function GroupChatPane({ group, fullscreen }: { group: string; fullscreen
                 )}
                 <div style={{ maxWidth: "78%", background: m.mine ? "var(--teal)" : "var(--surface-elevated)", color: m.mine ? "#fff" : "var(--ink)", border: m.mine ? "none" : "1px solid var(--line)", borderRadius: 12, padding: "7px 11px", boxShadow: "0 1px 1px rgba(0,0,0,0.04)" }}>
                   {(() => {
-                    const body = (m.body || "").trim();
-                    const isPlaceholder = PLACEHOLDER_BODY.test(body);
-                    const isImage = m.media && (/^image\//i.test(m.media.mime) || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(m.media.url));
-                    const docName = body.replace(/^\[(document|image|photo|case photo|voice note)\]\s*/i, "").trim();
+                    const isPlaceholder = PLACEHOLDER_BODY.test((m.body || "").trim());
                     return (
                       <>
-                        {/* real attachment posted in the group, rendered inline */}
-                        {m.media && isImage && (
-                          // eslint-disable-next-line @next/next/no-img-element
+                        {m.media && m.media.kind === "image" && (
                           <a href={m.media.url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
-                            <img src={m.media.url} alt={docName || "photo"} style={{ maxWidth: "100%", maxHeight: 280, borderRadius: 10, display: "block" }} />
+                            <img src={m.media.url} alt={m.media.name} loading="lazy" style={{ maxWidth: "100%", maxHeight: 280, borderRadius: 9, display: "block" }} />
                           </a>
                         )}
-                        {m.media && !isImage && (
-                          <a href={m.media.url} target="_blank" rel="noreferrer" className="chip" style={{ display: "inline-flex", gap: 6, marginBottom: docName ? 4 : 0, color: m.mine ? "#fff" : "var(--teal-700)", maxWidth: "100%" }}>
-                            <FileText size={13} /> <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName || "Document"}</span>
+                        {m.media && m.media.kind !== "image" && (
+                          <a href={m.media.url} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "7px 10px", borderRadius: 9, background: m.mine ? "rgba(255,255,255,0.16)" : "var(--surface)", border: "1px solid var(--line)", color: "inherit", textDecoration: "none", maxWidth: "100%" }}>
+                            <FileText size={16} style={{ flexShrink: 0 }} />
+                            <span style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.media.name}</span>
                           </a>
                         )}
-                        {/* show the text body unless it is only a media placeholder we already rendered */}
+                        {/* show the text body unless it is only a media placeholder already rendered as the attachment */}
                         {!(m.media && isPlaceholder) && (
-                          <>
-                            {mi && !m.media && <span style={{ opacity: 0.85, marginRight: 5, verticalAlign: "middle" }}>{mi}</span>}
-                            <Body text={m.body} q={q} />
-                          </>
+                          <>{mi && !m.media && <span style={{ opacity: 0.85, marginRight: 5, verticalAlign: "middle" }}>{mi}</span>}<Body text={m.body} q={q} /></>
                         )}
                         <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2, textAlign: "right" }}>{fmtTime(m.at)}</div>
                       </>
