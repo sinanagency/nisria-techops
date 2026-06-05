@@ -1,0 +1,22 @@
+{
+  "name": "nisria-sasa-eval",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Negative-eval suite for nisria-sasa (persona-contract runtime audit + static tool-schema audit). Phase-0 governance deliverable per /Users/milaaj/Code/bots/_governance/NEG-EVAL-TEMPLATE.md.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "eval:contract": "tsx persona-contract.eval.ts",
+    "eval:tools": "tsx tool-schema-audit.eval.ts",
+    "eval:patterns": "vitest run patterns.test.ts",
+    "eval:all": "npm run eval:patterns && npm run eval:tools && npm run eval:contract"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
