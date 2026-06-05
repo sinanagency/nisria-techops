@@ -16,6 +16,7 @@
 // not 'sasa', so the medic never audits its own output.
 
 const RED_FLAGS: { pattern: RegExp; signal: string }[] = [
+  // FAMILY A: "no access / no visibility" — the original index case (Finances group).
   { pattern: /i don'?t have visibility/i,                signal: "no_visibility" },
   { pattern: /i haven'?t been given access/i,            signal: "no_access" },
   { pattern: /i can'?t see (the |its |their )?(past |recent )?messages/i, signal: "cant_see_messages" },
@@ -24,6 +25,17 @@ const RED_FLAGS: { pattern: RegExp; signal: string }[] = [
   { pattern: /i'?m not (set up|configured) to/i,         signal: "not_configured" },
   { pattern: /not been given (the )?(access|visibility|permission)/i, signal: "not_given_access" },
   { pattern: /i cannot (see|access|read) (the )?(past|previous|history)/i, signal: "cannot_see_history" },
+  // FAMILY B: refusal-shaped hedges on simple writes — Sasa asks permission to do
+  // something she can already do (e.g. update_payment for attribution). Detected
+  // on the Kush General Store + Dorcas attribution incident 2026-06-05.
+  { pattern: /would you like me to (note|add|tag|include|record) that (fact )?separately/i, signal: "deflect_note_separately" },
+  { pattern: /is (?:just )?logging .* enough for now/i,  signal: "deflect_enough_for_now" },
+  { pattern: /isn'?t in the (payment|task|record|case) (record|itself)/i, signal: "deflect_not_in_record" },
+  // FAMILY C: loop-breaker fire as a refusal substitute. The LOOP_BREAK message
+  // itself ("I'm going in circles", "I'm stuck") landing on the user is by
+  // definition a moment Sasa failed to act and gave up. Surface to medic.
+  { pattern: /i'?m going in circles/i,                   signal: "loop_break_fired" },
+  { pattern: /i'?m stuck, not making progress/i,         signal: "stuck_no_progress" },
 ];
 
 export function detectFumble(body: string): string | null {
