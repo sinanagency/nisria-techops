@@ -54,6 +54,14 @@ const RED_FLAGS: { pattern: RegExp; signal: string }[] = [
   // ("Yas" not recognised as yes) on 2026-06-05.
   { pattern: /i have not actually done that yet/i,       signal: "honest_no_action_fired" },
   { pattern: /so i won'?t say i did/i,                   signal: "honest_no_action_fragment" },
+  // FAMILY F: vague catch-all offer. Sasa filed or parsed something the user
+  // shared and asked a vague open question ("what would you like me to do with
+  // them?") instead of inferring the obvious next step from conversation tempo
+  // or proposing concrete options. Detected on Nur incidents 12:45 (after
+  // filing Relay statements) and 12:50 (after parsing Eid receipts) on
+  // 2026-06-05, where Sasa stalled the payment-logging tempo with vague offers.
+  { pattern: /what would you like me to do with (them|these|those|it)\??/i, signal: "vague_offer_with_them" },
+  { pattern: /\bor something else\??/i,                  signal: "vague_offer_or_else" },
 ];
 
 export function detectFumble(body: string): string | null {
