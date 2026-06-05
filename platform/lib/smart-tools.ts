@@ -235,6 +235,10 @@ export const SMART_TOOLS = [
   { name: "update_grant_status", description: "Move a grant application's status or record an award. Use for 'mark the Ford grant submitted', 'we won the USAID grant for 40000', 'the X grant was rejected'. Match by funder. Status: researching, drafting, review, submitted, won, lost, rejected. For an award include amount_awarded (USD).", input_schema: { type: "object", properties: { funder: { type: "string" }, status: { type: "string", enum: ["researching", "drafting", "review", "submitted", "won", "lost", "rejected"] }, amount_awarded: { type: "number" } }, required: ["funder"] } },
   { name: "approve_case", description: "Approve a potential beneficiary (a CASE under review) into an active beneficiary. Admin only. Use for 'approve the case for Amani', 'accept the Mwangi children into the program'. Match by name.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "decline_case", description: "Decline a case (potential beneficiary). Admin only. Keeps the record for audit. Use for 'decline the X case'. Optionally give a reason.", input_schema: { type: "object", properties: { name: { type: "string" }, reason: { type: "string" } }, required: ["name"] } },
+  { name: "move_case", description: "Move a CASE (potential beneficiary still in intake) to a different stage: prospect, under_review, pending_funds, or declined. Admin only. Use for 'move Tony to pending funds', 'put the Mwangi case back to review'. Match by name. To ACCEPT a case use approve_case instead.", input_schema: { type: "object", properties: { name: { type: "string" }, stage: { type: "string", enum: ["prospect", "under_review", "pending_funds", "declined"] } }, required: ["name", "stage"] } },
+  { name: "edit_case", description: "Edit a CASE: rename it, set its dependents (the children/family on the case), or change its needs, region, or program. Admin only. Use for 'rename the Mercy case to Mercy Wanjiku', 'Princess and Tony are Mercy's dependents', 'update the needs on the X case'. Match by name. For an ACCEPTED beneficiary use update_beneficiary.", input_schema: { type: "object", properties: { name: { type: "string", description: "current case name, to find it" }, new_name: { type: "string" }, dependents: { type: "array", items: { type: "string" }, description: "names of dependents on this case" }, needs: { type: "string" }, region: { type: "string" }, program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] } }, required: ["name"] } },
+  { name: "merge_case", description: "Merge one CASE into another as a dependent, then remove the duplicate. The fix when a child was logged as their own case but belongs to a family. Admin only. Use for 'merge Princess into Mercy Wanjiku', 'Tony is part of the Mercy case'. Both matched by name.", input_schema: { type: "object", properties: { name: { type: "string", description: "the case to fold in and remove" }, into: { type: "string", description: "the parent case it belongs to" } }, required: ["name", "into"] } },
+  { name: "delete_case", description: "Permanently delete a CASE (potential beneficiary in intake). Admin only. Use for a duplicate or mistaken intake: 'delete the duplicate Tony case'. Match by name. Only ever removes a case, never an accepted beneficiary. If more than one matches, ask which.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "set_public_profile", description: "Set a beneficiary's DONOR-FACING public name (alias) and sanitized public story. Admin only. This does NOT publish them (consent stays as-is); it prepares the public profile for Nur to review/publish.", input_schema: { type: "object", properties: { name: { type: "string" }, public_name: { type: "string" }, public_story: { type: "string" } }, required: ["name"] } },
   { name: "set_beneficiary_funding", description: "Set a beneficiary's funding goal and/or amount funded (USD). Admin only. Use for 'set Amani's funding goal to 1200', 'we've funded 300 of Grace's goal'. Money figures only ever set here, explicitly.", input_schema: { type: "object", properties: { name: { type: "string" }, goal_amount: { type: "number" }, funded_amount: { type: "number" } }, required: ["name"] } },
   { name: "update_inventory_item", description: "Update an EXISTING Maisha inventory item by name: quantity, stock status, price, location, or its Folklore listing URL. Use for 'we sold 3 of the beaded necklaces', 'mark the kikoy out of stock', 'set the listing URL for X'. Match by name; if more than one matches, ask.", input_schema: { type: "object", properties: { name: { type: "string" }, quantity: { type: "number" }, status: { type: "string", enum: ["in_stock", "low", "out", "archived"] }, unit_price: { type: "number" }, location: { type: "string" }, folklore_url: { type: "string" } }, required: ["name"] } },
@@ -1175,6 +1179,78 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   }
 
   // ---- CASE LIFECYCLE + CARE (admin only, confidential) ----
+  // ---- CASE CRUD (move / edit / merge / delete), admin only. Mirrors the portal
+  // CaseManage controls so Nur can do it from WhatsApp too. Resolve by name and
+  // disambiguate (no match or many = ask), and only ever touch a CASE (intake_stage
+  // not null), so a fuzzy chat command can never mutate an accepted beneficiary. ----
+  if (name === "move_case" || name === "edit_case" || name === "merge_case" || name === "delete_case") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const nm = String(input.name || "").trim();
+    if (!nm) return { ok: false, summary: "Which case?", error: "no name" };
+    const like = `%${nm.replace(/[,()*%]/g, "")}%`;
+    const { data: cases } = await db.from("beneficiaries").select("id,full_name,ref_code,triage_notes,photo_asset_id,intake_stage").not("intake_stage", "is", null).ilike("full_name", like).limit(5);
+    const list = (cases || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I do not see a case for ${nm}.`, opts) };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few cases match: ${list.map((c) => c.full_name).join(", ")}. Which one?`, opts) };
+    const c = list[0];
+
+    if (name === "move_case") {
+      const stage = String(input.stage || "").toLowerCase();
+      if (!["prospect", "under_review", "pending_funds", "declined"].includes(stage)) return { ok: false, summary: "Which stage? prospect, under review, pending funds, or declined." };
+      await db.from("beneficiaries").update({ intake_stage: stage }).eq("id", c.id);
+      await emit({ type: "beneficiary.case_stage_changed", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: c.id, payload: { name: c.full_name, to: stage, via: "smart" } });
+      return { ok: true, summary: humanize(`Moved ${c.full_name} to ${stage.replace(/_/g, " ")}.`, opts), affordance: { kind: "open", label: "Open cases", href: "/cases" }, detail: { id: c.id, stage } };
+    }
+
+    if (name === "edit_case") {
+      const patch: any = {}; const changed: string[] = [];
+      if (input.new_name) { patch.full_name = String(input.new_name).trim().slice(0, 200); changed.push("name"); }
+      if (input.needs !== undefined) { patch.needs = String(input.needs || "").trim().slice(0, 600) || null; changed.push("needs"); }
+      if (Array.isArray(input.dependents)) {
+        const deps = input.dependents.map((s: any) => String(s).trim()).filter(Boolean);
+        const base = String(c.triage_notes || "").replace(/\n?Dependents:\s*.*/i, "").trim();
+        patch.triage_notes = deps.length ? `${base ? base + "\n" : ""}Dependents: ${deps.join(", ")}` : (base || null);
+        changed.push("dependents");
+      }
+      if (input.region !== undefined) { const r = String(input.region || "").trim().slice(0, 120); patch.region = r || null; patch.location = r || null; changed.push("region"); }
+      if (input.program && ["safe_house", "education", "rescue", "nutrition", "other"].includes(input.program)) { patch.program = input.program; changed.push("program"); }
+      if (!changed.length) return { ok: false, summary: "What should I change on the case? name, dependents, needs, region, or program." };
+      await db.from("beneficiaries").update(patch).eq("id", c.id);
+      await emit({ type: "beneficiary.case_edited", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: c.id, payload: { name: c.full_name, changed, via: "smart" } });
+      return { ok: true, summary: humanize(`Updated the ${changed.join(", ")} on ${patch.full_name || c.full_name}'s case.`, opts), affordance: { kind: "open", label: "Open cases", href: "/cases" }, detail: { id: c.id, changed } };
+    }
+
+    if (name === "merge_case") {
+      const intoNm = String(input.into || "").trim();
+      if (!intoNm) return { ok: false, summary: "Which case should I merge it into?" };
+      const { data: parents } = await db.from("beneficiaries").select("id,full_name,triage_notes,photo_asset_id").not("intake_stage", "is", null).ilike("full_name", `%${intoNm.replace(/[,()*%]/g, "")}%`).neq("id", c.id).limit(5);
+      const plist = (parents || []) as any[];
+      if (!plist.length) return { ok: false, summary: humanize(`I do not see a case called ${intoNm} to merge into.`, opts) };
+      if (plist.length > 1) return { ok: false, summary: humanize(`A few match ${intoNm}: ${plist.map((p) => p.full_name).join(", ")}. Which one?`, opts) };
+      const parent = plist[0];
+      const dep = c.full_name || "";
+      const t = String(parent.triage_notes || "");
+      const m = t.match(/Dependents:\s*(.*)/i);
+      let triage: string;
+      if (m) {
+        const names = m[1].split(/\s*,\s*/).map((s: string) => s.trim()).filter(Boolean);
+        if (!names.some((n: string) => n.toLowerCase() === dep.toLowerCase())) names.push(dep);
+        triage = t.replace(/Dependents:\s*.*/i, `Dependents: ${names.join(", ")}`);
+      } else triage = t ? `${t}\nDependents: ${dep}` : `Dependents: ${dep}`;
+      const ppatch: any = { triage_notes: triage };
+      if (!parent.photo_asset_id && c.photo_asset_id) ppatch.photo_asset_id = c.photo_asset_id;
+      await db.from("beneficiaries").update(ppatch).eq("id", parent.id);
+      await db.from("beneficiaries").delete().eq("id", c.id).not("intake_stage", "is", null);
+      await emit({ type: "beneficiary.case_merged", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: parent.id, payload: { merged: c.full_name, into: parent.full_name, via: "smart" } });
+      return { ok: true, summary: humanize(`Merged ${c.full_name} into ${parent.full_name}'s case as a dependent and removed the duplicate.`, opts), affordance: { kind: "open", label: "Open cases", href: "/cases" }, detail: { into: parent.id } };
+    }
+
+    // delete_case
+    await db.from("beneficiaries").delete().eq("id", c.id).not("intake_stage", "is", null);
+    await emit({ type: "beneficiary.case_deleted", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: c.id, payload: { name: c.full_name, ref: c.ref_code, via: "smart" } });
+    return { ok: true, summary: humanize(`Deleted ${c.full_name}'s case.`, opts), affordance: { kind: "open", label: "Open cases", href: "/cases" }, detail: { id: c.id } };
+  }
+
   if (name === "approve_case" || name === "decline_case" || name === "set_public_profile" || name === "set_beneficiary_funding") {
     if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
     const nm = String(input.name || "").trim();
