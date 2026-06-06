@@ -9,14 +9,23 @@ dist/
 .env.local
 .env*.local
 .env.seed
+.env.shot
+.env.*
+!.env.example
 *.seed
 *.key
+*.shot
 
 # os / editor
 .DS_Store
+**/.DS_Store
 *.log
 .vscode/
 .idea/
+
+# build artifacts
+tsconfig.tsbuildinfo
+**/tsconfig.tsbuildinfo
 
 # data exports that may contain PII — keep out of git
 *-export.csv
