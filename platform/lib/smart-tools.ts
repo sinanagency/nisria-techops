@@ -1355,6 +1355,32 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       await emit({ type: "case.intake", source: "agent:sasa", actor: ctx.operatorName || "team", subject_type: "beneficiary", subject_id: crow?.id || null, payload: { ref: ref_code, program, channel: ctx.sourceGroup || "group", via: "group", photos, ai: true } });
       return { ok: true, summary: humanize(`Logged ${full_name} as a case for Nur to review${photos ? ` (${photos} photo${photos === 1 ? "" : "s"} attached)` : ""}, not yet a beneficiary.`, opts), affordance: { kind: "open", label: "Open cases", href: "/cases" }, detail: { case_id: crow?.id, ref_code, intake_stage: "under_review", photos } };
     }
+    // IDEMPOTENCY GUARD (v1.3.8). The casesIntake path above already dedupes by
+    // group; the DM path did not, so Sasa rewrote Mercy Wanjiku's intake 10x in
+    // one conversation (2026-06-07 Nur audit, "You did add the story to
+    // beneficiaries and you added it 10 times"). Refuse if a beneficiary with
+    // the same name was just added (or already exists as accepted) so the only
+    // way to grow the same name is a different ref code or a deliberate update.
+    const dupSinceISO = new Date(Date.now() - 60 * 1000).toISOString();
+    const { data: dup } = await db.from("beneficiaries")
+      .select("id,ref_code,full_name,intake_stage,status")
+      .ilike("full_name", full_name)
+      .gte("created_at", dupSinceISO)
+      .limit(1);
+    if (dup && dup.length) {
+      return { ok: true, summary: humanize(`${full_name} was just logged a moment ago, skipping the duplicate.`, opts), detail: { beneficiary_id: (dup[0] as any).id, ref_code: (dup[0] as any).ref_code, deduped: true, reason: "within_60s" } };
+    }
+    // Also block if an ACCEPTED beneficiary with this exact name already exists
+    // (active, intake_stage NULL) — that's the "is already on the list" case.
+    const { data: existingAccepted } = await db.from("beneficiaries")
+      .select("id,ref_code,full_name")
+      .ilike("full_name", full_name)
+      .is("intake_stage", null)
+      .eq("status", "active")
+      .limit(1);
+    if (existingAccepted && existingAccepted.length) {
+      return { ok: true, summary: humanize(`${full_name} is already on the beneficiaries list (${(existingAccepted[0] as any).ref_code}). Want me to update their record instead?`, opts), detail: { beneficiary_id: (existingAccepted[0] as any).id, ref_code: (existingAccepted[0] as any).ref_code, deduped: true, reason: "exists_accepted" } };
+    }
     const { data: row } = await db.from("beneficiaries").insert({ ref_code, full_name, program, region, location: region, ...rich, needs: input.needs ? String(input.needs).slice(0, 600) : null, status: "active", consent_public: false, intake_date: n.today }).select("id,ref_code").single();
     await emit({ type: "beneficiary.intake", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: row?.id || null, payload: { ref: ref_code, program, via: "smart", ai: true } });
     return { ok: true, summary: humanize(`Added ${full_name} to the ${program.replace(/_/g, " ")} program (private, not donor facing until you publish).`, opts), affordance: { kind: "open", label: "Open beneficiaries", href: "/beneficiaries" }, detail: { beneficiary_id: row?.id, ref_code } };

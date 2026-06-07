@@ -206,6 +206,61 @@ function unverifiableFigure(reply: string, command: string, toolRuns: { name: st
   return !sourcePresent;
 }
 
+// NUMBER-FABRICATION GUARD (v1.3.8). The blind-mode backstop above only fires when
+// the WHOLE reply has no numeric source. But Sasa's worst trust-break with Nur was
+// listing SPECIFIC amounts (KES 7,500 to Mama Njambi, 14,000 to Linda…) that were
+// neither in her words nor in any tool result this turn. The reply contained
+// numbers, but the SPECIFIC figures named were fabricated. Tighten the check: for
+// every "KES/Ksh/USD/$ NNN" amount in the reply, the literal digits must appear in
+// the user's command this turn OR in a tool result. Otherwise, the figure has no
+// source. Returns the list of fabricated amounts. Empty array = clean.
+function findFabricatedAmounts(reply: string, command: string, toolRuns: { name: string; result: any }[]): string[] {
+  if (!reply) return [];
+  // Match "KES 7,500" / "Ksh 14000" / "USD 100" / "$5,000" / "5,000 KES"
+  const re = /(?:(?:KES|Ksh|USD|\$)\s*([\d,]+(?:\.\d+)?)|([\d,]+(?:\.\d+)?)\s*(?:KES|Ksh|USD|shillings))/gi;
+  const amounts: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(reply)) !== null) {
+    const raw = (m[1] || m[2] || "").replace(/,/g, "").replace(/\.0+$/, "");
+    if (raw && /^\d+/.test(raw)) amounts.push(raw);
+  }
+  if (!amounts.length) return [];
+  // Build the haystack from THIS turn's command + every tool input + tool result.
+  // Strip commas from numbers in the haystack so "7,500" and "7500" both match.
+  const haystackRaw = (command || "") + " " + JSON.stringify(toolRuns || []);
+  const haystack = haystackRaw.replace(/(\d),(\d)/g, "$1$2");
+  const fabricated: string[] = [];
+  for (const a of amounts) {
+    // Skip trivial numbers (1, 2, 3) that often appear as list ordinals.
+    if (Number(a) < 100) continue;
+    // Match the literal digits OR an "Nk" shorthand (5k -> 5000, 5.5k -> 5500).
+    if (haystack.includes(a)) continue;
+    const k = Number(a) / 1000;
+    const kForm1 = `${k}k`;
+    const kForm2 = `${Math.round(k)}k`;
+    if (haystack.includes(kForm1) || haystack.includes(kForm2)) continue;
+    fabricated.push(a);
+  }
+  return fabricated;
+}
+
+const HONEST_NO_FIGURE =
+  "I should not have put numbers in there. I do not see those amounts in your message or in what I just pulled. Could you tell me the exact figure and the payee, and I will record it from your words.";
+
+// SYMPATHY-OPENER GUARD (v1.3.8). Sasa opens routine ops replies with "I'm so
+// sorry, Nur. That's heartbreaking" when the user mentions ANY hard news, then
+// keeps re-firing the same opener turn after turn. Caught in 2026-06-07 Nur
+// audit: 3 consecutive Sasa replies in the food-tragedy thread opened with the
+// same condolence; Nur replied "Stop saying I am sorry Nur, that's heartbreaking
+// I did not redirect the meals!!!". The existing prompt rule on consecutive
+// sympathy is ignored under emotional context, so strip deterministically.
+// Strategy: at most ONE sympathy opener per thread (scan opts.history; if any
+// prior assistant turn already opened with sympathy, strip from this reply).
+const SYMPATHY_OPENER = /^(?:i'?m\s+(?:so|really|truly)?\s*sorry[^.!?]*[.!?]\s*|that(?:'s|\s+is)\s+(?:so\s+)?(?:heartbreaking|awful|terrible|tragic)[^.!?]*[.!?]\s*)+/i;
+function alreadySympathized(history: { role: string; content: string }[] = []): boolean {
+  return history.some((m) => m.role === "assistant" && SYMPATHY_OPENER.test(String(m.content || "")));
+}
+
 // One model call, hardened against the input-tokens-per-minute (ITPM) rate limit.
 //
 // PROMPT CACHING. The system prompt and the tools schema are byte-identical on
@@ -562,7 +617,25 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       // Money safety is preserved WITHOUT OpenAI: if the reply states a figure that is
       // not grounded in this turn's user words or a tool result, append a plain caveat
       // rather than asserting it as checked.
-      if (unverifiableFigure(reply, opts.command, toolRuns)) {
+      // SYMPATHY OPENER GUARD (v1.3.8): if a prior assistant turn already opened
+      // with sympathy, strip the opener from this reply. Keeps the substantive
+      // body intact. Nur audit: 3-in-a-row "I'm so sorry, Nur. That's
+      // heartbreaking." landed on routine ops turns and she snapped.
+      if (alreadySympathized(opts.history) && SYMPATHY_OPENER.test(reply)) {
+        reply = reply.replace(SYMPATHY_OPENER, "").trim() || reply;
+      }
+      // NUMBER FABRICATION GUARD (v1.3.8). If Sasa named specific KES/USD amounts
+      // that don't appear in the user's words this turn OR in any tool result,
+      // those amounts are fabricated. Don't append a caveat — REPLACE the reply
+      // with an honest ask so a fabricated number never reaches the operator's
+      // screen. Caught the worst trust break from the 2026-06-07 Nur audit
+      // ("lol you are hallucinating", "OMG where did you come up with these
+      // numbers?!"). The looser unverifiableFigure check above stays as a
+      // backstop for the no-numeric-source-at-all case.
+      const fabricated = findFabricatedAmounts(reply, opts.command, toolRuns);
+      if (fabricated.length) {
+        reply = humanize(HONEST_NO_FIGURE, { now: { long: n.long, today: n.today } });
+      } else if (unverifiableFigure(reply, opts.command, toolRuns)) {
         reply = `${reply}\n\nPlease double check that figure before you rely on it, I have not verified it against a record.`;
       }
       // HONESTY in degraded mode: if this turn ran on the OpenAI backup (Claude
