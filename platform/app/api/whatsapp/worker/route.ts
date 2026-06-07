@@ -101,9 +101,26 @@ async function processJob(db: any, job: any): Promise<void> {
   if (process.env.MAINTENANCE_MODE === "1") {
     const allowlist = (process.env.MAINTENANCE_ALLOWLIST || "").split(",").map((s) => s.trim()).filter(Boolean);
     if (!allowlist.includes(from)) {
-      const notice = "Sasa is offline for a short maintenance window while we ship a fix. Back shortly. — Taona";
-      await sendTextAndLog(db, from, notice, { contactId });
-      await emit({ type: "whatsapp.maintenance_block", source: "whatsapp", actor: from, subject_type: "contact", subject_id: contactId, payload: { from, name: opName || name || null } });
+      // v1.3.7: maintenance reply is warmer + structured (per Taona's
+      // direction). Repeats happen at most once per 6 hours per contact so a
+      // chatty user doesn't get spammed with the same line, but everyone gets
+      // it at least once per silence window. Idempotency check via the
+      // contact's recent outbound.
+      const NOTICE = [
+        "Sasa is in a short maintenance window.",
+        "",
+        "I'm offline while Taona ships a quality pass on the bot. Nothing on the portal has been touched, your data is safe, and I will be back on this number when the window closes.",
+        "",
+        "For anything urgent, message Taona directly: wa.me/971501168462",
+      ].join("\n");
+      const cutISO = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+      const { data: recentNotice } = contactId
+        ? await db.from("messages").select("id").eq("contact_id", contactId).eq("direction", "out").ilike("body", "%maintenance window%").gte("created_at", cutISO).limit(1)
+        : { data: null };
+      if (!recentNotice || !(recentNotice as any[]).length) {
+        await sendTextAndLog(db, from, NOTICE, { contactId });
+      }
+      await emit({ type: "whatsapp.maintenance_block", source: "whatsapp", actor: from, subject_type: "contact", subject_id: contactId, payload: { from, name: opName || name || null, replied: !(recentNotice as any[])?.length } });
       await markJobDone(job.id);
       return;
     }
