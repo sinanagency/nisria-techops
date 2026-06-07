@@ -17,7 +17,7 @@ import Countdown from "../../components/Countdown";
 import ExpenseTrioHero from "../../components/ExpenseTrioHero";
 import ExpenseList from "../../components/ExpenseList";
 import { periodFor, dubaiToday } from "../../lib/period";
-import { loadExpenses, sumByCurrency } from "../../lib/expenses";
+import { loadExpenses, sumByCurrency, loadRefunds } from "../../lib/expenses";
 import { loadUpcoming } from "../../lib/upcoming";
 import { getMonthlyGoal } from "../../lib/org-settings";
 import {
@@ -90,7 +90,7 @@ export default async function Finance() {
   const lastMonth = periodFor("last_month");
   const todayIso = dubaiToday();
 
-  const [donRes, payRes, teamRes, expRows, upcomingRows, expLastMonth, monthlyGoal] = await Promise.all([
+  const [donRes, payRes, teamRes, expRows, upcomingRows, expLastMonth, monthlyGoal, refunds] = await Promise.all([
     db.from("donations").select("amount,currency,status,donated_at").gte("donated_at", thisMonth.from).limit(2000),
     db.from("payments").select("*").limit(1000),
     db.from("team_members").select("id,name").limit(500),
@@ -98,6 +98,7 @@ export default async function Finance() {
     loadUpcoming(db),
     loadExpenses(db, lastMonth),
     getMonthlyGoal(db),
+    loadRefunds(db, thisMonth),
   ]);
 
   const donations = (donRes.data || []) as any[];
@@ -377,6 +378,7 @@ export default async function Finance() {
         outCount={expRows.length}
         outDeltaPct={outDeltaPct}
         upcoming={upcomingRows}
+        refunds={refunds}
       />
 
       {/* EXPENSE LIST (spec/002 v2): the queryable bank-statement-style ledger

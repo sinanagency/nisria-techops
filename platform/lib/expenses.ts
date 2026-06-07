@@ -23,9 +23,39 @@ export type ExpenseRow = {
   currency: string;
   description: string;
   category?: string | null;
+  category_inferred?: boolean; // true when category came from auto-tag (operator should verify)
   proof?: string | null;
   bank_account?: string | null;
 };
+
+// Auto-tag bank rows from their description. Sasa-light: regex-only, fast, no
+// API call. Operator sees a "verify" badge so they know it wasn't human-tagged.
+// Doctrine-safe because the inferred category is presentation only — the bank
+// row itself has no category column to be polluted.
+const TAG_RULES: { pattern: RegExp; category: string }[] = [
+  { pattern: /\b(salary|salaries|payroll|stipend)\b/i, category: "salary" },
+  { pattern: /\bm-?pesa to account\b/i, category: "transfer" },
+  { pattern: /\b(rent|landlord|lease)\b/i, category: "rent" },
+  { pattern: /\b(facebook|google ads|instagram ads|meta\b)\b/i, category: "marketing" },
+  { pattern: /\b(internet|airtime|safaricom|wifi|fiber|fibre)\b/i, category: "utilities" },
+  { pattern: /\b(electricity|kplc|power|water|sewage)\b/i, category: "utilities" },
+  { pattern: /\b(visa|mastercard|card\b)\b/i, category: "card" },
+  { pattern: /\b(paypal|stripe|wise|payoneer)\b/i, category: "transfer" },
+  { pattern: /\b(dstv|gotv|spotify|netflix|chatgpt|openai|anthropic|claude|github|vercel|adobe|canva)\b/i, category: "subscription" },
+  { pattern: /\b(transport|taxi|uber|bolt|fuel|petrol)\b/i, category: "transport" },
+  { pattern: /\b(food|grocery|hotel|restaurant|airbnb)\b/i, category: "hospitality" },
+  { pattern: /\b(school|tuition|fees|education)\b/i, category: "education" },
+  { pattern: /\b(medical|hospital|clinic|pharmacy)\b/i, category: "medical" },
+  { pattern: /\b(bank|excise|withholding|tax)\b/i, category: "bank-fee" },
+  { pattern: /\b(chq|cheque|check)\b/i, category: "cheque" },
+];
+
+function inferCategory(description: string): string | null {
+  for (const rule of TAG_RULES) {
+    if (rule.pattern.test(description)) return rule.category;
+  }
+  return null;
+}
 
 export async function loadExpenses(db: any, period: Period): Promise<ExpenseRow[]> {
   const [{ data: payRows }, { data: bankRows }] = await Promise.all([
@@ -69,15 +99,21 @@ export async function loadExpenses(db: any, period: Period): Promise<ExpenseRow[
       const d = String(b.txn_date).slice(0, 10);
       return !ops.some((o) => o.amount === a && o.currency === c && daysApart(o.date, d) <= 1);
     })
-    .map((b) => ({
-      source: "bank",
-      id: String(b.id),
-      date: String(b.txn_date).slice(0, 10),
-      amount: Number(b.amount || 0),
-      currency: String(b.currency || "KES").toUpperCase(),
-      description: String(b.description || "Bank transaction"),
-      bank_account: b.account || null,
-    }));
+    .map((b) => {
+      const desc = String(b.description || "Bank transaction");
+      const cat = inferCategory(desc);
+      return {
+        source: "bank" as const,
+        id: String(b.id),
+        date: String(b.txn_date).slice(0, 10),
+        amount: Number(b.amount || 0),
+        currency: String(b.currency || "KES").toUpperCase(),
+        description: desc,
+        category: cat,
+        category_inferred: !!cat,
+        bank_account: b.account || null,
+      };
+    });
 
   // newest first
   return [...ops, ...bank].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
@@ -109,4 +145,25 @@ export function sumByCurrency(rows: ExpenseRow[]): Record<string, number> {
   const t: Record<string, number> = {};
   for (const r of rows) t[r.currency] = (t[r.currency] || 0) + r.amount;
   return t;
+}
+
+// Refunds & inflow reversals in the same period. Surfaced as a sibling
+// "Refunds this period" line under the Money Out card so the headline stays
+// clean (refunds are not spend), but the operator can still see them.
+export async function loadRefunds(db: any, period: { from: string; to: string }) {
+  const { data } = await db
+    .from("bank_transactions")
+    .select("id,description,amount,currency,txn_date")
+    .eq("direction", "in")
+    .gte("txn_date", period.from)
+    .lte("txn_date", period.to)
+    .ilike("description", "%refund%")
+    .limit(200);
+  const rows = (data || []) as any[];
+  const totals: Record<string, number> = {};
+  for (const r of rows) {
+    const c = String(r.currency || "KES").toUpperCase();
+    totals[c] = (totals[c] || 0) + Number(r.amount || 0);
+  }
+  return { count: rows.length, totals };
 }

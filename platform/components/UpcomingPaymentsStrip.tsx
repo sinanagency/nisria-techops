@@ -61,8 +61,11 @@ function UpcomingCard({ p }: { p: UpcomingPayment }) {
       </div>
       <div className="upx-card-payee">{p.payee}</div>
       <div className="upx-card-amount">
-        <Money amount={p.amount} currency={p.currency} className="strong" />
+        {p.source === "task" && p.amount === 0
+          ? <span className="upx-card-amount tbd">amount TBD</span>
+          : <Money amount={p.amount} currency={p.currency} className="strong" />}
       </div>
+      {p.source === "task" && <div className="upx-card-source-task">from a task</div>}
       {p.purpose && <div className="upx-card-purpose">{p.purpose}</div>}
     </div>
   );

@@ -117,7 +117,11 @@ export default function ExpenseList({ rows, today }: { rows: ExpenseRow[]; today
                 <div key={`${r.source}-${r.id}`} className="expl-row">
                   <span className="expl-row-desc">
                     {r.description}
-                    {r.category && <span className="expl-row-cat">{r.category}</span>}
+                    {r.category && (
+                      <span className={r.category_inferred ? "expl-row-cat expl-row-verify" : "expl-row-cat"}>
+                        {r.category}{r.category_inferred ? " · verify" : ""}
+                      </span>
+                    )}
                     {r.bank_account && <span className="expl-row-bank">{r.bank_account}</span>}
                     {r.proof && <span className="expl-row-proof">proof</span>}
                   </span>

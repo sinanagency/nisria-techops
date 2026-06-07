@@ -15,6 +15,7 @@ export default function ExpenseTrioHero({
   outCount,
   outDeltaPct,
   upcoming,
+  refunds,
 }: {
   donationTotals: Record<string, number>;
   donationCount: number;
@@ -23,6 +24,7 @@ export default function ExpenseTrioHero({
   outCount: number;
   outDeltaPct: number | null;
   upcoming: UpcomingPayment[];
+  refunds: { count: number; totals: Record<string, number> };
 }) {
   const primaryDon = donationTotals.USD || donationTotals.KES || 0;
   const primaryDonCcy = donationTotals.USD ? "USD" : "KES";
@@ -75,6 +77,13 @@ export default function ExpenseTrioHero({
             <> · {outDeltaPct >= 0 ? "▲" : "▼"} {Math.abs(outDeltaPct)}% vs last month</>
           )}
         </div>
+        {refunds.count > 0 && (
+          <div className="trio-card-refund">
+            refunds: {Object.entries(refunds.totals).map(([c, v]) => (
+              <Money key={c} amount={v} currency={c} className="strong" />
+            ))} ({refunds.count})
+          </div>
+        )}
       </a>
 
       {/* Upcoming payments — horizontally scrollable */}

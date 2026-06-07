@@ -1617,3 +1617,8 @@ a.trio-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md, 0 
 .expl-row-cat, .expl-row-bank, .expl-row-proof { font-size: 10.5px; background: rgba(0,0,0,.04); padding: 2px 7px; border-radius: 999px; color: var(--muted, #5f7574); flex-shrink: 0; }
 .expl-row-proof { background: rgba(22,163,74,.10); color: #16A34A; }
 .expl-row-amount { font-variant-numeric: tabular-nums; font-weight: 600; flex-shrink: 0; }
+
+.trio-card-refund { font-size: 11px; color: var(--muted, #5f7574); margin-top: 2px; padding-top: 6px; border-top: 1px dashed var(--line, rgba(0,0,0,.06)); }
+.expl-row-verify { font-size: 10.5px; background: rgba(217,119,6,.10); color: #D97706; padding: 2px 7px; border-radius: 999px; flex-shrink: 0; }
+.upx-card-amount.tbd { color: var(--muted, #5f7574); font-style: italic; font-size: 13px; }
+.upx-card-source-task { font-size: 10px; color: var(--peri, #5B6BF0); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
