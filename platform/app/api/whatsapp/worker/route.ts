@@ -482,15 +482,24 @@ async function processJob(db: any, job: any): Promise<void> {
           opsHandled = true;
         } else {
           const picked = pickMostRecent(hits) as any;
-          const update: any = { status: st.status, updated_at: new Date().toISOString() };
-          if (st.reason) update.reason = st.reason;
-          await db.from("tasks").update(update).eq("id", picked.id);
-          await emit({ type: "task.status_changed", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { title: picked.title, to: st.status, reason: st.reason, source_message_id: sourceMessageId } });
-          const label = st.status.replace("_", " ");
-          const reasonTail = st.reason ? ` (${st.reason})` : "";
-          await sendTextAndLog(db, from, `Marked "${picked.title}" as ${label}${reasonTail}.`, { contactId });
-          opsHandled = true;
-          opsNote = `state_transition_already_applied: "${picked.title}" -> ${st.status}`;
+          // v1.3.2: idempotency. If the task is already at the target status,
+          // narrate the no-op honestly instead of issuing a redundant UPDATE.
+          if (picked.status === st.status) {
+            const label = st.status.replace("_", " ");
+            await sendTextAndLog(db, from, `"${picked.title}" is already ${label}, no change needed.`, { contactId });
+            opsHandled = true;
+            opsNote = `state_transition_noop: "${picked.title}" already ${st.status}`;
+          } else {
+            const update: any = { status: st.status, updated_at: new Date().toISOString() };
+            if (st.reason) update.reason = st.reason;
+            await db.from("tasks").update(update).eq("id", picked.id);
+            await emit({ type: "task.status_changed", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { title: picked.title, to: st.status, reason: st.reason, source_message_id: sourceMessageId } });
+            const label = st.status.replace("_", " ");
+            const reasonTail = st.reason ? ` (${st.reason})` : "";
+            await sendTextAndLog(db, from, `Marked "${picked.title}" as ${label}${reasonTail}.`, { contactId });
+            opsHandled = true;
+            opsNote = `state_transition_already_applied: "${picked.title}" -> ${st.status}`;
+          }
         }
       }
 
@@ -502,22 +511,25 @@ async function processJob(db: any, job: any): Promise<void> {
           if (hits.length === 0) {
             await sendTextAndLog(db, from, `I don't see an open task matching "${ct.title_fragment}" to add a comment to.`, { contactId });
             opsHandled = true;
-          } else if (hits.length > 1) {
-            // Recency wins (matches the policy operators see today: latest task
-            // matching the fragment is almost always the one they mean).
-            const picked = pickMostRecent(hits) as any;
-            const { data: c } = await db.from("task_comments").insert({ task_id: picked.id, author_id: null, author_name: opName || name || null, body: ct.comment_body, source: "bot" }).select("id").single();
-            await emit({ type: "task.comment_added", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { comment_id: c?.id, source_message_id: sourceMessageId } });
-            await sendTextAndLog(db, from, `Added the note on "${picked.title}".`, { contactId });
-            opsHandled = true;
-            opsNote = `comment_added: on "${picked.title}"`;
           } else {
-            const picked = hits[0];
-            const { data: c } = await db.from("task_comments").insert({ task_id: picked.id, author_id: null, author_name: opName || name || null, body: ct.comment_body, source: "bot" }).select("id").single();
-            await emit({ type: "task.comment_added", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { comment_id: c?.id, source_message_id: sourceMessageId } });
-            await sendTextAndLog(db, from, `Added the note on "${picked.title}".`, { contactId });
-            opsHandled = true;
-            opsNote = `comment_added: on "${picked.title}"`;
+            // Recency wins on ties (latest task matching the fragment is almost
+            // always the one the operator means).
+            const picked = (hits.length > 1 ? pickMostRecent(hits) : hits[0]) as any;
+            // v1.3.2: idempotency. Skip if an identical body landed on this
+            // task in the last 5 min (catches retries like "I sent it twice").
+            const cutISO = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+            const { data: dupComment } = await db.from("task_comments").select("id").eq("task_id", picked.id).eq("body", ct.comment_body).gte("created_at", cutISO).limit(1);
+            if (dupComment && dupComment.length) {
+              await sendTextAndLog(db, from, `The note on "${picked.title}" is already saved, nothing to add.`, { contactId });
+              opsHandled = true;
+              opsNote = `comment_dedup: on "${picked.title}"`;
+            } else {
+              const { data: c } = await db.from("task_comments").insert({ task_id: picked.id, author_id: null, author_name: opName || name || null, body: ct.comment_body, source: "bot" }).select("id").single();
+              await emit({ type: "task.comment_added", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { comment_id: c?.id, source_message_id: sourceMessageId } });
+              await sendTextAndLog(db, from, `Added the note on "${picked.title}".`, { contactId });
+              opsHandled = true;
+              opsNote = `comment_added: on "${picked.title}"`;
+            }
           }
         }
       }
@@ -689,7 +701,23 @@ async function processJob(db: any, job: any): Promise<void> {
     // task that code already wrote rather than re-asking or re-trying to
     // create one. The original body stays in `command` verbatim.
     const cmdForBrain = parsedContextNote ? `${command}\n\n[system: ${parsedContextNote}]` : command;
-    ({ reply } = await runSasa({ history, command: cmdForBrain, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote }));
+    // v1.3.2: also flag recent task activity (within 5 min) for THIS contact.
+    // Catches follow-up turns where the user is asking about something Sasa
+    // just did in a previous turn (e.g. "whats the note u added?"). Without
+    // this, the honesty guard sees no write-tool success this turn and fires
+    // the canned line, even though the action genuinely happened minutes ago.
+    let recentTaskActivity = false;
+    try {
+      const fromDigits = String(from || "").replace(/^\+/, "");
+      const { data: tmRow } = await db.from("team_members").select("id,phone").or(`phone.eq.${fromDigits},phone.eq.+${fromDigits}`).limit(1);
+      const senderTmId = ((tmRow || []) as any[])[0]?.id;
+      if (senderTmId) {
+        const cut = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const { data: recent } = await db.from("tasks").select("id").eq("assignee_id", senderTmId).or(`created_at.gte.${cut},updated_at.gte.${cut}`).limit(1);
+        recentTaskActivity = ((recent || []) as any[]).length > 0;
+      }
+    } catch {}
+    ({ reply } = await runSasa({ history, command: cmdForBrain, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote || recentTaskActivity }));
   } catch (e: any) {
     // A REAL backend failure (Claude API error, tool/DB throw). This is the only
     // path that admits being stuck and asks the operator to retry.
