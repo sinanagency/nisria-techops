@@ -667,6 +667,67 @@ async function processJob(db: any, job: any): Promise<void> {
   }
 
   // ──────────────────────────────────────────────────────────────────────
+  // DETERMINISTIC PAYMENT-RECEIPT PRE-PARSER (Sasa 727 v1.3.10). M-Pesa
+  // SMS and Sendwave PDF receipts: parse amount + payee + date directly
+  // and STAGE a record_payment pending_action without round-tripping the
+  // model. Caught by the 2026-06-08 intake harness: Sasa was generating
+  // "Ready to log..." text without calling record_payment, leaving zero
+  // pending_actions rows so the operator's later "yes" committed nothing.
+  // This bypasses the model entirely for the unambiguous receipt case.
+  // Per KT #127 (deterministic dispatcher when the model is brittle).
+  // ──────────────────────────────────────────────────────────────────────
+  if (process.env.PARSE_TASKS_ENABLED === "1" && command && contactId) {
+    try {
+      const { parsePayment } = await import("./parsePayment.mjs");
+      const pay = parsePayment(command);
+      if (pay && pay.intent === "stage_payment") {
+        // Idempotency: if an identical staging is already awaiting confirm in
+        // the last 10 minutes (same amount + payee + currency), don't re-stage.
+        const cutISO = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+        const { data: existingStage } = await db
+          .from("pending_actions")
+          .select("id,summary,status")
+          .eq("contact_id", contactId)
+          .eq("kind", "record_payment")
+          .eq("status", "awaiting_confirm")
+          .gte("created_at", cutISO)
+          .limit(5);
+        const stagedSummary = pay.summary;
+        const dup = (existingStage || []).find((r: any) => String(r.summary || "").includes(`${pay.payload.currency} ${pay.payload.amount.toLocaleString()}`) && String(r.summary || "").includes(pay.payload.payee));
+        if (dup) {
+          await sendTextAndLog(db, from, `That payment is already staged: ${stagedSummary}. Reply yes to commit, or tell me the correction.`, { contactId });
+          await markJobDone(job.id);
+          return;
+        }
+        const pargs: any = {
+          payee: pay.payload.payee,
+          amount: pay.payload.amount,
+          currency: pay.payload.currency,
+          method: pay.payload.method,
+          paid_at: pay.payload.paid_at,
+          purpose: pay.payload.purpose,
+          screenshot_path: proofPath || null,
+          source_message_id: sourceMessageId || null,
+        };
+        await db.from("pending_actions").insert({
+          contact_id: contactId,
+          kind: "record_payment",
+          payload: pargs,
+          summary: stagedSummary,
+          status: "awaiting_confirm",
+        });
+        await emit({ type: "payment.staged", source: "agent:sasa-parsepay", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { source: pay.source, summary: stagedSummary, payee: pay.payload.payee, amount: pay.payload.amount } });
+        const methodLabel = pay.source === "mpesa_sms" ? " via M-Pesa" : pay.source === "sendwave_pdf" ? " via Sendwave" : "";
+        await sendTextAndLog(db, from, `Staged: ${stagedSummary}${methodLabel}. Reply "yes" to commit, or tell me the correction (wrong amount, wrong payee, or a purpose to add).`, { contactId });
+        await markJobDone(job.id);
+        return;
+      }
+    } catch (err: any) {
+      await emit({ type: "parsePayment.error", source: "agent:sasa", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { error: String(err?.message || err).slice(0, 240) } }).catch(() => {});
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
   // REACTION → COMPLETE_TASK (Sasa 727 v1). When the operator reacts with
   // ✅ / ✔ / 👍 / 💯 / 🙌 / 👌 / 🎉 on an outbound Sasa message that confirmed
   // a task creation, mark the matching task done WITHOUT invoking the model.
