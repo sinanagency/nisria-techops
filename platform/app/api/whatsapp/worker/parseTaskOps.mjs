@@ -180,3 +180,90 @@ export function pickMostRecent(hits) {
     return bt - at;
   })[0];
 }
+
+// PATTERN 6: priority shifts. tasks.priority is enum (high|medium|low). Three
+// shapes the operator naturally uses:
+//   "make X high priority" / "make X urgent"
+//   "set X priority to high" / "set X to high priority"
+//   "X is urgent" / "X is critical"
+//   "drop priority on X"  ->  medium
+// urgent/critical/top map to high; normal -> medium; minor -> low.
+const PRIORITY_WORDS = {
+  high: ["high", "urgent", "critical", "top"],
+  medium: ["medium", "normal"],
+  low: ["low", "minor"],
+};
+
+function findPriorityFromText(text) {
+  const t = String(text || "").toLowerCase().trim();
+  for (const [p, words] of Object.entries(PRIORITY_WORDS)) {
+    for (const w of words) {
+      const re = new RegExp(`\\b${w}\\b`, "i");
+      if (re.test(t)) return p;
+    }
+  }
+  return null;
+}
+
+export function parseTaskPriority(body) {
+  const b = String(body || "").trim();
+  if (b.length < 5) return null;
+  // "make X high/urgent (priority)?" or "set X high/urgent (priority)?"
+  let m = b.match(/^\s*(?:make|set)\s+(?:the\s+)?(.+?)\s+(high|medium|low|urgent|critical|top|normal|minor)(?:\s+priority)?\s*$/im);
+  if (m) {
+    const titleFrag = cleanFrag(m[1]);
+    const priority = findPriorityFromText(m[2]);
+    if (titleFrag.length >= 3 && priority) return { intent: "set_priority", title_fragment: titleFrag, priority };
+  }
+  // "set/change X priority to high"
+  m = b.match(/^\s*(?:set|change)\s+(?:the\s+)?(.+?)\s+priority\s+to\s+(high|medium|low|urgent|critical|top|normal|minor)\s*$/im);
+  if (m) {
+    const titleFrag = cleanFrag(m[1]);
+    const priority = findPriorityFromText(m[2]);
+    if (titleFrag.length >= 3 && priority) return { intent: "set_priority", title_fragment: titleFrag, priority };
+  }
+  // "X is urgent" / "X is critical" / "X is high priority"
+  m = b.match(/^\s*(?:the\s+)?(.+?)\s+is\s+(urgent|critical|high\s+priority)\s*$/im);
+  if (m) {
+    const titleFrag = cleanFrag(m[1]);
+    if (titleFrag.length >= 3) return { intent: "set_priority", title_fragment: titleFrag, priority: "high" };
+  }
+  // "drop priority on X" -> medium (the user's intent is "less than now")
+  m = b.match(/^\s*drop\s+priority\s+on\s+(?:the\s+)?(.+?)\s*$/im);
+  if (m) {
+    const titleFrag = cleanFrag(m[1]);
+    if (titleFrag.length >= 3) return { intent: "set_priority", title_fragment: titleFrag, priority: "medium" };
+  }
+  return null;
+}
+
+// BATCH: split a body into op-level segments on ` and `, `;`, ` then `, or
+// `, then `. Each segment is parsed independently. Returns null when the body
+// is single-op (let the dispatcher handle directly) or when ANY segment fails
+// to parse (we don't half-execute a batch — drop to runSasa for the model to
+// handle the messy mixed case).
+function splitSegments(body) {
+  return String(body || "")
+    .trim()
+    .split(/\s*(?:,\s*then|;|then|and)\s+/i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function parseTaskOpsBatch(body) {
+  const segments = splitSegments(body);
+  if (segments.length < 2) return null;
+  const intents = [];
+  for (const seg of segments) {
+    const st = parseStateTransition(seg);
+    if (st) { intents.push({ kind: "state", seg, intent: st }); continue; }
+    const ct = parseTaskComment(seg);
+    if (ct) { intents.push({ kind: "comment", seg, intent: ct }); continue; }
+    const dt = parseTaskDependency(seg);
+    if (dt) { intents.push({ kind: "dependency", seg, intent: dt }); continue; }
+    const pt = parseTaskPriority(seg);
+    if (pt) { intents.push({ kind: "priority", seg, intent: pt }); continue; }
+    return null;
+  }
+  return intents.length >= 2 ? intents : null;
+}

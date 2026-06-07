@@ -196,6 +196,14 @@ const TESTS = [
   { id: "9b", kind: "text",
     body: "Abandon the Mark Njambi reimbursement, he refused it",
     expect: { statusTransition: "abandoned", targetTitleHas: "mark njambi" } },
+  // v1.3.6: priority shift via parseTaskPriority (deterministic, no model call)
+  { id: "10", kind: "text",
+    body: "Make the Java proposal high priority",
+    expect: { priorityChange: "high", targetTitleHas: "java proposal" } },
+  // v1.3.6: batch ops via parseTaskOpsBatch (two ops separated by "and")
+  { id: "11", kind: "text",
+    body: "Mark Send Eunice the venue brief as done and the Anthropic grant task as blocked",
+    expect: { batchStatuses: { "send eunice": "done", "anthropic grant": "blocked" } } },
 ];
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -334,6 +342,23 @@ async function assertText(test, sourceMsgWamid) {
       const hits = (ourTasksTx || []).filter((t) => !test.expect.targetTitleHas || (t.title || "").toLowerCase().includes(test.expect.targetTitleHas));
       checks.push({ label: `transitioned task to ${test.expect.statusTransition}`, pass: hits.length >= 1, got: { matched: hits.length, candidates: (ourTasksTx || []).map((t) => t.title) } });
     }
+  }
+  if (test.expect.priorityChange) {
+    const ourIds = await ourTaskIds();
+    const [, rows] = await sbGet(`tasks?id=in.(${ourIds.join(",")})&priority=eq.${test.expect.priorityChange}&select=id,title,priority`);
+    const hits = (rows || []).filter((t) => !test.expect.targetTitleHas || (t.title || "").toLowerCase().includes(test.expect.targetTitleHas));
+    checks.push({ label: `priority set to ${test.expect.priorityChange}`, pass: hits.length >= 1, got: { matched: hits.length, candidates: (rows || []).map((t) => `${t.title}(${t.priority})`) } });
+  }
+  if (test.expect.batchStatuses) {
+    const ourIds = await ourTaskIds();
+    const [, allOurs] = await sbGet(`tasks?id=in.(${ourIds.join(",")})&select=id,title,status`);
+    const expected = test.expect.batchStatuses;
+    const matches = Object.entries(expected).map(([titleFrag, targetStatus]) => {
+      const t = (allOurs || []).find((r) => (r.title || "").toLowerCase().includes(titleFrag));
+      return { titleFrag, targetStatus, actual: t?.status || null, ok: t?.status === targetStatus };
+    });
+    const ok = matches.every((m) => m.ok);
+    checks.push({ label: `batch: every op landed`, pass: ok, got: matches });
   }
 
   const pass = checks.length > 0 && checks.every((ch) => ch.pass);

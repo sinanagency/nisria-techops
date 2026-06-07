@@ -475,120 +475,168 @@ async function processJob(db: any, job: any): Promise<void> {
   let opsNote = "";
   if (process.env.PARSE_TASKS_ENABLED === "1" && !parsedContextNote && sourceMessageId && command) {
     try {
-      const { parseStateTransition, parseTaskComment, parseTaskDependency, fuzzyMatchTasks, pickMostRecent } = await import("./parseTaskOps.mjs");
+      const { parseStateTransition, parseTaskComment, parseTaskDependency, parseTaskPriority, parseTaskOpsBatch, fuzzyMatchTasks, pickMostRecent } = await import("./parseTaskOps.mjs");
 
-      // Load open tasks once so all three handlers share the same view.
+      // Load open tasks once so all handlers share the same view.
       const { data: openRowsRaw } = await db
         .from("tasks").select("id,title,assignee_id,status,recurrence,due_on,priority,created_at")
         .neq("status", "done").neq("status", "abandoned")
         .order("created_at", { ascending: false }).limit(120);
-      const openRows = (openRowsRaw || []) as any[];
+      let openRows = (openRowsRaw || []) as any[];
 
-      // 1) STATE TRANSITION
-      const st = parseStateTransition(command);
-      if (st && st.intent === "transition_status") {
+      // Helpers — closed over openRows/db/emit/sendTextAndLog/contactId/from/etc.
+      // Each returns void; mutates the parent opsHandled/opsNote and (for state/
+      // priority) refreshes openRows in-place so a subsequent op in the same
+      // batch sees the just-applied change (idempotency works across segments).
+
+      const handleState = async (st: any) => {
         const hits = fuzzyMatchTasks(st.title_fragment, openRows);
         if (hits.length === 0) {
           const titles = openRows.slice(0, 8).map((t: any) => `"${t.title}"`).join(", ");
           await sendTextAndLog(db, from, `I don't see an open task matching "${st.title_fragment}". The open ones right now are: ${titles}. Tell me which to mark ${st.status.replace("_", " ")}.`, { contactId });
-          opsHandled = true;
-        } else {
-          const picked = pickMostRecent(hits) as any;
-          // v1.3.2: idempotency. If the task is already at the target status,
-          // narrate the no-op honestly instead of issuing a redundant UPDATE.
-          if (picked.status === st.status) {
-            const label = st.status.replace("_", " ");
-            await sendTextAndLog(db, from, `"${picked.title}" is already ${label}, no change needed.`, { contactId });
-            opsHandled = true;
-            opsNote = `state_transition_noop: "${picked.title}" already ${st.status}`;
-          } else {
-            const update: any = { status: st.status, updated_at: new Date().toISOString() };
-            if (st.reason) update.reason = st.reason;
-            await db.from("tasks").update(update).eq("id", picked.id);
-            await emit({ type: "task.status_changed", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { title: picked.title, to: st.status, reason: st.reason, source_message_id: sourceMessageId } });
-            const label = st.status.replace("_", " ");
-            const reasonTail = st.reason ? ` (${st.reason})` : "";
-            await sendTextAndLog(db, from, `Marked "${picked.title}" as ${label}${reasonTail}.`, { contactId });
-            opsHandled = true;
-            opsNote = `state_transition_already_applied: "${picked.title}" -> ${st.status}`;
-          }
+          return;
         }
+        const picked = pickMostRecent(hits) as any;
+        if (picked.status === st.status) {
+          const label = st.status.replace("_", " ");
+          await sendTextAndLog(db, from, `"${picked.title}" is already ${label}, no change needed.`, { contactId });
+          opsNote += ` state_noop:"${picked.title}"`;
+          return;
+        }
+        const update: any = { status: st.status, updated_at: new Date().toISOString() };
+        if (st.reason) update.reason = st.reason;
+        await db.from("tasks").update(update).eq("id", picked.id);
+        await emit({ type: "task.status_changed", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { title: picked.title, to: st.status, reason: st.reason, source_message_id: sourceMessageId } });
+        const label = st.status.replace("_", " ");
+        const reasonTail = st.reason ? ` (${st.reason})` : "";
+        await sendTextAndLog(db, from, `Marked "${picked.title}" as ${label}${reasonTail}.`, { contactId });
+        // Local mirror so subsequent segments in the same batch see the change.
+        picked.status = st.status;
+        opsNote += ` state:"${picked.title}"->${st.status}`;
+      };
+
+      const handleComment = async (ct: any) => {
+        const hits = fuzzyMatchTasks(ct.title_fragment, openRows);
+        if (hits.length === 0) {
+          await sendTextAndLog(db, from, `I don't see an open task matching "${ct.title_fragment}" to add a comment to.`, { contactId });
+          return;
+        }
+        const picked = (hits.length > 1 ? pickMostRecent(hits) : hits[0]) as any;
+        const cutISO = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const { data: dupComment } = await db.from("task_comments").select("id").eq("task_id", picked.id).eq("body", ct.comment_body).gte("created_at", cutISO).limit(1);
+        if (dupComment && dupComment.length) {
+          await sendTextAndLog(db, from, `The note on "${picked.title}" is already saved, nothing to add.`, { contactId });
+          opsNote += ` comment_dedup:"${picked.title}"`;
+          return;
+        }
+        const { data: c } = await db.from("task_comments").insert({ task_id: picked.id, author_id: null, author_name: opName || name || null, body: ct.comment_body, source: "bot" }).select("id").single();
+        await emit({ type: "task.comment_added", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { comment_id: c?.id, source_message_id: sourceMessageId } });
+        await sendTextAndLog(db, from, `Added the note on "${picked.title}".`, { contactId });
+        opsNote += ` comment:"${picked.title}"`;
+      };
+
+      const handleDep = async (dt: any) => {
+        const blockerHits = fuzzyMatchTasks(dt.blocker_fragment, openRows);
+        const blockedHits = fuzzyMatchTasks(dt.blocked_fragment, openRows);
+        if (!blockerHits.length || !blockedHits.length) {
+          await sendTextAndLog(db, from, `I could not match both tasks for the dependency ("${dt.blocker_fragment}" blocks "${dt.blocked_fragment}"). Try again with more of each title.`, { contactId });
+          return;
+        }
+        const blocker = pickMostRecent(blockerHits) as any;
+        const blocked = pickMostRecent(blockedHits) as any;
+        if (blocker.id === blocked.id) {
+          await sendTextAndLog(db, from, `That dependency points at one task ("${blocker.title}"). I need two distinct task titles.`, { contactId });
+          return;
+        }
+        const { data: deps } = await db.from("task_dependencies").select("task_id,blocks_task_id").limit(2000);
+        const edges = (deps || []) as any[];
+        const stack: string[] = [blocker.id];
+        const visited = new Set<string>();
+        let cycle = false;
+        while (stack.length) {
+          const cur = stack.pop()!;
+          if (cur === blocked.id) { cycle = true; break; }
+          if (visited.has(cur)) continue;
+          visited.add(cur);
+          for (const e of edges) if (e.task_id === cur) stack.push(e.blocks_task_id);
+        }
+        if (cycle) {
+          await sendTextAndLog(db, from, `That would create a cycle. "${blocked.title}" already blocks "${blocker.title}" (directly or through another task). Not linking.`, { contactId });
+          return;
+        }
+        await db.from("task_dependencies").insert({ task_id: blocked.id, blocks_task_id: blocker.id, created_by_id: (senderTeamMember as any)?.id || null }).select("id");
+        await emit({ type: "task.dependency_linked", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: blocked.id, payload: { blocks_task_id: blocker.id, source_message_id: sourceMessageId } });
+        await sendTextAndLog(db, from, `Linked: "${blocker.title}" blocks "${blocked.title}".`, { contactId });
+        opsNote += ` dep:"${blocker.title}"->"${blocked.title}"`;
+      };
+
+      // v1.3.6 (Sasa 727): priority shifts. Same deterministic pattern as the
+      // other three. Saves a model call and 5-15s of latency per priority
+      // change. Idempotency: if the task is already at the target priority,
+      // narrate the no-op instead of issuing a redundant UPDATE.
+      const handlePriority = async (pt: any) => {
+        const hits = fuzzyMatchTasks(pt.title_fragment, openRows);
+        if (hits.length === 0) {
+          const titles = openRows.slice(0, 8).map((t: any) => `"${t.title}"`).join(", ");
+          await sendTextAndLog(db, from, `I don't see an open task matching "${pt.title_fragment}" to change priority on. The open ones are: ${titles}.`, { contactId });
+          return;
+        }
+        const picked = pickMostRecent(hits) as any;
+        if (picked.priority === pt.priority) {
+          await sendTextAndLog(db, from, `"${picked.title}" is already ${pt.priority} priority, no change needed.`, { contactId });
+          opsNote += ` priority_noop:"${picked.title}"`;
+          return;
+        }
+        await db.from("tasks").update({ priority: pt.priority, updated_at: new Date().toISOString() }).eq("id", picked.id);
+        await emit({ type: "task.priority_changed", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { title: picked.title, to: pt.priority, source_message_id: sourceMessageId } });
+        await sendTextAndLog(db, from, `Set "${picked.title}" priority to ${pt.priority}.`, { contactId });
+        picked.priority = pt.priority;
+        opsNote += ` priority:"${picked.title}"->${pt.priority}`;
+      };
+
+      // BATCH (v1.3.6): multiple ops joined by "and"/"; "/"then". Each segment
+      // runs in order against the LOCALLY-mutated openRows so later segments
+      // see earlier state changes. If a segment fails to parse, parseTaskOpsBatch
+      // returns null and we drop to the single-op path (then runSasa).
+      const batch = parseTaskOpsBatch(command);
+      if (batch && batch.length >= 2) {
+        for (const op of batch) {
+          if (op.kind === "state") await handleState(op.intent);
+          else if (op.kind === "comment") await handleComment(op.intent);
+          else if (op.kind === "dependency") await handleDep(op.intent);
+          else if (op.kind === "priority") await handlePriority(op.intent);
+        }
+        opsHandled = true;
       }
 
-      // 2) ADD COMMENT
+      // SINGLE-OP path (the original v1.3 layout, now dispatching to the
+      // extracted helpers so the batch and single paths share code).
+      if (!opsHandled) {
+        const st = parseStateTransition(command);
+        if (st && st.intent === "transition_status") {
+          await handleState(st);
+          opsHandled = true;
+        }
+      }
       if (!opsHandled) {
         const ct = parseTaskComment(command);
         if (ct && ct.intent === "add_comment") {
-          const hits = fuzzyMatchTasks(ct.title_fragment, openRows);
-          if (hits.length === 0) {
-            await sendTextAndLog(db, from, `I don't see an open task matching "${ct.title_fragment}" to add a comment to.`, { contactId });
-            opsHandled = true;
-          } else {
-            // Recency wins on ties (latest task matching the fragment is almost
-            // always the one the operator means).
-            const picked = (hits.length > 1 ? pickMostRecent(hits) : hits[0]) as any;
-            // v1.3.2: idempotency. Skip if an identical body landed on this
-            // task in the last 5 min (catches retries like "I sent it twice").
-            const cutISO = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-            const { data: dupComment } = await db.from("task_comments").select("id").eq("task_id", picked.id).eq("body", ct.comment_body).gte("created_at", cutISO).limit(1);
-            if (dupComment && dupComment.length) {
-              await sendTextAndLog(db, from, `The note on "${picked.title}" is already saved, nothing to add.`, { contactId });
-              opsHandled = true;
-              opsNote = `comment_dedup: on "${picked.title}"`;
-            } else {
-              const { data: c } = await db.from("task_comments").insert({ task_id: picked.id, author_id: null, author_name: opName || name || null, body: ct.comment_body, source: "bot" }).select("id").single();
-              await emit({ type: "task.comment_added", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, payload: { comment_id: c?.id, source_message_id: sourceMessageId } });
-              await sendTextAndLog(db, from, `Added the note on "${picked.title}".`, { contactId });
-              opsHandled = true;
-              opsNote = `comment_added: on "${picked.title}"`;
-            }
-          }
+          await handleComment(ct);
+          opsHandled = true;
         }
       }
-
-      // 3) LINK DEPENDENCY (with cycle refusal)
       if (!opsHandled) {
         const dt = parseTaskDependency(command);
         if (dt && dt.intent === "link_dependency") {
-          const blockerHits = fuzzyMatchTasks(dt.blocker_fragment, openRows);
-          const blockedHits = fuzzyMatchTasks(dt.blocked_fragment, openRows);
-          if (!blockerHits.length || !blockedHits.length) {
-            await sendTextAndLog(db, from, `I could not match both tasks for the dependency ("${dt.blocker_fragment}" blocks "${dt.blocked_fragment}"). Try again with more of each title.`, { contactId });
-            opsHandled = true;
-          } else {
-            const blocker = pickMostRecent(blockerHits) as any;
-            const blocked = pickMostRecent(blockedHits) as any;
-            if (blocker.id === blocked.id) {
-              await sendTextAndLog(db, from, `That dependency points at one task ("${blocker.title}"). I need two distinct task titles.`, { contactId });
-              opsHandled = true;
-            } else {
-              // Cycle check (mirrors smart-tools link_task_dependency): walk
-              // edges starting from the would-be upstream (blocker); if we
-              // ever reach the dependent (blocked), this insert closes a loop.
-              const { data: deps } = await db.from("task_dependencies").select("task_id,blocks_task_id").limit(2000);
-              const edges = (deps || []) as any[];
-              const stack: string[] = [blocker.id];
-              const visited = new Set<string>();
-              let cycle = false;
-              while (stack.length) {
-                const cur = stack.pop()!;
-                if (cur === blocked.id) { cycle = true; break; }
-                if (visited.has(cur)) continue;
-                visited.add(cur);
-                for (const e of edges) if (e.task_id === cur) stack.push(e.blocks_task_id);
-              }
-              if (cycle) {
-                await sendTextAndLog(db, from, `That would create a cycle. "${blocked.title}" already blocks "${blocker.title}" (directly or through another task). Not linking.`, { contactId });
-                opsHandled = true;
-              } else {
-                await db.from("task_dependencies").insert({ task_id: blocked.id, blocks_task_id: blocker.id, created_by_id: (senderTeamMember as any)?.id || null }).select("id");
-                await emit({ type: "task.dependency_linked", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: blocked.id, payload: { blocks_task_id: blocker.id, source_message_id: sourceMessageId } });
-                await sendTextAndLog(db, from, `Linked: "${blocker.title}" blocks "${blocked.title}".`, { contactId });
-                opsHandled = true;
-                opsNote = `dependency_linked: "${blocker.title}" blocks "${blocked.title}"`;
-              }
-            }
-          }
+          await handleDep(dt);
+          opsHandled = true;
+        }
+      }
+      if (!opsHandled) {
+        const pt = parseTaskPriority(command);
+        if (pt && pt.intent === "set_priority") {
+          await handlePriority(pt);
+          opsHandled = true;
         }
       }
 
