@@ -254,7 +254,7 @@ const HONEST_NO_FIGURE =
 // inbound M-Pesa receipt produced a perfectly worded staging reply but zero rows
 // in pending_actions and zero events. The completion guards (which look for
 // "Done/Logged" claims) don't see staging language. Add a parallel check.
-const STAGING_CLAIM = /\b(?:ready to (?:log|record|stage|file)|reply\s+["']?yes["']?\s+(?:to\s+confirm|to\s+commit|please)|i'?ll\s+(?:stage|log)\s+(?:that|this|it))\b/i;
+const STAGING_CLAIM = /\b(?:ready to (?:log|record|stage|file)|reply\s+["']?yes["']?\s+(?:to\s+confirm|to\s+commit|please)|i'?ll\s+(?:stage|log)\s+(?:that|this|it)|(?:i'?ve\s+|i\s+(?:have\s+)?|already\s+)?staged\s+(?:that|this|it|the\s+\w+)|(?:i\s+)?have\s+it\s+staged|waiting\s+for\s+your\s+yes)\b/i;
 const STAGING_TOOLS = new Set(["record_payment", "record_donation", "draft_thank_you", "draft_email", "send_newsletter", "import_contacts", "bank_import"]);
 function claimsStagingWithoutTool(reply: string, toolRuns: { name: string; result: any }[]): boolean {
   if (!STAGING_CLAIM.test(reply)) return false;
