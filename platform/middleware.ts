@@ -32,7 +32,12 @@ export function middleware(req: NextRequest) {
     const isMaintenancePage = pathname === "/maintenance";
     const adminToken = req.cookies.get("maintenance_admin")?.value;
     const isAdmin = adminToken && adminToken === process.env.MAINTENANCE_ADMIN_TOKEN;
-    if (!isAdmin && !isMaintenancePage) {
+    if (isMaintenancePage) {
+      // Serve the maintenance page directly without falling through to the
+      // session check (which would redirect anon → /login → /maintenance → loop).
+      return NextResponse.next();
+    }
+    if (!isAdmin) {
       const url = req.nextUrl.clone();
       url.pathname = "/maintenance";
       return NextResponse.redirect(url);
