@@ -82,7 +82,14 @@ export default async function Finance() {
   const db = admin();
 
   const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  // Dubai-TZ consistency (Phase 2.6 Stage B): legacy sections previously used
+  // server-UTC monthStart, which drifts ~4h from the new Phase 2.3 sections
+  // that use periodFor("this_month") from lib/period.ts. Now both flows read
+  // the same Dubai-local month boundary. The string is in ISO-Z form so the
+  // existing `new Date(p.paid_at).toISOString() >= monthStart` comparisons
+  // keep working without any other code change.
+  const dubaiMonthStart = `${periodFor("this_month").from}T00:00:00.000Z`;
+  const monthStart = dubaiMonthStart;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   // Dubai-TZ periods for the three-card hero + expense list
