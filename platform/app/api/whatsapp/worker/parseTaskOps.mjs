@@ -74,11 +74,25 @@ function matchIsStatus(body) {
   return { intent: "transition_status", title_fragment: titleFrag, status, reason: null };
 }
 
+// PATTERN 4 (v1.3.6): verb-less "X as STATUS" — the second segment of a batch
+// drops the imperative ("mark X as done AND Y as blocked" -> seg2 is "Y as
+// blocked"). Specific enough not to overmatch ordinary prose: requires the
+// trailing word to be a known status word AND the connector to be "as".
+function matchTitleAsStatus(body) {
+  const re = /^\s*(?:the\s+)?(.+?)\s+as\s+(.+?)\s*$/im;
+  const m = body.match(re);
+  if (!m) return null;
+  const titleFrag = cleanFrag(m[1]);
+  const status = findStatusFromText(m[2]);
+  if (!titleFrag || titleFrag.length < 3 || !status) return null;
+  return { intent: "transition_status", title_fragment: titleFrag, status, reason: null };
+}
+
 // Public: state-transition parser. Returns null if no match.
 export function parseStateTransition(body) {
   const b = String(body || "").trim();
   if (b.length < 5) return null;
-  return matchMarkAs(b) || matchAbandon(b) || matchIsStatus(b) || null;
+  return matchMarkAs(b) || matchAbandon(b) || matchIsStatus(b) || matchTitleAsStatus(b) || null;
 }
 
 // PATTERN 4: "add a comment on X: Y" / "note on X: Y" / "comment on X that Y"
