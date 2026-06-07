@@ -21,12 +21,18 @@ const NOISY_TYPES = new Set<string>([
 ]);
 
 // also drop any event whose type matches an obvious noise prefix
-const NOISY_PREFIXES = ["bot.health", "system.incident", "agent.tick", "vt_", "vt."];
+const NOISY_PREFIXES = ["bot.health", "system.incident", "agent.tick", "vt_", "vt.", "v1_", "v1."];
+
+// substring match for the messy types that combine words inconsistently
+// (e.g. "group_bot_health_check", "groupbot.health", "whatsapp_health_ping").
+const NOISY_SUBSTRINGS = ["health_check", "healthcheck", "heartbeat", "_ping", ".ping", "incident_alert"];
 
 function isNoisy(type: string): boolean {
   if (!type) return true; // unlabelled events are noise by default
   if (NOISY_TYPES.has(type)) return true;
-  for (const p of NOISY_PREFIXES) if (type.startsWith(p)) return true;
+  const t = type.toLowerCase();
+  for (const p of NOISY_PREFIXES) if (t.startsWith(p)) return true;
+  for (const s of NOISY_SUBSTRINGS) if (t.includes(s)) return true;
   return false;
 }
 

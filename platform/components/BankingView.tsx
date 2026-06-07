@@ -1,5 +1,6 @@
 import { admin } from "../lib/supabase-admin";
 import { Landmark, ArrowDownLeft, ArrowUpRight, ShieldCheck } from "lucide-react";
+import { stripDashes } from "../lib/text-clean";
 
 // Banking: the real bank account, reconstructed from the scanned statement and
 // VERIFIED — the running balance chains unbroken from opening to closing, so every
@@ -64,7 +65,7 @@ export default async function BankingView() {
               {desc.map((t, i) => (
                 <div key={i} className="flex" style={{ gap: 12, padding: "9px 22px", borderBottom: "1px solid var(--line)", alignItems: "center", background: t.confidence === "low" ? "rgba(217,119,6,0.06)" : undefined }}>
                   <span className="faint" style={{ fontSize: 11.5, width: 60, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{fmtDate(t.txn_date)}</span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: t.confidence === "low" ? "normal" : "nowrap" }}>{t.confidence === "low" ? "⚠ " : ""}{t.description || "—"}</span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: t.confidence === "low" ? "normal" : "nowrap" }}>{t.confidence === "low" ? "⚠ " : ""}{t.description ? stripDashes(t.description) : "—"}</span>
                   <span className="money" style={{ fontSize: 12.5, fontWeight: 600, fontVariantNumeric: "tabular-nums", minWidth: 110, textAlign: "right", color: t.direction === "in" ? "var(--green)" : "var(--ink)" }}>
                     {t.direction === "in" ? "+" : "−"}{Math.round(Number(t.amount || 0)).toLocaleString()}
                   </span>
