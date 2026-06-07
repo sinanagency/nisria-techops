@@ -387,7 +387,16 @@ export default async function Finance() {
         <ExpenseList rows={expRows} today={todayIso} />
       </div>
 
-      {/* (Banking + Givebutter/Kenya streams are historical — moved below as collapsed dropdowns) */}
+      {/* ARCHIVE WRAPPER (Phase 2.5): everything below this point is operator
+          tooling + historical streams (salaries, reminders, ledger, banking,
+          intake forms). Closed by default so /finance reads as the CFO view at
+          the top, not a tool drawer. Open with one click. */}
+      <Collapsible
+        defaultOpen={false}
+        title="Operator tools & historical streams"
+        action={<Badge tone="gray">Salaries · Reminders · Ledger · Banking · Forms</Badge>}
+      >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 8 }}>
 
       {/* SALARIES — this month: recurring payroll, ticking to payday (dropdown) */}
       <Collapsible
@@ -846,6 +855,10 @@ export default async function Finance() {
           )}
         </details>
       </div>
+
+      </div>
+      </Collapsible>
+      {/* END ARCHIVE WRAPPER */}
     </Shell>
   );
 }

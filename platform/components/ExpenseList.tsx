@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Money } from "./Money";
 import { Search } from "lucide-react";
 import type { ExpenseRow } from "../lib/expenses";
@@ -42,8 +43,22 @@ function isoWeekStart(d: string): string {
 }
 
 export default function ExpenseList({ rows, today }: { rows: ExpenseRow[]; today: string }) {
-  const [pillKey, setPillKey] = useState("this_week");
-  const [q, setQ] = useState("");
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [pillKey, setPillKey] = useState(params?.get("exp") || "this_week");
+  const [q, setQ] = useState(params?.get("expq") || "");
+
+  // URL-persist pill + search so refresh keeps the operator's view and the
+  // page can be deep-linked ("/finance?exp=today" shows today's expenses).
+  useEffect(() => {
+    const next = new URLSearchParams(params?.toString() || "");
+    if (pillKey === "this_week") next.delete("exp"); else next.set("exp", pillKey);
+    if (!q) next.delete("expq"); else next.set("expq", q);
+    const s = next.toString();
+    router.replace(`${pathname}${s ? `?${s}` : ""}#expense-list`, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pillKey, q]);
 
   const pill = PILLS.find((p) => p.key === pillKey)!;
   const filtered = useMemo(() => {

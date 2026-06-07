@@ -48,6 +48,16 @@ const TAG_RULES: { pattern: RegExp; category: string }[] = [
   { pattern: /\b(medical|hospital|clinic|pharmacy)\b/i, category: "medical" },
   { pattern: /\b(bank|excise|withholding|tax)\b/i, category: "bank-fee" },
   { pattern: /\b(chq|cheque|check)\b/i, category: "cheque" },
+  // Kenya-specific common payees / patterns surfaced from real I&M / Stanbic narrations
+  { pattern: /\b(kplc|kenya power)\b/i, category: "utilities" },
+  { pattern: /\b(safaricom|airtel kenya|telkom kenya)\b/i, category: "utilities" },
+  { pattern: /\b(nhif|nssf|kra|ntsa|ecitizen)\b/i, category: "statutory" },
+  { pattern: /\b(co-?op bank|kcb|equity bank|absa|stanbic|i&m|standard chartered|dtb)\b/i, category: "bank-transfer" },
+  { pattern: /\b(jumia|kilimall|copia|naivas|carrefour|quickmart)\b/i, category: "supplies" },
+  { pattern: /\b(sgr|matatu|sacco|uber kenya|bolt kenya)\b/i, category: "transport" },
+  { pattern: /\b(jamii sacco|salaam|saidia)\b/i, category: "savings" },
+  { pattern: /\b(inward clearing|returned inward chq)\b/i, category: "inward" },
+  { pattern: /\b(rmtly\*|swift|ach\b)\b/i, category: "transfer" },
 ];
 
 function inferCategory(description: string): string | null {
@@ -157,7 +167,7 @@ export async function loadRefunds(db: any, period: { from: string; to: string })
     .eq("direction", "in")
     .gte("txn_date", period.from)
     .lte("txn_date", period.to)
-    .ilike("description", "%refund%")
+    .or("description.ilike.%refund%,description.ilike.%reversal%,description.ilike.%chargeback%,description.ilike.%rev-%,description.ilike.%rtn-%")
     .limit(200);
   const rows = (data || []) as any[];
   const totals: Record<string, number> = {};

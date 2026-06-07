@@ -1622,3 +1622,10 @@ a.trio-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md, 0 
 .expl-row-verify { font-size: 10.5px; background: rgba(217,119,6,.10); color: #D97706; padding: 2px 7px; border-radius: 999px; flex-shrink: 0; }
 .upx-card-amount.tbd { color: var(--muted, #5f7574); font-style: italic; font-size: 13px; }
 .upx-card-source-task { font-size: 10px; color: var(--peri, #5B6BF0); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+
+/* Mobile sizing for the Upcoming horizontal strip: shrink card so 1.5 cards
+   are visible at 390px instead of overflowing one big card. */
+@media (max-width: 760px) {
+  .upx-card { flex: 0 0 min(78%, 240px); }
+  .upx-more { flex: 0 0 110px; }
+}
