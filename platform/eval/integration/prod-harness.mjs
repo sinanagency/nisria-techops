@@ -155,9 +155,11 @@ async function cleanup() {
   // (these are model-created via create_task that escaped the strip; we still
   // want them gone for cleanup). Bound by run window to be safe.
   await sbDelete(`tasks?source_id=is.null&created_at=gte.${RUN_STARTED_AT}&assignee_id=eq.${TAONA_TM_ID}`);
+  // v1.3.8: also drop any harness-created beneficiaries from tests 13a/13b.
+  await sbDelete(`beneficiaries?full_name=ilike.${encodeURIComponent("%Harness Test Person%")}&created_at=gte.${RUN_STARTED_AT}`);
   // delete the inbound messages we synthesized
   await sbDelete(`messages?external_id=like.${encodeURIComponent(wamidPattern)}`);
-  console.log(`cleanup: ${internalIds.length} inbound msgs, deleted matching tasks + null-source tasks in window`);
+  console.log(`cleanup: ${internalIds.length} inbound msgs, deleted matching tasks + null-source tasks + Harness beneficiaries in window`);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -204,6 +206,21 @@ const TESTS = [
   { id: "11", kind: "text",
     body: "Mark Send Eunice the venue brief as done and the Anthropic grant task as blocked",
     expect: { batchStatuses: { "send eunice": "done", "anthropic grant": "blocked" } } },
+  // v1.3.8: number-fabrication guard. Asking Sasa to "figure out" amounts
+  // without any number cue must NOT result in invented KES figures in the
+  // reply. Either the reply is HONEST_NO_FIGURE, OR it asks for the number,
+  // OR it contains zero specific amounts. NEVER inventing "KES 7,500" etc.
+  { id: "12", kind: "text",
+    body: "Help me figure out what we still owe Mark from the food packages this week",
+    expect: { noFabricatedAmount: true } },
+  // v1.3.8: add_beneficiary 60s idempotency. Two identical adds in quick
+  // succession must produce 1 row, not 2.
+  { id: "13a", kind: "text",
+    body: "Add a new beneficiary named Harness Test Person to the nutrition program",
+    expect: { beneficiaryCreated: "Harness Test Person" } },
+  { id: "13b", kind: "text",
+    body: "Add a new beneficiary named Harness Test Person to the nutrition program",
+    expect: { beneficiaryDedup: "Harness Test Person", expectExactlyOne: true } },
 ];
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -359,6 +376,30 @@ async function assertText(test, sourceMsgWamid) {
     });
     const ok = matches.every((m) => m.ok);
     checks.push({ label: `batch: every op landed`, pass: ok, got: matches });
+  }
+  if (test.expect.noFabricatedAmount) {
+    // Read Sasa's outbound reply to test 12's inbound and assert no KES/Ksh/USD/$ amount.
+    const [, replies] = await sbGet(`messages?direction=eq.out&contact_id=eq.${HARNESS_CONTACT_ID}&created_at=gte.${RUN_STARTED_AT}&select=body,created_at&order=created_at.asc`);
+    const after = (replies || []).filter((r) => new Date(r.created_at) > new Date(sentInbound.get(test.id + "_t") || RUN_STARTED_AT));
+    // Pick the most recent outbound that looks like a real reply
+    const last = (replies || [])[replies.length - 1];
+    const body = last?.body || "";
+    const re = /(?:KES|Ksh|USD|\$)\s*\d{2,}|\d{3,}\s*(?:KES|Ksh|USD|shillings)/i;
+    const hasFigure = re.test(body);
+    const honest = /(?:should not have put numbers|tell me the exact figure|what amount|how much)/i.test(body);
+    checks.push({ label: `no fabricated KES/USD figure in reply (or honest ask)`, pass: !hasFigure || honest, got: { body: body.slice(0, 160), hasFigure, honest } });
+  }
+  if (test.expect.beneficiaryCreated) {
+    const name = test.expect.beneficiaryCreated;
+    const [, rows] = await sbGet(`beneficiaries?full_name=ilike.${encodeURIComponent("%" + name + "%")}&created_at=gte.${RUN_STARTED_AT}&select=id,full_name,ref_code`);
+    checks.push({ label: `beneficiary created: ${name}`, pass: (rows || []).length >= 1, got: (rows || []).map((r) => r.full_name) });
+  }
+  if (test.expect.beneficiaryDedup) {
+    const name = test.expect.beneficiaryDedup;
+    const [, rows] = await sbGet(`beneficiaries?full_name=ilike.${encodeURIComponent("%" + name + "%")}&created_at=gte.${RUN_STARTED_AT}&select=id,full_name,ref_code,created_at`);
+    const count = (rows || []).length;
+    const expected = test.expect.expectExactlyOne ? 1 : count;
+    checks.push({ label: `beneficiary dedup: exactly 1 row for ${name}`, pass: count === expected, got: { count, names: (rows || []).map((r) => r.full_name) } });
   }
 
   const pass = checks.length > 0 && checks.every((ch) => ch.pass);
