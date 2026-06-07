@@ -93,6 +93,22 @@ async function processJob(db: any, job: any): Promise<void> {
     return;
   }
 
+  // MAINTENANCE GATE. While MAINTENANCE_MODE=1, only the allowlisted phone
+  // (Taona) gets full bot service. Everyone else (Nur, team, vendors) gets a
+  // single canned maintenance reply so they know the bot is intentionally
+  // offline, not just broken. No parseTasks, no runSasa, no DB writes from
+  // that turn beyond the outbound notice.
+  if (process.env.MAINTENANCE_MODE === "1") {
+    const allowlist = (process.env.MAINTENANCE_ALLOWLIST || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (!allowlist.includes(from)) {
+      const notice = "Sasa is offline for a short maintenance window while we ship a fix. Back shortly. — Taona";
+      await sendTextAndLog(db, from, notice, { contactId });
+      await emit({ type: "whatsapp.maintenance_block", source: "whatsapp", actor: from, subject_type: "contact", subject_id: contactId, payload: { from, name: opName || name || null } });
+      await markJobDone(job.id);
+      return;
+    }
+  }
+
   // We will reply: show the three-dots typing indicator now (and mark the inbound
   // read), before the slow work (media read, transcription, the Sasa brain). The
   // dots auto-dismiss when sendText fires below. Fired only past the admin gate so

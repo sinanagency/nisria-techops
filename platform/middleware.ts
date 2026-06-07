@@ -24,6 +24,21 @@ export function middleware(req: NextRequest) {
     pathname.startsWith("/api/medic")
   )
     return NextResponse.next();
+  // MAINTENANCE GATE. While MAINTENANCE_MODE=1, only the operator with a
+  // matching admin token cookie may pass. Everyone else lands on /maintenance.
+  // The bot allowlist is a separate env (MAINTENANCE_ALLOWLIST) checked in
+  // worker/route.ts. Static assets + the maintenance page itself bypass.
+  if (process.env.MAINTENANCE_MODE === "1") {
+    const isMaintenancePage = pathname === "/maintenance";
+    const adminToken = req.cookies.get("maintenance_admin")?.value;
+    const isAdmin = adminToken && adminToken === process.env.MAINTENANCE_ADMIN_TOKEN;
+    if (!isAdmin && !isMaintenancePage) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/maintenance";
+      return NextResponse.redirect(url);
+    }
+  }
+
   const isLogin = pathname === "/login";
   const authed = req.cookies.get("nisria_session")?.value === process.env.SESSION_TOKEN;
 
