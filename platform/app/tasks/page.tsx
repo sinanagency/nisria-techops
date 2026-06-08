@@ -68,24 +68,24 @@ export default async function Tasks({ searchParams }: { searchParams?: { mine?: 
         <DispatchBox />
       </div>
 
-      {/* Kanban board: each column grows to fill on wide viewports, but holds
-          a comfortable 360px floor. When the floor outgrows the viewport
-          (narrow screens, future extra columns) the board scrolls horizontally
-          inside this strip. The page itself still scrolls vertically because
-          columns are not height-clamped: a long To Do column just makes the
-          page taller. That's the Linear/Trello pattern. */}
+      {/* Kanban board: three column-cards SIDE BY SIDE on one row, fixed in
+          place. Inside each column, tasks lay out HORIZONTALLY and scroll
+          left/right within that lane. So the page stays short and you swipe
+          through the backlog one column at a time instead of an infinite
+          vertical scroll. The pattern is a shared `.lanestrip` body inside
+          a `.lanecol` card; same primitive used on /cases. */}
       <div className="tboard" style={{ marginTop: 16 }}>
         {COLUMNS.map((col) => {
           const items = tasks.filter((t: any) => t.status === col.key || (col.key === "todo" && t.status === "blocked"));
           return (
-            <div className="card tboard-col" key={col.key}>
+            <div className="card lanecol" key={col.key}>
               <div className="card-h">{col.label}<Badge tone={statusTone(col.key) as any}>{items.length}</Badge></div>
-              <div className="card-pad" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {items.length === 0 && <div className="muted" style={{ fontSize: 12.5 }}>Nothing here.</div>}
+              <div className="lanestrip">
+                {items.length === 0 && <div className="muted lanestrip-empty">Nothing here.</div>}
                 {items.map((t: any) => {
                   const od = isOpen(t) && t.due_on && t.due_on < today;
                   return (
-                    <div key={t.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+                    <div key={t.id} className="lanecard">
                       <div className="between" style={{ alignItems: "flex-start" }}>
                         <span className="strong" style={{ fontSize: 13.5 }}>{t.title}</span>
                         <Badge tone={prioTone(t.priority) as any}>{t.priority}</Badge>
