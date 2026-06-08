@@ -131,8 +131,75 @@ export function parseSendwave(body) {
   };
 }
 
+// Public: chat-style ad-hoc payment command from the operator typing into 727.
+// Patterns like "Log USD 200 to Mitchelle for content fees, paid June 5" /
+// "Record KES 5000 to Dorcas, upkeep" / "Pay 1500 KES to John, rent, 2026-06-08".
+// Fires only when the message reads like an explicit log-this-payment imperative,
+// so it won't mis-parse a chatty mention. Used as a backstop in the FAKE-STAGING
+// guard when the model emitted staging text without actually calling record_payment.
+const CHAT_LOG_VERB = /\b(log|record|stage|pay(?:ment)?\s+(?:logged|recorded)?|note(?:d)?)\b/i;
+// "USD 200 to Mitchelle" / "$200 to Mark" / "KES 5,000 to Dorcas"
+const CHAT_PAYMENT_RE = /(?:^|[\s.,])(USD|KES|Ksh|\$)\s*\.?\s*([\d,]+(?:\.\d{1,2})?)(?:\s+[a-z]+){0,3}?\s+to\s+([A-Z][A-Za-z .'\-]{1,40}?)\s*(?:[,.]|$|\bfor\b|\bpaid\b|\bon\b)/im;
+// "200 USD to Mark" / "1,500 KES to John"
+const CHAT_AMOUNT_FIRST_RE = /(?:^|[\s.,])([\d,]+(?:\.\d{1,2})?)\s*(USD|KES|Ksh|\$)(?:\s+[a-z]+){0,3}?\s+to\s+([A-Z][A-Za-z .'\-]{1,40}?)\s*(?:[,.]|$|\bfor\b|\bpaid\b|\bon\b)/im;
+const CHAT_PURPOSE = /\bfor\s+([A-Za-z][A-Za-z 0-9\-]{2,60}?)\s*(?:[,.]|$|\bpaid\b|\bon\b)/i;
+const CHAT_DATE_LONG = /\b(?:paid|on)\s+((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})(?:\s*,?\s*(\d{4}))?)/i;
+const CHAT_DATE_ISO = /\b(?:paid|on)\s+(\d{4}-\d{2}-\d{2})\b/i;
+
+function normalizeCurrency(raw) {
+  const t = String(raw || "").trim().toUpperCase();
+  if (t === "$" || t === "USD") return "USD";
+  if (t === "KES" || t === "KSH" || t === "SH") return "KES";
+  return "KES";
+}
+
+function parseLongDate(monthName, day, year) {
+  const months = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  const m = months[String(monthName).slice(0, 3).toLowerCase()];
+  if (!m) return null;
+  const d = parseInt(day, 10);
+  if (!d || d < 1 || d > 31) return null;
+  const y = year ? parseInt(year, 10) : new Date().getUTCFullYear();
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}T12:00:00.000Z`;
+}
+
+export function parseChatLog(body) {
+  const t = String(body || "");
+  if (!t || t.length < 8 || t.length > 500) return null;
+  if (!CHAT_LOG_VERB.test(t)) return null;
+  // Match either "USD 200 to Mitchelle" or "200 USD to Mitchelle" shape.
+  const m1 = t.match(CHAT_PAYMENT_RE);
+  const m2 = m1 ? null : t.match(CHAT_AMOUNT_FIRST_RE);
+  if (!m1 && !m2) return null;
+  const currency = normalizeCurrency(m1 ? m1[1] : m2[2]);
+  const amount = normalizeAmount(m1 ? m1[2] : m2[1]);
+  const payee = cleanPayee(m1 ? m1[3] : m2[3]);
+  if (!amount || !payee || payee.length < 2) return null;
+  const purposeM = t.match(CHAT_PURPOSE);
+  const purpose = purposeM ? cleanPayee(purposeM[1]) : null;
+  const isoM = t.match(CHAT_DATE_ISO);
+  const longM = t.match(CHAT_DATE_LONG);
+  let paid_at = new Date().toISOString();
+  if (isoM) paid_at = `${isoM[1]}T12:00:00.000Z`;
+  else if (longM) paid_at = parseLongDate(longM[1].split(/\s+/)[0], longM[2], longM[3]) || paid_at;
+  return {
+    intent: "stage_payment",
+    source: "chat_log",
+    payload: {
+      payee,
+      amount,
+      currency,
+      method: currency === "KES" ? "mpesa" : null,
+      paid_at,
+      counterparty_phone: null,
+      purpose,
+    },
+    summary: `${currency} ${amount.toLocaleString()} to ${payee}${purpose ? ` for ${purpose}` : ""}`,
+  };
+}
+
 // Public: top-level dispatcher. Tries each parser in turn, returns the first
 // match. Workers call this once per inbound; null means fall through.
 export function parsePayment(body) {
-  return parseMpesaSent(body) || parseSendwave(body) || null;
+  return parseMpesaSent(body) || parseSendwave(body) || parseChatLog(body) || null;
 }

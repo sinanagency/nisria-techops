@@ -463,7 +463,7 @@ export async function POST(req: NextRequest) {
     if (names.length) command = `${command}\n(this message @mentions: ${names.join(", ")})`;
   }
 
-  const { reply } = await runSasa({
+  const sasaRes = await runSasa({
     surface: "group",
     groupName: group,
     operatorName: opName || senderName || undefined,
@@ -475,6 +475,7 @@ export async function POST(req: NextRequest) {
     command,
     casesIntake: isCaseGroup(group), // Rescue & Rehab etc.: intakes become cases, not beneficiaries
   });
+  const reply = sasaRes.reply;
 
   // ONE-BRAIN: promote durable group facts into the brain (auto_fact lane), exactly
   // like the DM path does (whatsapp/worker). This is what was missing: group content
@@ -482,7 +483,7 @@ export async function POST(req: NextRequest) {
   // Sasa could not recall what a group said and the librarian never curated it. Group
   // content is shared by nature (a whole team sees it), so it lands in the shared
   // auto_fact lane, never owner-private. Best-effort: autoCapture never throws.
-  await autoCapture({ command: text, reply: reply || "", operatorName: opName || senderName || undefined, sourceMessageId: messageId || null });
+  await autoCapture({ command: text, reply: reply || "", operatorName: opName || senderName || undefined, sourceMessageId: messageId || null, toolsRan: sasaRes.toolsRan || [] });
 
   // ESCALATION (confidence x stakes): when the brain is unsure about something that
   // matters it returns "FLAG_NUR: <reason>". That NEVER goes to the group; it goes

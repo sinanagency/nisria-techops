@@ -71,7 +71,16 @@ export async function autoCapture(opts: {
   rank?: "owner" | "founder" | "member" | null;
   operatorName?: string;
   sourceMessageId?: string | null;
-}): Promise<{ captured: number }> {
+  toolsRan?: string[];
+}): Promise<{ captured: number; skipped?: string }> {
+  // BRAIN-DEDUPE GUARD (2026-06-09). When the operator explicitly used
+  // `remember_fact` this turn, the explicit lane already wrote a curated row
+  // with a `chat:*` slug. autoCapture's `auto:*` slug never collides with that,
+  // so without this guard two near-identical rows land per turn. The explicit
+  // lane is canonical; skip auto-capture entirely when it ran successfully.
+  if (Array.isArray(opts.toolsRan) && opts.toolsRan.includes("remember_fact")) {
+    return { captured: 0, skipped: "remember_fact_ran" };
+  }
   try {
     const facts = await extractDurableFacts(opts.command, opts.reply);
     if (!facts.length) return { captured: 0 };

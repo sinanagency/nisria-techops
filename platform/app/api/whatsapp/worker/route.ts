@@ -274,7 +274,12 @@ async function processJob(db: any, job: any): Promise<void> {
       // confirmed with an unanticipated phrase: "verified" had to be hand-added after
       // a live miss). Accepts emoji, leading filler ("please/ok/yes ..."), and common
       // affirmatives/negatives in English, Swahili, and Sheng.
-      const yes = /^(?:👍|✅|🙏|💯)|^(?:please\s+|ok(?:ay)?\s+|yes\s+|yeah\s+|sure\s+)?(?:y|yes|yep+|yeah|yup|yebo|confirm(?:ed)?|verif(?:y|ied)|correct|that'?s right|go ahead|go for it|do it|do that|make it so|proceed|send(?: it)?|post it|log it|save it|please do|approved?|ok(?:ay)?|sounds good|looks good|lgtm|perfect|great|absolutely|sure|fine|sawa(?:\s+sawa)?|ndio|ndiyo|haya|poa)\b/.test(t);
+      // 2026-06-09: 🙏 REMOVED from yes-tokens. The folded-hands emoji is gratitude
+      // in Nur and Taona's culture (and in most WhatsApp use), not confirmation.
+      // Harness caught a real commit triggered by a bare "🙏🙏🙏" message: a
+      // pending payment was logged to the ledger without any explicit yes.
+      // Confirmations must be unambiguous; gratitude must not commit money.
+      const yes = /^(?:👍|✅|💯)|^(?:please\s+|ok(?:ay)?\s+|yes\s+|yeah\s+|sure\s+)?(?:y|yes|yep+|yeah|yup|yebo|confirm(?:ed)?|verif(?:y|ied)|correct|that'?s right|go ahead|go for it|do it|do that|make it so|proceed|send(?: it)?|post it|log it|save it|please do|approved?|ok(?:ay)?|sounds good|looks good|lgtm|perfect|great|absolutely|sure|fine|sawa(?:\s+sawa)?|ndio|ndiyo|haya|poa)\b/.test(t);
       const no = /^(?:👎|🚫)|^(?:n|no|nope|nah|cancel|don'?t|do not|stop|wrong|hold(?:\s+on)?|wait|not yet|later|scrap|hapana|la)\b/.test(t);
       if (yes) {
         // The resolver now serves more than one kind. Payments commit to a row
@@ -860,7 +865,8 @@ async function processJob(db: any, job: any): Promise<void> {
         recentTaskActivity = ((recent || []) as any[]).length > 0;
       }
     } catch {}
-    ({ reply } = await runSasa({ history, command: cmdForBrain, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote || recentTaskActivity }));
+    var sasaResult = await runSasa({ history, command: cmdForBrain, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote || recentTaskActivity });
+    reply = sasaResult.reply;
   } catch (e: any) {
     // A REAL backend failure (Claude API error, tool/DB throw). This is the only
     // path that admits being stuck and asks the operator to retry.
@@ -914,7 +920,7 @@ async function processJob(db: any, job: any): Promise<void> {
   // best-effort (never throws). Founder facts land in the shared auto_fact lane;
   // owner facts stay owner-private (the wall). The curated org_fact brain is
   // untouched. Skipped on the empty-reply path above (we only reach here with a reply).
-  await autoCapture({ command, reply, rank: opRank, operatorName: opName || name || undefined, sourceMessageId });
+  await autoCapture({ command, reply, rank: opRank, operatorName: opName || name || undefined, sourceMessageId, toolsRan: sasaResult?.toolsRan || [] });
 
   if (res.id) await markJobDone(job.id);
   else await markJobError(job.id, res.error || "send failed");
