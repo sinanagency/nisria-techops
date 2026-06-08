@@ -5,6 +5,7 @@ import { admin, date } from "../../lib/supabase-admin";
 import { getCurrentUser } from "../../lib/auth";
 import { getCurrentTeamMember } from "../../lib/profile";
 import DispatchBox from "../../components/DispatchBox";
+import DeleteTaskButton from "../../components/DeleteTaskButton";
 import { setTaskStatus } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -106,7 +107,8 @@ export default async function Tasks({ searchParams }: { searchParams?: { mine?: 
                           </span>
                         )}
                       </div>
-                      <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                      <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                        <DeleteTaskButton id={t.id} title={t.title} />
                         <form action={setTaskStatus}>
                           <input type="hidden" name="id" value={t.id} />
                           <input type="hidden" name="status" value={col.key === "done" ? "todo" : col.key === "todo" ? "in_progress" : "done"} />

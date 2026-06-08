@@ -87,3 +87,28 @@ export async function setTaskStatus(formData: FormData) {
   }
   revalidatePath("/tasks");
 }
+
+// Hard-delete a task. The operator is Nur or Taona; tasks created by the
+// parser (sasa-727) sometimes need to be removed when they're junk or
+// duplicates. We emit a task.deleted event before the row goes so the audit
+// trail survives. Notifications are deliberately NOT fired (no "task done"
+// signal on a delete; deletion isn't completion).
+export async function deleteTask(formData: FormData) {
+  const id = String(formData.get("id"));
+  if (!id) return;
+  const db = admin();
+  const actor = getCurrentUser();
+  const { data: prev } = await db.from("tasks").select("id,title,assignee_id,status,priority,due_on").eq("id", id).maybeSingle();
+  if (!prev) return;
+  await emit({
+    type: "task.deleted",
+    source: "tasks",
+    actor: actor?.name || "operator",
+    subject_type: "task",
+    subject_id: id,
+    payload: { title: (prev as any).title, status: (prev as any).status, priority: (prev as any).priority, due_on: (prev as any).due_on },
+  });
+  await db.from("tasks").delete().eq("id", id);
+  revalidatePath("/tasks");
+  revalidatePath("/");
+}
