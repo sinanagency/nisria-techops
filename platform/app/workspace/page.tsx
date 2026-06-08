@@ -118,8 +118,10 @@ export default async function WorkspacePage() {
   };
   const threads = [...byContact.values()]
     .filter(isHuman)
-    // needs-a-reply first (like the inbox "Needs reply" view), then most recent.
-    .sort((a, b) => (b.unread > 0 ? 1 : 0) - (a.unread > 0 ? 1 : 0) || (a.lastAt < b.lastAt ? 1 : -1));
+    // Most recent first, always. Unread state surfaces via the badge per
+    // conversation, not by reordering rows (Taona 2026-06-08: "messages
+    // alwyays start with the most recent").
+    .sort((a, b) => (a.lastAt < b.lastAt ? 1 : -1));
 
   // The two open-work signals that frame the header (what is open, in numbers).
   const needsReply = threads.reduce((n, t) => n + (t.unread > 0 ? 1 : 0), 0);

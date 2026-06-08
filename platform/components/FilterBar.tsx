@@ -80,7 +80,11 @@ export default function FilterBar({
     borderLeft: part === "f" ? "none" : "1px solid var(--line)", cursor: part === "v" ? "pointer" : "default" } as React.CSSProperties);
 
   return (
-    <div ref={wrapRef} style={{ marginBottom: 16 }}>
+    // Wrapper carries its own stacking context above sibling cards so the
+    // "Add filter" popover (zIndex: var(--z-dropdown) below) escapes UP from
+    // inside the omnibar instead of getting clipped by the data card right
+    // beneath it. Fixes the "dropdown hides underneath" bug across every list.
+    <div ref={wrapRef} style={{ marginBottom: 16, position: "relative", zIndex: addOpen ? 250 : 1 }}>
       {/* saved-view segments */}
       {segments.length > 0 && (
         <div className="flex wrap" style={{ gap: 7, marginBottom: 11 }}>
@@ -92,8 +96,8 @@ export default function FilterBar({
         </div>
       )}
 
-      {/* omnibar */}
-      <div className="card" style={{ position: "relative", padding: "9px 11px", borderRadius: 14, border: "1.5px solid var(--teal)", boxShadow: "0 0 0 4px rgba(0,196,194,.10), var(--shadow-sm)", display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+      {/* omnibar — isolation removed so the popover can escape this stacking context */}
+      <div className="card" style={{ position: "relative", padding: "9px 11px", borderRadius: 14, border: "1.5px solid var(--teal)", boxShadow: "0 0 0 4px rgba(0,196,194,.10), var(--shadow-sm)", display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", isolation: "auto" }}>
         <Search size={15} style={{ color: "var(--teal)", flexShrink: 0 }} />
 
         {/* search as the first operator */}
@@ -141,7 +145,7 @@ export default function FilterBar({
 
         {/* add-filter / edit popover */}
         {addOpen && (
-          <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 12, zIndex: 30, width: 264, background: "var(--surface-elevated)", border: "1px solid var(--edge)", borderRadius: 13, boxShadow: "var(--shadow-lg)", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 12, zIndex: 250, width: 264, background: "var(--surface-elevated)", border: "1px solid var(--edge)", borderRadius: 13, boxShadow: "var(--shadow-lg)", overflow: "hidden" }}>
             {!pick ? (
               <>
                 <div style={{ fontSize: 9.5, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--faint)", fontWeight: 800, padding: "11px 14px 5px" }}>Filter by</div>

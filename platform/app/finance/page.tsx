@@ -276,6 +276,27 @@ export default async function Finance() {
         </Link>
       }
     >
+      {/* THREE-CARD HERO at the very top of /finance (Taona 2026-06-08): the
+          three operator-asked cards (Donations this month / Money out this month
+          / Upcoming payments) lead, EVERYTHING ELSE goes below — including the
+          legacy net-cashflow hero, Payables, Treasury, and the archive drawer. */}
+      <ExpenseTrioHero
+        donationTotals={donationTotals}
+        donationCount={donationsThisMonth.length}
+        monthlyGoal={monthlyGoal}
+        outTotals={outTotals}
+        outCount={expRows.length}
+        outDeltaPct={outDeltaPct}
+        upcoming={upcomingRows}
+        refunds={refunds}
+      />
+
+      {/* EXPENSE LIST (spec/002 v2): the queryable bank-statement-style ledger
+          for "what flowed out and when." Time pills + search + date groups. */}
+      <div id="expense-list" style={{ marginBottom: 18 }}>
+        <ExpenseList rows={expRows} today={todayIso} />
+      </div>
+
       {/* HERO (Drill-to-core, Law 5): lead with real cash movement this month, not the
           lifetime "raised to date" vanity total. Every figure here is queried in this file:
           moneyIn (succeeded donations this month), moneyOut (USD paid this month), netMonth,
@@ -374,25 +395,6 @@ export default async function Finance() {
       {/* TREASURY: the A-to-Z money summary (Law 7). Lifetime in/out per currency, blended
           USD with FX visible, honest cash position. Sits under the cash hero. */}
       <Treasury />
-
-      {/* THREE-CARD HERO (spec/002 v2): Donations / Money out / Upcoming.
-          The unified CFO view at a glance. Tap-through to the deep surfaces. */}
-      <ExpenseTrioHero
-        donationTotals={donationTotals}
-        donationCount={donationsThisMonth.length}
-        monthlyGoal={monthlyGoal}
-        outTotals={outTotals}
-        outCount={expRows.length}
-        outDeltaPct={outDeltaPct}
-        upcoming={upcomingRows}
-        refunds={refunds}
-      />
-
-      {/* EXPENSE LIST (spec/002 v2): the queryable bank-statement-style ledger
-          for "what flowed out and when." Time pills + search + date groups. */}
-      <div id="expense-list" style={{ marginBottom: 18 }}>
-        <ExpenseList rows={expRows} today={todayIso} />
-      </div>
 
       {/* ARCHIVE WRAPPER (Phase 2.5): everything below this point is operator
           tooling + historical streams (salaries, reminders, ledger, banking,
