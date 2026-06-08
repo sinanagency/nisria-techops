@@ -145,6 +145,11 @@ function claimsCompletionWithoutSuccess(reply: string, toolRuns: { name: string;
   const parseTasksDidIt = toolRuns.some((t) => t.name === "create_task" && (t.result as any)?.ok === true && (t.result as any)?.detail?.source_kind === "parsed_task");
   if (hasMoneyShape && !okIn(PAYMENT_TOOLS)) return true;
   if (hasTaskShape && !okIn(TASK_TOOLS)) return true;
+  // v1.3.11.2 (R1 Judge-4 catch): SHAPE_CONTACT was originally missing the
+  // parseTasksDidIt exemption (only SHAPE_CASE and SHAPE_EVENT had it).
+  // Symmetry now: any title-foreign category words (contact / team member /
+  // saved someone's number) that appear in a reply backed by a parseTasks
+  // create_task should pass the same way.
   if (hasCaseShape && !okIn(CASE_TOOLS) && !parseTasksDidIt) return true;
   if (hasEventShape && !okIn(EVENT_TOOLS) && !parseTasksDidIt) return true;
   if (hasContactShape && !okIn(CONTACT_TOOLS) && !parseTasksDidIt) return true;
