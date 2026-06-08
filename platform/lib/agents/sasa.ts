@@ -203,7 +203,7 @@ const isHedge = (s: string) => HEDGE_MARK.test(String(s || ""));
 // it's the GUARD that fired, not the model circling. Treating those as hedge
 // makes the loop guard cascade-fire across rapid-fire turns where the prior
 // guard rewrite still lives in history. Skip them.
-const GUARD_OUTPUT_MARK = /^(?:I have not actually done that yet|I should not have put numbers in there|I said I had it staged but I have not|I logged that, but I have not actually messaged them|Let me just do it\. Tell me the one specific change)/i;
+const GUARD_OUTPUT_MARK = /^(?:I have not actually done that yet|I should not have put numbers in there|I had some numbers in there I am not fully sure of|I said I had it staged but I have not|I logged that, but I have not actually messaged them|Let me just do it\. Tell me the one specific change)/i;
 function isHedgeLoop(reply: string, history: { role: string; content: string }[] = []): boolean {
   if (!isHedge(reply)) return false;
   const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
@@ -268,6 +268,14 @@ function findFabricatedAmounts(reply: string, command: string, toolRuns: { name:
 
 const HONEST_NO_FIGURE =
   "I should not have put numbers in there. I do not see those amounts in your message or in what I just pulled. Could you tell me the exact figure and the payee, and I will record it from your words.";
+// v1.3.11.4: separate rewrite for READ-intent prompts. The original write-shaped
+// rewrite ("tell me the exact figure and the payee") is wrong tone when the
+// operator just asked "what was shared in the X group" — she does not want to
+// record anything, she wants to see. Read-shaped commands get a re-pull offer.
+// Caught by 2026-06-08 extended sweep E11 (Finance-group query).
+const HONEST_NO_FIGURE_READ =
+  "I had some numbers in there I am not fully sure of, the figures did not match what I just pulled. Want me to re-pull the raw history so you can see the actual entries?";
+const WRITE_INTENT_RE = /\b(?:log(?:ged)?|record(?:ed)?|stage|file|add|i\s+(?:paid|sent|owe|gave|made)|payment|register|book|enter)\b/i;
 
 // FAKE-STAGING GUARD (v1.3.9). Sasa was generating "Ready to log KES 7,250 to X.
 // Reply yes to confirm." text WITHOUT calling record_payment, so no
@@ -685,7 +693,8 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       // backstop for the no-numeric-source-at-all case.
       const fabricated = findFabricatedAmounts(reply, opts.command, toolRuns);
       if (fabricated.length) {
-        reply = humanize(HONEST_NO_FIGURE, { now: { long: n.long, today: n.today } });
+        const isWrite = WRITE_INTENT_RE.test(opts.command || "");
+        reply = humanize(isWrite ? HONEST_NO_FIGURE : HONEST_NO_FIGURE_READ, { now: { long: n.long, today: n.today } });
       } else if (unverifiableFigure(reply, opts.command, toolRuns)) {
         reply = `${reply}\n\nPlease double check that figure before you rely on it, I have not verified it against a record.`;
       }

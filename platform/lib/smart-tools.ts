@@ -463,14 +463,46 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
   if (name === "search_documents") {
     const q = String(input.query || "").trim();
     if (!q) return { results: [], note: "give a topic to search" };
-    const like = `%${q.replace(/[,()*%]/g, "")}%`;
-    let qb = db.from("documents").select("title,doc_type,folder,doc_date,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
-    // PII/sensitivity wall: a team-tier caller only sees 'normal' documents. Bank
-    // statements, IDs, contracts, finance + legal docs are tagged sensitive/restricted
-    // (documents.sensitivity) and are admin-only.
-    if (tier === "team") qb = qb.eq("sensitivity", "normal");
-    const { data } = await qb.order("doc_date", { ascending: false }).limit(12);
-    return { count: (data || []).length, results: ((data || []) as any[]).map((d) => ({ title: d.title, type: d.doc_type || null, folder: d.folder || null, date: d.doc_date || null, summary: String(d.summary || "").slice(0, 160) || null })) };
+    // v1.3.11.4: tokenize the query so multi-word user phrasing like "I&M Bank
+    // mandate" matches a title like "I&M BANK CLARIFICATION OF MANDATE..."
+    // (the words exist but not as a contiguous substring). Drop stopwords, OR-
+    // fetch candidates that match ANY token, then keep only candidates that
+    // contain ALL tokens. Score: title hits 2, text hits 1. Caught by
+    // 2026-06-08 extended sweep E9 (real doc invisible to old substring match).
+    const STOP = new Set(["the","a","an","of","for","to","in","on","and","or","my","our","is","are","this","that","do","does","find","pull","get","show","what","whats","whose","please"]);
+    const tokens = q.toLowerCase().replace(/[%()*,]/g, "").split(/\s+/).filter((t) => t.length >= 2 && !STOP.has(t));
+    let scored: any[] = [];
+    if (tokens.length) {
+      const orClauses = tokens.flatMap((t) => [`title.ilike.%${t}%`, `extracted_text.ilike.%${t}%`]).join(",");
+      let qb = db.from("documents").select("title,doc_type,folder,doc_date,summary,extracted_text").or(orClauses).limit(60);
+      // PII/sensitivity wall: a team-tier caller only sees 'normal' documents. Bank
+      // statements, IDs, contracts, finance + legal docs are tagged sensitive/restricted
+      // (documents.sensitivity) and are admin-only.
+      if (tier === "team") qb = qb.eq("sensitivity", "normal");
+      const { data } = await qb;
+      scored = ((data || []) as any[])
+        .map((d) => {
+          const titleLow = String(d.title || "").toLowerCase();
+          const textLow = String(d.extracted_text || "").toLowerCase();
+          const hits = tokens.filter((t) => titleLow.includes(t) || textLow.includes(t));
+          if (hits.length !== tokens.length) return null;
+          const score = tokens.reduce((s, t) => s + (titleLow.includes(t) ? 2 : 0) + (textLow.includes(t) ? 1 : 0), 0);
+          return { d, score };
+        })
+        .filter(Boolean)
+        .sort((a: any, b: any) => b.score - a.score)
+        .slice(0, 12);
+    }
+    if (!scored.length) {
+      // Fallback: single-substring match (old behavior) so a one-word query like
+      // "constitution" still works, and so the empty case stays consistent.
+      const like = `%${q.replace(/[,()*%]/g, "")}%`;
+      let qb = db.from("documents").select("title,doc_type,folder,doc_date,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
+      if (tier === "team") qb = qb.eq("sensitivity", "normal");
+      const { data } = await qb.order("doc_date", { ascending: false }).limit(12);
+      return { count: (data || []).length, results: ((data || []) as any[]).map((d) => ({ title: d.title, type: d.doc_type || null, folder: d.folder || null, date: d.doc_date || null, summary: String(d.summary || "").slice(0, 160) || null })) };
+    }
+    return { count: scored.length, results: scored.map((s: any) => ({ title: s.d.title, type: s.d.doc_type || null, folder: s.d.folder || null, date: s.d.doc_date || null, summary: String(s.d.summary || "").slice(0, 160) || null })) };
   }
   if (name === "list_learned") {
     // Observability for the memory the bot is accumulating: curated facts the
