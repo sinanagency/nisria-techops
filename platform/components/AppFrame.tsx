@@ -8,7 +8,6 @@ import SpaceSwipe from "./SpaceSwipe";
 import MissionControl from "./MissionControl";
 import ContextBar from "./ContextBar";
 import VoiceDock from "./VoiceDock";
-import ActivityChip from "./ActivityChip";
 import FocusSheetHost from "./FocusSheet";
 import SasaTour from "./SasaTour";
 import { logout } from "../app/login/actions";
@@ -17,7 +16,7 @@ import ToastProvider from "./Toast";
 import {
   Home, Inbox, PenLine, ListChecks, Users, Send, FolderOpen, Bot, Activity,
   HeartHandshake, DollarSign, Target, Heart, Package, Award, Megaphone, File,
-  X, Plus, Sparkles, ChevronDown, ChevronLeft, Wand2, Settings, ShieldCheck, LayoutGrid, Layers, HelpCircle, Compass, User, CalendarDays, LifeBuoy, Gift, Search,
+  X, Plus, Sparkles, ChevronLeft, Settings, ShieldCheck, LayoutGrid, Layers, Compass, User, CalendarDays, LifeBuoy, Gift, Search,
 } from "lucide-react";
 
 export type NavUser = { name: string; org: string; initials: string; role: string } | null;
@@ -42,33 +41,10 @@ const PILLS = [
   { href: "/tasks", label: "Tasks", icon: "tasks" },
   { href: "/calendar", label: "Calendar", icon: "calendar" },
 ];
-const MENU = [
-  { group: "Money", short: "Money", items: [
-    { href: "/donors", label: "Donors", icon: "heart" },
-    { href: "/donations", label: "Donations", icon: "dollar" },
-    { href: "/campaigns", label: "Campaigns", icon: "target" },
-    { href: "/grants", label: "Grants", icon: "award" },
-    { href: "/wishlist", label: "Wishlist", icon: "gift" },
-    { href: "/finance", label: "Finance", icon: "dollar" },
-    { href: "/reports", label: "Reports", icon: "file" },
-    { href: "/legal", label: "Legal & Compliance", icon: "shield" },
-  ]},
-  { group: "Studio", short: "Studio", items: [
-    { href: "/studio", label: "Document Studio", icon: "spark" },
-    { href: "/filing", label: "Filing", icon: "file" },
-    { href: "/content", label: "Content", icon: "pen" },
-    { href: "/library", label: "Library", icon: "folder" },
-    { href: "/outreach", label: "Outreach", icon: "send" },
-    { href: "/inventory", label: "Inventory", icon: "box" },
-  ]},
-  { group: "People", short: "People", items: [
-    { href: "/beneficiaries", label: "Beneficiaries", icon: "life" },
-    { href: "/cases", label: "Cases", icon: "lifebuoy" },
-    { href: "/team", label: "Team", icon: "users" },
-    { href: "/groups", label: "Groups", icon: "bot" },
-  ]},
-];
-const RECORDS = MENU.flatMap((g) => g.items);
+// Folder dropdowns retired in the A-lean IA reorg (commit df02916). The
+// categorical map now lives inside Launchpad.tsx (`SECTIONS`). Kept here as a
+// fossil in git history; revive by reading the predecessor commit if folders
+// ever come back to the topbar.
 
 function TabBar() {
   const { tabs, active, closeTab, sheets, restoreSheet, closeSheet } = useTabs();
@@ -110,16 +86,13 @@ function TabBar() {
 
 function TopNav({ user }: { user: NavUser }) {
   const path = usePathname();
-  const [openCat, setOpenCat] = useState<string | null>(null);
   const [avOpen, setAvOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
   const avRef = useRef<HTMLDivElement>(null);
   const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
   const router = useRouter();
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpenCat(null);
       if (avRef.current && !avRef.current.contains(e.target as Node)) setAvOpen(false);
     };
     document.addEventListener("click", onClick);
@@ -131,7 +104,7 @@ function TopNav({ user }: { user: NavUser }) {
       <div className="topnav-inner">
         <button className="iconbtn backbtn" onClick={() => router.back()} title="Back"><ChevronLeft size={18} /></button>
         <Link href="/" className="brand"><img className="logo" src="/logo.png" alt="Nisria" /></Link>
-        <div className="navpills" ref={ref}>
+        <div className="navpills">
           {PILLS.map((p) => (
             <Link key={p.href} href={p.href} className={`navpill ${isActive(p.href) ? "active" : ""}`}>
               <span className="ico"><Icon name={p.icon} /></span> {p.label}

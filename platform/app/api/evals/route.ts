@@ -140,7 +140,11 @@ const CASES: Case[] = [
   {
     name: "BENEFICIARY: the agent can see beneficiaries",
     command: "Who do we have in the rescue program?",
-    assert: (o) => [{ label: "calls find_beneficiary", pass: hasTool(o, "find_beneficiary") }],
+    // "Who do we have in X" is a LIST question, not a FIND. list_beneficiaries
+    // is the correct tool for a program-scoped roster ask; find_beneficiary is
+    // for a name lookup. Either tool is a pass — the test cares that the agent
+    // can SEE beneficiaries, not which exact tool it picks.
+    assert: (o) => [{ label: "calls find_beneficiary or list_beneficiaries", pass: hasTool(o, "find_beneficiary") || hasTool(o, "list_beneficiaries") }],
   },
   {
     name: "SEND: 'tell <person> ...' messages that person directly",
