@@ -1,5 +1,6 @@
 import { admin } from "../lib/supabase-admin";
 import { Card, Badge } from "./ui";
+import Collapsible from "./Collapsible";
 import DocReader from "./DocReader";
 import { FileText, ChevronRight, TrendingUp, ClipboardCheck, CalendarDays, Wallet, FileBarChart } from "lucide-react";
 
@@ -69,7 +70,7 @@ export default async function ReportArchive() {
         const list = grouped[k.key];
         const Icon = k.icon;
         return (
-          <Card key={k.key} title={<span className="flex"><Icon size={15} /> {k.label}</span> as any} action={<Badge tone={k.tone as any}>{list.length}</Badge>}>
+          <Collapsible key={k.key} title={<span className="flex"><Icon size={15} /> {k.label}</span>} action={<Badge tone={k.tone as any}>{list.length}</Badge>} defaultOpen={list.length <= 8}>
             <div className="stack" style={{ gap: 0 }}>
               {list.map((d: any) => (
                 <DocReader key={d.id} doc={{ id: d.id, title: clean(d.title), drive_url: d.drive_url, icon: "file" }} className="docrow">
@@ -86,7 +87,7 @@ export default async function ReportArchive() {
                 </DocReader>
               ))}
             </div>
-          </Card>
+          </Collapsible>
         );
       })}
     </div>

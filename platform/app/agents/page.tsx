@@ -3,6 +3,8 @@ import { Badge } from "../../components/ui";
 import { admin } from "../../lib/supabase-admin";
 import { setLane, toggleConnector } from "./actions";
 import { Bot, Mail, HeartHandshake, PenLine, Megaphone, Database, Plug, Clock, Search, MessageSquare, BellRing, FolderDown, ListChecks } from "lucide-react";
+import { filterHumanEvents } from "../../lib/events-filter";
+import TabbedPane, { type TabbedTab } from "../../components/TabbedPane";
 
 export const dynamic = "force-dynamic";
 
@@ -143,85 +145,105 @@ export default async function Agents() {
         })}
       </div>
 
-      {/* activity stream */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-h"><span className="flex"><Search size={15} /> Activity stream</span></div>
-        <div style={{ padding: "6px 18px 12px", maxHeight: 240, overflowY: "auto" }}>
-          {(events || []).length === 0 && <div className="empty">No activity yet.</div>}
-          {(events || []).map((e: any, i: number) => (
-            <div key={i} className="actrow">
-              <span className="aico teal"><Bot size={14} /></span>
-              <div className="abody"><div className="atitle">{evLabel(e)}</div></div>
-              <span className="aright">{ago(e.created_at)}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
-        {/* autonomy dials */}
-        <div className="card">
-          <div className="card-h">Autonomy dials</div>
-          <div style={{ padding: "8px 18px 16px" }}>
-            <div className="muted" style={{ fontSize: 12.5, margin: "6px 0 12px" }}>How much each kind of action can do on its own. Tighten or loosen as you learn to trust it.</div>
-            {(rules || []).map((r: any) => (
-              <div key={r.scope} className="between" style={{ padding: "11px 0", borderTop: "1px solid var(--line)" }}>
+      {/* control panels (Phase 2.6 Stage C): activity, autonomy, connectors,
+          and recent runs collapsed into a TabbedPane so the page reads as
+          one viewport instead of 5,702px on mobile. */}
+      {(() => {
+        const tabs: TabbedTab[] = [
+          {
+            id: "activity",
+            label: "Activity stream",
+            hint: "what just happened",
+            body: (() => {
+              const human = filterHumanEvents(events as any[]);
+              if (human.length === 0) return <div className="empty">No activity yet.</div>;
+              return (
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{r.scope.replace(/^(kind|connector):/, "").replace(/_/g, " ")}</div>
-                  {r.note && <div className="faint" style={{ fontSize: 11 }}>{r.note}</div>}
-                </div>
-                <div className="flex" style={{ gap: 4 }}>
-                  {LANES.map((l) => (
-                    <form action={setLane} key={l}>
-                      <input type="hidden" name="scope" value={r.scope} />
-                      <input type="hidden" name="lane" value={l} />
-                      <button type="submit" className="pill" style={r.lane === l ? { background: "var(--ink)", color: "#fff", borderColor: "var(--ink)" } : {}}>{l}</button>
-                    </form>
+                  {human.map((e: any, i: number) => (
+                    <div key={i} className="actrow">
+                      <span className="aico teal"><Bot size={14} /></span>
+                      <div className="abody"><div className="atitle">{evLabel(e)}</div></div>
+                      <span className="aright">{ago(e.created_at)}</span>
+                    </div>
                   ))}
                 </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* connectors + runs */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="card">
-            <div className="card-h"><span className="flex"><Plug size={15} /> Connectors</span></div>
-            <div style={{ padding: "4px 18px 14px" }}>
-              {(connectors || []).map((c: any) => (
-                <div key={c.key} className="between" style={{ padding: "10px 0", borderTop: "1px solid var(--line)" }}>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</div>
-                    <div className="faint" style={{ fontSize: 11 }}>{c.mechanism} · {c.kind}</div>
+              );
+            })(),
+          },
+          {
+            id: "autonomy",
+            label: "Autonomy dials",
+            count: (rules || []).length,
+            hint: "what runs on its own",
+            body: (
+              <div>
+                <div className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>How much each kind of action can do on its own. Tighten or loosen as you learn to trust it.</div>
+                {(rules || []).map((r: any) => (
+                  <div key={r.scope} className="between" style={{ padding: "11px 0", borderTop: "1px solid var(--line)" }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{r.scope.replace(/^(kind|connector):/, "").replace(/_/g, " ")}</div>
+                      {r.note && <div className="faint" style={{ fontSize: 11 }}>{r.note}</div>}
+                    </div>
+                    <div className="flex" style={{ gap: 4 }}>
+                      {LANES.map((l) => (
+                        <form action={setLane} key={l}>
+                          <input type="hidden" name="scope" value={r.scope} />
+                          <input type="hidden" name="lane" value={l} />
+                          <button type="submit" className="pill" style={r.lane === l ? { background: "var(--ink)", color: "#fff", borderColor: "var(--ink)" } : {}}>{l}</button>
+                        </form>
+                      ))}
+                    </div>
                   </div>
-                  <form action={toggleConnector} className="flex">
-                    <input type="hidden" name="key" value={c.key} />
-                    <input type="hidden" name="enabled" value={String(c.enabled)} />
-                    <button type="submit" className="pill" style={c.enabled ? { background: "#E7F6EC", color: "#15803D", borderColor: "#C7EBD2" } : {}}>{c.enabled ? "on" : "off"}</button>
-                  </form>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-h">Recent agent runs</div>
-            <div style={{ padding: "4px 18px 14px" }}>
-              {(runs || []).length === 0 && <div className="empty">No runs yet.</div>}
-              {(runs || []).map((r: any, i: number) => (
-                <div key={i} className="between" style={{ padding: "9px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 12.5 }}>
-                  <span className="flex"><Bot size={13} color="var(--teal-700)" /> {r.agent?.replace("agent:", "")}</span>
-                  <span className="flex">
-                    <Badge tone={r.status === "error" ? "red" : laneTone[r.output?.lane] || "gray"}>{r.decision}</Badge>
-                    <span className="faint">{ago(r.created_at)}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
+                ))}
+              </div>
+            ),
+          },
+          {
+            id: "connectors",
+            label: "Connectors",
+            count: (connectors || []).length,
+            hint: "what Sasa can reach",
+            body: (
+              <div>
+                {(connectors || []).map((c: any) => (
+                  <div key={c.key} className="between" style={{ padding: "10px 0", borderTop: "1px solid var(--line)" }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</div>
+                      <div className="faint" style={{ fontSize: 11 }}>{c.mechanism} · {c.kind}</div>
+                    </div>
+                    <form action={toggleConnector} className="flex">
+                      <input type="hidden" name="key" value={c.key} />
+                      <input type="hidden" name="enabled" value={String(c.enabled)} />
+                      <button type="submit" className="pill" style={c.enabled ? { background: "#E7F6EC", color: "#15803D", borderColor: "#C7EBD2" } : {}}>{c.enabled ? "on" : "off"}</button>
+                    </form>
+                  </div>
+                ))}
+              </div>
+            ),
+          },
+          {
+            id: "runs",
+            label: "Recent agent runs",
+            count: (runs || []).length,
+            hint: "the audit trail",
+            body: (
+              <div>
+                {(runs || []).length === 0 && <div className="empty">No runs yet.</div>}
+                {(runs || []).map((r: any, i: number) => (
+                  <div key={i} className="between" style={{ padding: "9px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 12.5 }}>
+                    <span className="flex"><Bot size={13} color="var(--teal-700)" /> {r.agent?.replace("agent:", "")}</span>
+                    <span className="flex">
+                      <Badge tone={r.status === "error" ? "red" : laneTone[r.output?.lane] || "gray"}>{r.decision}</Badge>
+                      <span className="faint">{ago(r.created_at)}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ),
+          },
+        ];
+        return <TabbedPane tabs={tabs} initialId="activity" />;
+      })()}
     </Shell>
   );
 }

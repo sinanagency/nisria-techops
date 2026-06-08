@@ -2,13 +2,15 @@ import Shell from "../../components/Shell";
 import { Badge } from "../../components/ui";
 import { admin, date } from "../../lib/supabase-admin";
 import DispatchBox from "../../components/DispatchBox";
+import TabbedPane, { type TabbedTab } from "../../components/TabbedPane";
 
 export const dynamic = "force-dynamic";
 
-// The memory window. A read-only view of the shared Brain: what Sasa knows, who
-// and what it knows about (the entity graph), and the contradictions the librarian
-// flagged for a human to resolve. Curation itself runs in /api/cron/librarian.
-// You can ask the Brain in plain words via the dispatch box (Sasa's query_memory).
+// The memory window. Read-only view of the shared Brain. Phase 2 design audit:
+// previously rendered every entity + every fact in one body scroll (17000px on
+// mobile). Now uses the TabbedPane primitive so each kind has its own scroll
+// owner with sticky rail on desktop and horizontal swipe-pills on mobile.
+// Curation still runs in /api/cron/librarian; this view is presentation only.
 const KIND_LABEL: Record<string, string> = {
   org_fact: "Org facts",
   owner_private: "Owner private",
@@ -37,79 +39,110 @@ export default async function Memory() {
 
   const byKind: Record<string, any[]> = {};
   for (const f of active) (byKind[f.kind] ||= []).push(f);
+  const kinds = Object.keys(byKind).sort((a, b) => (byKind[b].length - byKind[a].length));
 
   const runSub = lastRun
     ? `last curated ${date(lastRun.started_at)} · ${lastRun.merged || 0} merged, ${lastRun.flagged || 0} flagged, ${lastRun.entities_upserted || 0} entities`
     : "not yet curated";
 
+  // build the tab set. Review first (operator action). Then each kind. Then
+  // entities. Counts shown on every tab so the operator sees scope before clicking.
+  const tabs: TabbedTab[] = [];
+
+  if (review.length > 0) {
+    tabs.push({
+      id: "review",
+      label: "Needs review",
+      count: review.length,
+      hint: "contradictions to resolve",
+      body: (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="muted" style={{ fontSize: 12.5 }}>
+            The librarian found facts that contradict each other. It did not merge them. Tell Sasa the correct version to resolve.
+          </div>
+          {review.map((f) => (
+            <div key={f.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+              <div className="strong" style={{ fontSize: 13.5 }}>{f.title || f.topic || "(untitled)"}</div>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>{f.content}</div>
+              {f.review_note && <div style={{ fontSize: 12, marginTop: 6, color: "var(--warn, #b45309)" }}>Conflict: {f.review_note}</div>}
+            </div>
+          ))}
+        </div>
+      ),
+    });
+  }
+
+  for (const kind of kinds) {
+    const list = byKind[kind];
+    tabs.push({
+      id: `kind-${kind}`,
+      label: KIND_LABEL[kind] || kind,
+      count: list.length,
+      body: (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {list.map((f: any) => (
+            <div key={f.id} style={{ borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
+              {f.title && <div className="strong" style={{ fontSize: 13, marginBottom: 2 }}>{f.title}</div>}
+              <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>{f.content}</div>
+              {f.topic && <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>{f.topic}</div>}
+            </div>
+          ))}
+        </div>
+      ),
+    });
+  }
+
+  tabs.push({
+    id: "entities",
+    label: "Entity graph",
+    count: entities.length,
+    hint: entities.length === 0 ? "built on next librarian run" : undefined,
+    body: (
+      entities.length === 0 ? (
+        <div className="muted" style={{ fontSize: 12.5 }}>The librarian builds this on its next run.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {entities.map((e: any) => (
+            <div key={e.id} className="between" style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <span className="strong" style={{ fontSize: 12.5 }}>{e.name}</span>{" "}
+                <Badge tone="blue">{e.type}</Badge>
+                {e.summary && <div className="muted" style={{ fontSize: 11.5, marginTop: 2 }}>{e.summary}</div>}
+              </div>
+              <span className="muted" style={{ fontSize: 11.5, flexShrink: 0, marginLeft: 12 }}>{linkCount[e.id] || 0} facts</span>
+            </div>
+          ))}
+        </div>
+      )
+    ),
+  });
+
+  if (superseded.length > 0) {
+    tabs.push({
+      id: "superseded",
+      label: "Consolidated",
+      count: superseded.length,
+      hint: "retired by librarian",
+      body: (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div className="muted" style={{ fontSize: 12 }}>
+            These duplicates were merged into newer facts. Kept for audit, hidden from active recall.
+          </div>
+          {superseded.map((f) => (
+            <div key={f.id} style={{ borderBottom: "1px solid var(--line)", paddingBottom: 6, opacity: .7 }}>
+              <div style={{ fontSize: 12.5 }}>{f.title || f.topic || "(untitled)"}</div>
+              <div className="faint" style={{ fontSize: 11.5 }}>{f.content}</div>
+            </div>
+          ))}
+        </div>
+      ),
+    });
+  }
+
   return (
     <Shell title="Memory" sub={`${active.length} active facts · ${entities.length} entities · ${runSub}`}>
       <DispatchBox />
-
-      {review.length > 0 && (
-        <div className="card" style={{ marginTop: 16, borderColor: "var(--warn, #b45309)" }}>
-          <div className="card-h">Needs your review <Badge tone="blue">{review.length}</Badge></div>
-          <div className="card-pad" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div className="muted" style={{ fontSize: 12.5 }}>The librarian found facts that contradict each other. It did not merge them. Tell Sasa the correct version to resolve.</div>
-            {review.map((f) => (
-              <div key={f.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
-                <div className="strong" style={{ fontSize: 13.5 }}>{f.title || f.topic || "(untitled)"}</div>
-                <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>{f.content}</div>
-                {f.review_note && <div style={{ fontSize: 12, marginTop: 6, color: "var(--warn, #b45309)" }}>Conflict: {f.review_note}</div>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="grid cols-2" style={{ marginTop: 16 }}>
-        <div className="card">
-          <div className="card-h">What the Brain knows</div>
-          <div className="card-pad" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {Object.keys(byKind).length === 0 && <div className="muted" style={{ fontSize: 12.5 }}>No facts stored yet.</div>}
-            {Object.entries(byKind).map(([kind, list]) => (
-              <div key={kind}>
-                <div className="between" style={{ marginBottom: 6 }}>
-                  <span className="strong" style={{ fontSize: 12.5 }}>{KIND_LABEL[kind] || kind}</span>
-                  <Badge>{list.length}</Badge>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {list.slice(0, 12).map((f) => (
-                    <div key={f.id} style={{ fontSize: 12.5, lineHeight: 1.45 }}>
-                      {f.title && <span className="strong">{f.title}: </span>}
-                      <span className="muted">{f.content}</span>
-                    </div>
-                  ))}
-                  {list.length > 12 && <div className="muted" style={{ fontSize: 11.5 }}>+ {list.length - 12} more</div>}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-h">Entity graph <Badge>{entities.length}</Badge></div>
-          <div className="card-pad" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {entities.length === 0 && <div className="muted" style={{ fontSize: 12.5 }}>The librarian builds this on its next run.</div>}
-            {entities.map((e) => (
-              <div key={e.id} className="between" style={{ borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
-                <div>
-                  <span className="strong" style={{ fontSize: 12.5 }}>{e.name}</span>
-                  <Badge tone="blue">{e.type}</Badge>
-                  {e.summary && <div className="muted" style={{ fontSize: 11.5, marginTop: 2 }}>{e.summary}</div>}
-                </div>
-                <span className="muted" style={{ fontSize: 11.5 }}>{linkCount[e.id] || 0} facts</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {superseded.length > 0 && (
-        <div className="muted" style={{ fontSize: 11.5, marginTop: 14 }}>
-          {superseded.length} duplicate fact(s) consolidated and retired by the librarian.
-        </div>
-      )}
+      <TabbedPane tabs={tabs} initialId={review.length > 0 ? "review" : tabs[0]?.id} emptyHint="The Brain is empty. Tell Sasa something to remember." />
     </Shell>
   );
 }

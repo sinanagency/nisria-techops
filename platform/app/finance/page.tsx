@@ -14,6 +14,12 @@ import FinanceLedger from "../../components/FinanceLedger";
 import BankingView from "../../components/BankingView";
 import KenyaReceiptUpload from "../../components/KenyaReceiptUpload";
 import Countdown from "../../components/Countdown";
+import ExpenseTrioHero from "../../components/ExpenseTrioHero";
+import ExpenseList from "../../components/ExpenseList";
+import { periodFor, dubaiToday } from "../../lib/period";
+import { loadExpenses, sumByCurrency, loadRefunds } from "../../lib/expenses";
+import { loadUpcoming } from "../../lib/upcoming";
+import { getMonthlyGoal } from "../../lib/org-settings";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -76,18 +82,51 @@ export default async function Finance() {
   const db = admin();
 
   const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  // Dubai-TZ consistency (Phase 2.6 Stage B): legacy sections previously used
+  // server-UTC monthStart, which drifts ~4h from the new Phase 2.3 sections
+  // that use periodFor("this_month") from lib/period.ts. Now both flows read
+  // the same Dubai-local month boundary. The string is in ISO-Z form so the
+  // existing `new Date(p.paid_at).toISOString() >= monthStart` comparisons
+  // keep working without any other code change.
+  const dubaiMonthStart = `${periodFor("this_month").from}T00:00:00.000Z`;
+  const monthStart = dubaiMonthStart;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  const [donRes, payRes, teamRes] = await Promise.all([
-    db.from("donations").select("amount,status,donated_at").gte("donated_at", monthStart).limit(2000),
+  // Dubai-TZ periods for the three-card hero + expense list
+  const thisMonth = periodFor("this_month");
+  const lastMonth = periodFor("last_month");
+  const todayIso = dubaiToday();
+
+  const [donRes, payRes, teamRes, expRows, upcomingRows, expLastMonth, monthlyGoal, refunds] = await Promise.all([
+    db.from("donations").select("amount,currency,status,donated_at").gte("donated_at", thisMonth.from).limit(2000),
     db.from("payments").select("*").limit(1000),
     db.from("team_members").select("id,name").limit(500),
+    loadExpenses(db, thisMonth),
+    loadUpcoming(db),
+    loadExpenses(db, lastMonth),
+    getMonthlyGoal(db),
+    loadRefunds(db, thisMonth),
   ]);
 
   const donations = (donRes.data || []) as any[];
   const payments = (payRes.data || []) as any[];
   const teamMembers = (teamRes.data || []) as any[];
+
+  // Donations this month split by currency (Currency Law: never blend)
+  const donationsThisMonth = donations.filter((d: any) => (d.status || "").toLowerCase() === "succeeded");
+  const donationTotals: Record<string, number> = {};
+  for (const d of donationsThisMonth) {
+    const c = String(d.currency || "USD").toUpperCase();
+    donationTotals[c] = (donationTotals[c] || 0) + Number(d.amount || 0);
+  }
+
+  // Money out this month: from the UNION query (already excludes Givebutter payouts + dedup)
+  const outTotals = sumByCurrency(expRows);
+  const outLastTotals = sumByCurrency(expLastMonth);
+  const primaryCcy = outTotals.KES ? "KES" : outTotals.USD ? "USD" : "KES";
+  const outNow = outTotals[primaryCcy] || 0;
+  const outPrev = outLastTotals[primaryCcy] || 0;
+  const outDeltaPct = outPrev > 0 ? Math.round(((outNow - outPrev) / outPrev) * 100) : null;
 
   // Resolve a payroll payee to a team member so a salary row links to the 360.
   // Payee spellings drift from member names in a few rows, so reconcile those.
@@ -237,6 +276,27 @@ export default async function Finance() {
         </Link>
       }
     >
+      {/* THREE-CARD HERO at the very top of /finance (Taona 2026-06-08): the
+          three operator-asked cards (Donations this month / Money out this month
+          / Upcoming payments) lead, EVERYTHING ELSE goes below — including the
+          legacy net-cashflow hero, Payables, Treasury, and the archive drawer. */}
+      <ExpenseTrioHero
+        donationTotals={donationTotals}
+        donationCount={donationsThisMonth.length}
+        monthlyGoal={monthlyGoal}
+        outTotals={outTotals}
+        outCount={expRows.length}
+        outDeltaPct={outDeltaPct}
+        upcoming={upcomingRows}
+        refunds={refunds}
+      />
+
+      {/* EXPENSE LIST (spec/002 v2): the queryable bank-statement-style ledger
+          for "what flowed out and when." Time pills + search + date groups. */}
+      <div id="expense-list" style={{ marginBottom: 18 }}>
+        <ExpenseList rows={expRows} today={todayIso} />
+      </div>
+
       {/* HERO (Drill-to-core, Law 5): lead with real cash movement this month, not the
           lifetime "raised to date" vanity total. Every figure here is queried in this file:
           moneyIn (succeeded donations this month), moneyOut (USD paid this month), netMonth,
@@ -336,12 +396,21 @@ export default async function Finance() {
           USD with FX visible, honest cash position. Sits under the cash hero. */}
       <Treasury />
 
-      {/* (Banking + Givebutter/Kenya streams are historical — moved below as collapsed dropdowns) */}
+      {/* ARCHIVE WRAPPER (Phase 2.5): everything below this point is operator
+          tooling + historical streams (salaries, reminders, ledger, banking,
+          intake forms). Closed by default so /finance reads as the CFO view at
+          the top, not a tool drawer. Open with one click. */}
+      <Collapsible
+        defaultOpen={false}
+        title="Operator tools & historical streams"
+        action={<Badge tone="gray">Salaries · Reminders · Ledger · Banking · Forms</Badge>}
+      >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 8 }}>
 
       {/* SALARIES — this month: recurring payroll, ticking to payday (dropdown) */}
       <Collapsible
         defaultOpen
-        title="Salaries — this month"
+        title="Salaries: this month"
         action={
             <span className="flex" style={{ gap: 6, alignItems: "center" }}>
               <Badge tone="gray">{salaryPeriodLabel}</Badge>
@@ -366,7 +435,7 @@ export default async function Finance() {
             </div>
           ) : (
             <div style={{ padding: "4px 0" }}>
-              {/* unpaid — ticking down to payday */}
+              {/* unpaid: ticking down to payday */}
               {salaryUnpaid.map((p: any) => {
                 const overdue = !!(p.due_on && dueTimeOf(p) < today.getTime());
                 const soon = !!(p.due_on && !overdue && dueTimeOf(p) - today.getTime() <= 3 * DAY);
@@ -413,7 +482,7 @@ export default async function Finance() {
                   </div>
                 );
               })}
-              {/* paid this month — confirmed */}
+              {/* paid this month: confirmed */}
               {salaryPaidMonth.map((p: any) => {
                 const mid = memberIdFor(p.payee);
                 return (
@@ -448,10 +517,10 @@ export default async function Finance() {
           )}
       </Collapsible>
 
-      {/* REMINDERS — due soon (dropdown, open) */}
+      {/* REMINDERS: due soon (dropdown, open) */}
       <Collapsible
         defaultOpen
-        title="Reminders — due soon"
+        title="Reminders: due soon"
         action={
           <span className="flex" style={{ gap: 6 }}>
             {overdueCount > 0 && <Badge tone="red"><AlarmClock size={11} /> {overdueCount} overdue</Badge>}
@@ -526,7 +595,7 @@ export default async function Finance() {
       >
           {recurring.length === 0 ? (
             <div className="empty">
-              No recurring obligations yet. Add a subscription, salary or vendor payment below and set it to repeat monthly or yearly — it will refresh itself every cycle.
+              No recurring obligations yet. Add a subscription, salary or vendor payment below and set it to repeat monthly or yearly, it will refresh itself every cycle.
             </div>
           ) : (
             <details style={{ padding: "4px 22px 18px" }}>
@@ -587,7 +656,7 @@ export default async function Finance() {
       </Collapsible>
 
       <Collapsible
-        title="Givebutter & Kenya — two streams"
+        title="Givebutter & Kenya: two streams"
         action={
           <span className="flex" style={{ gap: 8, alignItems: "center" }}>
             <Badge tone={"peri" as any}>{payoutCount} payouts</Badge>
@@ -724,7 +793,7 @@ export default async function Finance() {
                 <Landmark size={16} />
               </span>
               <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.45 }}>
-                Payouts normally sync from Givebutter automatically. Use this when a withdrawal hasn’t synced yet —
+                Payouts normally sync from Givebutter automatically. Use this when a withdrawal hasn’t synced yet:
                 it records the cash that left Givebutter and funds Kenya.
               </div>
             </div>
@@ -755,7 +824,7 @@ export default async function Finance() {
         </div>
       </div>
 
-      {/* paid history — collapsed by default, expand on demand */}
+      {/* paid history: collapsed by default, expand on demand */}
       <div style={{ marginTop: 16 }}>
         <details className="card collapse">
           <summary className="collapse-head">
@@ -795,6 +864,10 @@ export default async function Finance() {
           )}
         </details>
       </div>
+
+      </div>
+      </Collapsible>
+      {/* END ARCHIVE WRAPPER */}
     </Shell>
   );
 }

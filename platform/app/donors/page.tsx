@@ -102,7 +102,12 @@ export default async function Donors({
     { key: "type", label: "Type" },
     { key: "status", label: "Status", render: (r: any) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> },
     { key: "last_gift_at", label: "Last gift", render: (r: any) => date(r.last_gift_at) },
-    { key: "lifetime_value", label: "Lifetime", align: "right", render: (r: any) => <Money className="strong" amount={r.lifetime_value} currency={r.currency} /> },
+    { key: "lifetime_value", label: "Lifetime", align: "right", render: (r: any) => (
+      <span className="flex" style={{ gap: 4, justifyContent: "flex-end", alignItems: "baseline" }}>
+        <Money className="strong" amount={r.lifetime_value} currency={r.currency || "USD"} />
+        {!r.currency && <span className="faint" style={{ fontSize: 10, fontStyle: "italic" }}>?</span>}
+      </span>
+    ) },
   ];
 
   // Group rows by status for the grouped table view. Status drives the group
@@ -152,7 +157,7 @@ export default async function Donors({
         searchPlaceholder="Search name or email…"
       />
 
-      <Card title="All donors">
+      <Card title="All donors" scroll>
         {rows.length === 0 ? (
           <div className="empty">
             {isFiltered ? "No donors match these filters." : "No donors yet. They'll appear here as Givebutter syncs in."}

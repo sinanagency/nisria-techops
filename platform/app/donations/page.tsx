@@ -237,7 +237,7 @@ export default async function Donations({
         searchPlaceholder="Search donor name…"
       />
 
-      <Card title="All donations">
+      <Card title="All donations" scroll>
         <Table
           columns={cols}
           rows={rows}

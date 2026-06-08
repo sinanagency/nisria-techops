@@ -224,7 +224,7 @@ export default async function Beneficiaries({
         searchPlaceholder="Search name, ref or location…"
       />
 
-      <Card title="All beneficiaries" action={<Badge tone="gold">consent-gated for public</Badge>}>
+      <Card title="All beneficiaries" action={<Badge tone="gold">consent-gated for public</Badge>} scroll>
         <Table
           columns={cols}
           rows={rows}

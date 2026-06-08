@@ -23,7 +23,7 @@ export function Badge({ children, tone = "" }: { children: React.ReactNode; tone
   return <span className={`badge ${tone}`}>{children}</span>;
 }
 
-export function Card({ title, action, children }: { title?: string; action?: React.ReactNode; children: React.ReactNode }) {
+export function Card({ title, action, children, scroll }: { title?: string; action?: React.ReactNode; children: React.ReactNode; scroll?: boolean }) {
   return (
     <div className="card">
       {title && (
@@ -32,7 +32,7 @@ export function Card({ title, action, children }: { title?: string; action?: Rea
           {action}
         </div>
       )}
-      {children}
+      {scroll ? <div className="card-listscroll">{children}</div> : children}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { Badge, Stat } from "../../components/ui";
 import { admin } from "../../lib/supabase-admin";
 import TeamPeek from "../../components/TeamPeek";
 import TeamAdd from "../../components/TeamAdd";
+import TabbedPane, { type TabbedTab } from "../../components/TabbedPane";
 import { Users } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -104,8 +105,10 @@ export default async function Team({
 
       {rows.length > 0 ? (
         (() => {
-          // Group the roster by department (the first non-marker tag), so the
-          // page reads like the staff directory: Leadership, Operations, etc.
+          // Group the roster by department (the first non-marker tag). Each
+          // department becomes a TabbedPane tab so the page reads at one
+          // viewport instead of stacking every department vertically (the
+          // pre-Phase-2.6 layout produced 8,218px on mobile).
           const DEPT_ORDER = [
             "Leadership", "Operations & Programs", "Finance & Admin",
             "Maisha Training", "Maisha Production", "Kwetu Haven & Field",
@@ -118,23 +121,48 @@ export default async function Team({
             ...DEPT_ORDER.filter((d) => groups[d]),
             ...Object.keys(groups).filter((d) => !DEPT_ORDER.includes(d)).sort(),
           ];
-          return (
-            <div className="stack" style={{ gap: 24 }}>
-              {ordered.map((d) => (
-                <div key={d}>
-                  <div className="flex" style={{ gap: 8, margin: "0 2px 12px", alignItems: "center" }}>
-                    <span className="report-subhead">{d}</span>
-                    <Badge tone="gray">{groups[d].length}</Badge>
-                  </div>
-                  <div className="grid cols-3">
-                    {groups[d].map((m) => (
-                      <TeamPeek key={m.id} m={m} openTasks={openTasks(m.id)} />
-                    ))}
-                  </div>
+
+          // tabs[0] is "All" so the operator can browse the full directory
+          // without picking a department first; subsequent tabs are per-dept.
+          const tabs: TabbedTab[] = [
+            {
+              id: "all",
+              label: "All",
+              count: rows.length,
+              hint: "the whole directory",
+              body: (
+                <div className="stack" style={{ gap: 24 }}>
+                  {ordered.map((d) => (
+                    <div key={d}>
+                      <div className="flex" style={{ gap: 8, margin: "0 2px 12px", alignItems: "center" }}>
+                        <span className="report-subhead">{d}</span>
+                        <Badge tone="gray">{groups[d].length}</Badge>
+                      </div>
+                      <div className="grid cols-3">
+                        {groups[d].map((m) => (
+                          <TeamPeek key={m.id} m={m} openTasks={openTasks(m.id)} />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          );
+              ),
+            },
+            ...ordered.map<TabbedTab>((d) => ({
+              id: `dept-${d.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+              label: d,
+              count: groups[d].length,
+              body: (
+                <div className="grid cols-3">
+                  {groups[d].map((m) => (
+                    <TeamPeek key={m.id} m={m} openTasks={openTasks(m.id)} />
+                  ))}
+                </div>
+              ),
+            })),
+          ];
+
+          return <TabbedPane tabs={tabs} initialId={ordered.length > 0 ? `dept-${ordered[0].toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : "all"} />;
         })()
       ) : (
         <div className="card">

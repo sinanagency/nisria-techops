@@ -1,5 +1,6 @@
 import Shell from "../../components/Shell";
 import { Card, Badge, Stat } from "../../components/ui";
+import Collapsible from "../../components/Collapsible";
 import DocReader from "../../components/DocReader";
 import { admin, date } from "../../lib/supabase-admin";
 import { ShieldCheck, Landmark, Globe2, FileCheck2, Scale, Building2, ChevronRight, CalendarClock } from "lucide-react";
@@ -149,7 +150,7 @@ export default async function Legal() {
       </div>
 
       {/* recurring compliance obligations: governance filings with cadence + status */}
-      <Card title={<span className="flex"><CalendarClock size={15} /> Recurring filings & obligations</span> as any} action={<Badge tone="gold"><CalendarClock size={11} /> annual cadence</Badge>}>
+      <Collapsible title={<span className="flex"><CalendarClock size={15} /> Recurring filings & obligations</span>} action={<Badge tone="gold"><CalendarClock size={11} /> annual cadence · {OBLIGATIONS.length}</Badge>} defaultOpen>
         <div className="stack" style={{ gap: 0 }}>
           {OBLIGATIONS.map((o) => (
             <div key={o.label} className="between" style={{ padding: "12px 22px", borderTop: "1px solid var(--line)", gap: 12 }}>
@@ -161,7 +162,7 @@ export default async function Legal() {
             </div>
           ))}
         </div>
-      </Card>
+      </Collapsible>
 
       {/* document register — self-populating, grouped, original demoted to a source link */}
       <div style={{ marginTop: 16 }} className="stack">
@@ -169,7 +170,7 @@ export default async function Legal() {
           const list = byGroup[g.key];
           const Icon = g.icon;
           return (
-            <Card key={g.key} title={<span className="flex"><Icon size={15} /> {g.label}</span> as any} action={<Badge tone={g.tone as any}>{list.length}</Badge>}>
+            <Collapsible key={g.key} title={<span className="flex"><Icon size={15} /> {g.label}</span>} action={<Badge tone={g.tone as any}>{list.length}</Badge>} defaultOpen={list.length <= 8}>
               <div className="stack" style={{ gap: 0 }}>
                 {list.map((d: any) => (
                   <DocReader key={d.id} doc={{ id: d.id, title: (d.title || "").replace(/^\[NS\]\s*/, "").replace(/\.(pdf|docx?|doc)$/i, ""), drive_url: d.drive_url, icon: "shield" }} className="docrow">
@@ -188,7 +189,7 @@ export default async function Legal() {
                   </DocReader>
                 ))}
               </div>
-            </Card>
+            </Collapsible>
           );
         })}
       </div>

@@ -13,6 +13,7 @@ import ApprovalCard from "../components/ApprovalCard";
 import { getCurrentUser } from "../lib/auth";
 import CalendarWidget from "../components/CalendarWidget";
 import { Sparkles, ChevronRight, Bot } from "lucide-react";
+import { filterHumanEvents } from "../lib/events-filter";
 
 export const dynamic = "force-dynamic";
 
@@ -144,7 +145,13 @@ export default async function MissionControl() {
           <div style={{ padding: "6px 16px" }}>
             {(tasks || []).length === 0 && (
               <div style={{ display: "flex", flexDirection: "column", minHeight: 220 }}>
-                <div className="empty" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 16px" }}>No open tasks.</div>
+                {counts.openTasks > 0 ? (
+                  <a href="/tasks" className="empty" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 16px", textDecoration: "none" }}>
+                    <span><strong>{num(counts.openTasks)}</strong> open task{counts.openTasks === 1 ? "" : "s"} - open the board <ChevronRight size={13} style={{ verticalAlign: -2 }} /></span>
+                  </a>
+                ) : (
+                  <div className="empty" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 16px" }}>No open tasks.</div>
+                )}
                 <div style={{ paddingBottom: 14 }}>
                   <AskSasa prompt="Suggest and assign a task for the team based on what's happening right now." label="Ask Sasa to assign a task…" />
                 </div>
@@ -164,14 +171,17 @@ export default async function MissionControl() {
         <div className="card">
           <div className="card-h"><a href="/agents" style={{ textDecoration: "none" }} className="flex">Recent activity <ChevronRight size={15} /></a></div>
           <div style={{ padding: "6px 16px" }}>
-            {(events || []).length === 0 && <div className="empty">Quiet so far today.</div>}
-            {(events || []).map((e: any, i: number) => (
-              <div key={i} className="actrow">
-                <span className="aico teal"><Bot size={14} /></span>
-                <div className="abody"><div className="atitle">{evLabel(e)}</div></div>
-                <span className="aright">{evAgo(e.created_at)}</span>
-              </div>
-            ))}
+            {(() => {
+              const human = filterHumanEvents(events as any[]);
+              if (human.length === 0) return <div className="empty">Quiet so far today.</div>;
+              return human.map((e: any, i: number) => (
+                <div key={i} className="actrow">
+                  <span className="aico teal"><Bot size={14} /></span>
+                  <div className="abody"><div className="atitle">{evLabel(e)}</div></div>
+                  <span className="aright">{evAgo(e.created_at)}</span>
+                </div>
+              ));
+            })()}
           </div>
         </div>
       </div>

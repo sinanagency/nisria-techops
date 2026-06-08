@@ -153,8 +153,8 @@ function TopNav({ user }: { user: NavUser }) {
           })}
         </div>
         <div className="nav-right">
-          <Link href="/launchpad" className={`iconbtn ${path === "/launchpad" ? "active" : ""}`} title="Launchpad — all apps"><LayoutGrid size={17} /></Link>
-          <Link href="/workspace" className={`iconbtn ${path === "/workspace" ? "active" : ""}`} title="Workspace — open work + live ops"><Layers size={17} /></Link>
+          <Link href="/launchpad" className={`iconbtn ${path === "/launchpad" ? "active" : ""}`} title="Launchpad: all apps"><LayoutGrid size={17} /></Link>
+          <Link href="/workspace" className={`iconbtn ${path === "/workspace" ? "active" : ""}`} title="Workspace: open work + live ops"><Layers size={17} /></Link>
           <Link href="/smart" className={`navpill smartbtn ${path === "/smart" ? "active" : ""}`} title="Smart Mode (ask anything)"><Wand2 size={16} /> Smart</Link>
           <button className="iconbtn" aria-label="Take the tour with Sasa" title="Tour with Sasa" onClick={() => window.dispatchEvent(new Event("start-sasa-tour"))}><HelpCircle size={17} /></button>
           <ActivityChip />
