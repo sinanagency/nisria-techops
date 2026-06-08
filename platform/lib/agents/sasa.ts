@@ -276,6 +276,17 @@ const HONEST_NO_FIGURE =
 const HONEST_NO_FIGURE_READ =
   "I had some numbers in there I am not fully sure of, the figures did not match what I just pulled. Want me to re-pull the raw history so you can see the actual entries?";
 const WRITE_INTENT_RE = /\b(?:log(?:ged)?|record(?:ed)?|stage|file|add|i\s+(?:paid|sent|owe|gave|made)|payment|register|book|enter)\b/i;
+// v1.3.11.5: question-shape always wins. "Any payments logged?" contains the
+// write-verb 'logged' but is a READ. Interrogative form forces READ rewrite,
+// regardless of which trigger-words appear inside the sentence.
+const QUESTION_SHAPE_RE = /^\s*(?:what|where|which|who|whose|when|how|why|any|show|list|find|tell\s+me|do\s+you|did\s+you|have\s+you|has\s+anyone|is\s+there|are\s+there|can\s+you)\b/i;
+function isReadIntent(command: string): boolean {
+  const c = String(command || "").trim();
+  if (!c) return true;
+  if (/\?\s*$/.test(c)) return true;
+  if (QUESTION_SHAPE_RE.test(c)) return true;
+  return !WRITE_INTENT_RE.test(c);
+}
 
 // FAKE-STAGING GUARD (v1.3.9). Sasa was generating "Ready to log KES 7,250 to X.
 // Reply yes to confirm." text WITHOUT calling record_payment, so no
@@ -693,8 +704,8 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       // backstop for the no-numeric-source-at-all case.
       const fabricated = findFabricatedAmounts(reply, opts.command, toolRuns);
       if (fabricated.length) {
-        const isWrite = WRITE_INTENT_RE.test(opts.command || "");
-        reply = humanize(isWrite ? HONEST_NO_FIGURE : HONEST_NO_FIGURE_READ, { now: { long: n.long, today: n.today } });
+        const isRead = isReadIntent(opts.command || "");
+        reply = humanize(isRead ? HONEST_NO_FIGURE_READ : HONEST_NO_FIGURE, { now: { long: n.long, today: n.today } });
       } else if (unverifiableFigure(reply, opts.command, toolRuns)) {
         reply = `${reply}\n\nPlease double check that figure before you rely on it, I have not verified it against a record.`;
       }
