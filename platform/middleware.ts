@@ -30,11 +30,15 @@ export function middleware(req: NextRequest) {
   // worker/route.ts. Static assets + the maintenance page itself bypass.
   if (process.env.MAINTENANCE_MODE === "1") {
     const isMaintenancePage = pathname === "/maintenance";
+    // One-click bypass: /api/maintenance/grant?t=<TOKEN> sets the admin
+    // cookie + redirects to /. Let it through so the operator can self-onboard
+    // past the gate without DevTools.
+    const isGrant = pathname === "/api/maintenance/grant";
     const adminToken = req.cookies.get("maintenance_admin")?.value;
     const isAdmin = adminToken && adminToken === process.env.MAINTENANCE_ADMIN_TOKEN;
-    if (isMaintenancePage) {
-      // Serve the maintenance page directly without falling through to the
-      // session check (which would redirect anon → /login → /maintenance → loop).
+    if (isMaintenancePage || isGrant) {
+      // Serve directly without falling through to the session check (which
+      // would redirect anon → /login → /maintenance → loop).
       return NextResponse.next();
     }
     if (!isAdmin) {
