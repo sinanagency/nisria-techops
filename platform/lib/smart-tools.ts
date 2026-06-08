@@ -469,7 +469,19 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     // fetch candidates that match ANY token, then keep only candidates that
     // contain ALL tokens. Score: title hits 2, text hits 1. Caught by
     // 2026-06-08 extended sweep E9 (real doc invisible to old substring match).
-    const STOP = new Set(["the","a","an","of","for","to","in","on","and","or","my","our","is","are","this","that","do","does","find","pull","get","show","what","whats","whose","please"]);
+    // STOP list = English stopwords + USER-TO-BOT command verbs (fetch/grab/etc).
+    // The command verbs are not real keywords from doc titles; if "fetch" is in
+    // the token set the AND-filter requires every candidate doc to contain the
+    // literal word "fetch", which no real doc does. v1.3.11.7 caught by audit
+    // verify B3 ("Fetch the I&M Bank mandate doc" → 0 hits because 'fetch'
+    // can't be ANDed; D1 worked because 'find' was already in STOP).
+    const STOP = new Set([
+      "the","a","an","of","for","to","in","on","and","or","my","our","is","are","this","that","do","does",
+      "find","pull","get","show","what","whats","whose","please",
+      "fetch","grab","give","bring","share","tell","let","see","look","check",
+      "me","us","up","down","out","over","about",
+      "document","doc","docs","file","pdf",
+    ]);
     // v1.3.11.6: strip PostgREST-meta chars from each token AFTER lowercase. The
     // `.or()` clause uses comma as a separator, parentheses to group, and treats
     // `(`, `)`, `,`, `*` as syntax. ILIKE itself uses `%` and `_` as wildcards.
