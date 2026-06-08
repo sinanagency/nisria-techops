@@ -309,14 +309,22 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
   if (name === "finance_summary") {
     const m = input.month || new Date().toISOString().slice(0, 7);
     const [{ data: don }, { data: pays }] = await Promise.all([
-      db.from("donations").select("amount,status,donated_at"),
-      db.from("payments").select("amount,status,direction,due_on,paid_at,payee,category"),
+      db.from("donations").select("amount,currency,status,donated_at"),
+      db.from("payments").select("amount,currency,status,direction,due_on,paid_at,payee,category"),
     ]);
     const succ = (don || []).filter((d: any) => d.status === "succeeded");
     const inMonth = succ.filter((d: any) => (d.donated_at || "").startsWith(m));
     const paidMonth = (pays || []).filter((p: any) => p.status === "paid" && (p.paid_at || "").startsWith(m));
     const upcoming = (pays || []).filter((p: any) => ["upcoming", "due", "overdue"].includes(p.status));
-    return { money_in_month: money(inMonth.reduce((s: number, d: any) => s + Number(d.amount), 0)), money_out_month: money(paidMonth.reduce((s: number, p: any) => s + Number(p.amount || 0), 0)), upcoming_count: upcoming.length };
+    // Currency law: never blend USD with KES. Return per-currency totals separately.
+    const sumBy = (rows: any[], ccy: string) =>
+      rows.filter((r: any) => (r.currency || (ccy === "USD" ? "USD" : "")).toUpperCase() === ccy)
+          .reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+    return {
+      money_in_month: { USD: money(sumBy(inMonth, "USD"), "USD"), KES: money(sumBy(inMonth, "KES"), "KES") },
+      money_out_month: { USD: money(sumBy(paidMonth, "USD"), "USD"), KES: money(sumBy(paidMonth, "KES"), "KES") },
+      upcoming_count: upcoming.length,
+    };
   }
   if (name === "list_grants") {
     if (input.kind === "applications") {
