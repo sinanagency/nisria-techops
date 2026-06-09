@@ -58,7 +58,13 @@ async function check() {
 
   const membershipStale = membershipUpdatedAt === 0 || membershipStaleMs > membershipMax;
   const messagesStale = lastMsgAt === 0 || msgStaleMs > groupMsgMax;
-  const tripped = (membershipStale || messagesStale) && inWakingWindow;
+  // 2026-06-09: was (membership || messages) — message-staleness alone would
+  // trip on a legitimately-quiet hour (Sunday evening Kenya time fired this
+  // straight to Nur 25 min after a clean group-bot restart, with membership
+  // fresh at 17 min). Membership is the bot-health signal; messages depend on
+  // outside actors. Require membership-stale as the primary; messages can
+  // CONFIRM but cannot trip alone.
+  const tripped = membershipStale && inWakingWindow;
 
   await emit({
     type: "group_bot.health_check",
