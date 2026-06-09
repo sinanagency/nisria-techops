@@ -707,13 +707,18 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         const { parseChatLogAll } = await import("../../app/api/whatsapp/worker/parsePayment.mjs");
         const parsedList = parseChatLogAll(opts.command || "");
         if (parsedList.length >= 2 && opts.confirmWrites) {
-          const stagedKey = (p: any) => `${String(p.payee || "").toLowerCase().trim()}|${Number(p.amount || 0)}|${String(p.currency || "").toUpperCase()}`;
+          // Loose match: the model often resolves a first-name in the operator's
+          // message (Mark) to the full roster name (Mark Njambi) before calling
+          // record_payment. A strict equality key drops the dedup, so match on
+          // first-name token + amount + currency.
+          const firstName = (s: string) => String(s || "").toLowerCase().trim().split(/\s+/)[0] || "";
+          const looseKey = (p: any) => `${firstName(p.payee)}|${Number(p.amount || 0)}|${String(p.currency || "").toUpperCase()}`;
           const alreadyStaged = new Set(
             toolRuns
               .filter((t) => t.name === "record_payment" && (t.result as any)?.ok === true)
-              .map((t) => stagedKey((t.input as any) || {})),
+              .map((t) => looseKey((t.input as any) || {})),
           );
-          const missing = parsedList.filter((p: any) => !alreadyStaged.has(stagedKey(p.payload)));
+          const missing = parsedList.filter((p: any) => !alreadyStaged.has(looseKey(p.payload)));
           if (missing.length && alreadyStaged.size > 0) {
             // Genuine partial: the model staged at least one but missed others.
             const stagedNow: string[] = [];
