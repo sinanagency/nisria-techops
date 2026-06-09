@@ -74,6 +74,17 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 // It maps each "completion verb" in the reply to the action tool(s) that could
 // legitimately back it, and if the reply asserts completion with NO matching
 // ok=true tool in this turn's tool runs, the claim is treated as false.
+// CAPABILITY-QUESTION DETECTOR (2026-06-09). The operator is asking what the bot
+// CAN do, not asking it to do anything. The completion-claim guard misfires here
+// because the model's answer naturally uses action verbs ("I track payments, I
+// schedule meetings, I log tasks") that look like completion claims under the
+// AGENT_COMPLETION regex. There is no "completion" to verify on a meta question.
+function isCapabilityQuestion(command: string): boolean {
+  const t = String(command || "").toLowerCase().trim();
+  if (!t) return false;
+  return /\b(what\s+can\s+you|what\s+(?:are\s+)?(?:can|do)\s+you\s+(?:able\s+to\s+)?do|what\s+do\s+you\s+do|are\s+you\s+able\s+to|how\s+do\s+you\s+work|what\s+(?:tools|features|capabilities)\s+(?:do\s+you|are\s+available)|list\s+(?:your\s+)?(?:tools|capabilities|features|abilities)|show\s+me\s+what\s+you\s+can\s+do|can\s+you\s+(?:help\s+with|do|handle)\b)/i.test(t);
+}
+
 const HONEST_NO_ACTION =
   "I have not actually done that yet, so I won't say I did. I'll get it done now rather than keep talking about it, and if something is genuinely blocking it I will tell you the real reason instead of asking again.";
 
@@ -732,9 +743,14 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         // Claimed it messaged/told someone (or that they "have" it) but no send tool
         // ran. Logging a task is not telling the person, so say so honestly and offer.
         reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
-      } else if (claimsCompletionWithoutSuccess(reply, toolRuns)) {
+      } else if (claimsCompletionWithoutSuccess(reply, toolRuns) && !isCapabilityQuestion(opts.command || "")) {
         // The reply claims something is done but no tool succeeded. If a tool ran and
         // returned a specific reason/question, relay THAT; else the generic honest line.
+        // 2026-06-09: skip when the operator asked a meta question about what the
+        // bot CAN do (caught: "what can you actually do here?" got nuked by the
+        // canned HONEST_NO_ACTION because the model's natural answer used verbs
+        // like "track" / "schedule" / "log" that look like completion claims.
+        // There is nothing to complete on a capability question.
         reply = humanize((toolAsk?.result as any)?.summary || HONEST_NO_ACTION, { now: { long: n.long, today: n.today } });
       } else if (isHedgeLoop(reply, opts.history) && toolRuns.length === 0) {
         // Only a loop if the bot did NOTHING this turn and is re-hedging. A reply
