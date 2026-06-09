@@ -683,11 +683,11 @@ async function processJob(db: any, job: any): Promise<void> {
   // ──────────────────────────────────────────────────────────────────────
   if (process.env.PARSE_TASKS_ENABLED === "1" && command && contactId) {
     try {
-      const { parsePayment } = await import("./parsePayment.mjs");
-      const pay = parsePayment(command);
-      if (pay && pay.intent === "stage_payment") {
-        // Idempotency: if an identical staging is already awaiting confirm in
-        // the last 10 minutes (same amount + payee + currency), don't re-stage.
+      const { parsePaymentAll } = await import("./parsePayment.mjs");
+      const pays = (parsePaymentAll(command) || []).filter((p: any) => p && p.intent === "stage_payment");
+      if (pays.length > 0) {
+        // Idempotency: same payee + amount + currency already awaiting confirm
+        // in the last 10 minutes → skip that line (still stage the others).
         const cutISO = new Date(Date.now() - 10 * 60 * 1000).toISOString();
         const { data: existingStage } = await db
           .from("pending_actions")
@@ -696,34 +696,45 @@ async function processJob(db: any, job: any): Promise<void> {
           .eq("kind", "record_payment")
           .eq("status", "awaiting_confirm")
           .gte("created_at", cutISO)
-          .limit(5);
-        const stagedSummary = pay.summary;
-        const dup = (existingStage || []).find((r: any) => String(r.summary || "").includes(`${pay.payload.currency} ${pay.payload.amount.toLocaleString()}`) && String(r.summary || "").includes(pay.payload.payee));
-        if (dup) {
-          await sendTextAndLog(db, from, `That payment is already staged: ${stagedSummary}. Reply yes to commit, or tell me the correction.`, { contactId });
+          .limit(20);
+        const existing = (existingStage || []) as any[];
+        const isDup = (pay: any) => existing.some((r: any) =>
+          String(r.summary || "").includes(`${pay.payload.currency} ${pay.payload.amount.toLocaleString()}`) &&
+          String(r.summary || "").includes(pay.payload.payee),
+        );
+        const fresh = pays.filter((p: any) => !isDup(p));
+        if (fresh.length === 0) {
+          // every line was already staged → confirm in one line.
+          const summaries = pays.map((p: any) => p.summary).join("; ");
+          await sendTextAndLog(db, from, `Those are already staged: ${summaries}. Reply yes to commit, or tell me the correction.`, { contactId });
           await markJobDone(job.id);
           return;
         }
-        const pargs: any = {
-          payee: pay.payload.payee,
-          amount: pay.payload.amount,
-          currency: pay.payload.currency,
-          method: pay.payload.method,
-          paid_at: pay.payload.paid_at,
-          purpose: pay.payload.purpose,
-          screenshot_path: proofPath || null,
-          source_message_id: sourceMessageId || null,
-        };
-        await db.from("pending_actions").insert({
-          contact_id: contactId,
-          kind: "record_payment",
-          payload: pargs,
-          summary: stagedSummary,
-          status: "awaiting_confirm",
-        });
-        await emit({ type: "payment.staged", source: "agent:sasa-parsepay", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { source: pay.source, summary: stagedSummary, payee: pay.payload.payee, amount: pay.payload.amount } });
-        const methodLabel = pay.source === "mpesa_sms" ? " via M-Pesa" : pay.source === "sendwave_pdf" ? " via Sendwave" : "";
-        await sendTextAndLog(db, from, `Staged: ${stagedSummary}${methodLabel}. Reply "yes" to commit, or tell me the correction (wrong amount, wrong payee, or a purpose to add).`, { contactId });
+        for (const pay of fresh) {
+          const pargs: any = {
+            payee: pay.payload.payee,
+            amount: pay.payload.amount,
+            currency: pay.payload.currency,
+            method: pay.payload.method,
+            paid_at: pay.payload.paid_at,
+            purpose: pay.payload.purpose,
+            screenshot_path: proofPath || null,
+            source_message_id: sourceMessageId || null,
+          };
+          await db.from("pending_actions").insert({
+            contact_id: contactId,
+            kind: "record_payment",
+            payload: pargs,
+            summary: pay.summary,
+            status: "awaiting_confirm",
+          });
+          await emit({ type: "payment.staged", source: "agent:sasa-parsepay", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { source: pay.source, summary: pay.summary, payee: pay.payload.payee, amount: pay.payload.amount } });
+        }
+        const methodLabel = fresh[0].source === "mpesa_sms" ? " via M-Pesa" : fresh[0].source === "sendwave_pdf" ? " via Sendwave" : "";
+        const replyMsg = fresh.length === 1
+          ? `Staged: ${fresh[0].summary}${methodLabel}. Reply "yes" to commit, or tell me the correction (wrong amount, wrong payee, or a purpose to add).`
+          : `Staged ${fresh.length} payments:\n${fresh.map((p: any, i: number) => `${i + 1}. ${p.summary}`).join("\n")}\nReply "yes" to confirm all, or tell me which one to correct.`;
+        await sendTextAndLog(db, from, replyMsg, { contactId });
         await markJobDone(job.id);
         return;
       }

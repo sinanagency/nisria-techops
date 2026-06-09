@@ -254,3 +254,16 @@ export function parseChatLogAll(body) {
 export function parsePayment(body) {
   return parseMpesaSent(body) || parseSendwave(body) || parseChatLog(body) || null;
 }
+
+// Public: multi-match dispatcher. M-Pesa and Sendwave receipts are inherently
+// single-payment; chat-style "log three payments: A, B, C" is the only multi
+// shape. Returns the full array so the worker can stage every line in one turn.
+// (2026-06-09: shipped after the harness caught the worker short-circuiting
+// after a single parsePayment hit, dropping payments 2..N silently.)
+export function parsePaymentAll(body) {
+  const m = parseMpesaSent(body);
+  if (m) return [m];
+  const s = parseSendwave(body);
+  if (s) return [s];
+  return parseChatLogAll(body);
+}
