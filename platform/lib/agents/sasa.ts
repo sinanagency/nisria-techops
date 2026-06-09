@@ -697,20 +697,21 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       const toolAsk = [...toolRuns].reverse().find(
         (t) => COMPLETION_TOOLS.has(t.name) && t.result && (t.result as any).ok === false && typeof (t.result as any).summary === "string" && (t.result as any).summary.trim(),
       );
-      // PARTIAL-STAGE BACKSTOP (2026-06-09). When the operator dictates multiple
-      // payments in one message ("log three things: A, B, C"), the model often
-      // calls record_payment once and stops, leaving 2 of 3 silently dropped.
-      // Detect: parseChatLogAll returns more parseable payments than tool calls
-      // with matching payload. Stage the missing ones and append them to the
-      // reply so the operator sees what was actually written.
+      // MULTI-PAYMENT BACKSTOP (2026-06-09 unified). Handles both full miss
+      // and partial miss: parseChatLogAll the operator's command, dedup against
+      // what the model already staged this turn, stage the rest. Also covers
+      // the conversation-history-pollution case where the model sees recent
+      // staging text and "confirms" without re-calling the tool — looks like
+      // a full miss to us, gets staged here.
+      //
+      // Dedup uses first-name match because the model often resolves "Mark"
+      // → "Mark Njambi" before calling record_payment. False-positive dedup
+      // risk is small (same first-name + same amount + same currency in one
+      // message is rare); false-negative drop is catastrophic.
       try {
         const { parseChatLogAll } = await import("../../app/api/whatsapp/worker/parsePayment.mjs");
         const parsedList = parseChatLogAll(opts.command || "");
         if (parsedList.length >= 2 && opts.confirmWrites) {
-          // Loose match: the model often resolves a first-name in the operator's
-          // message (Mark) to the full roster name (Mark Njambi) before calling
-          // record_payment. A strict equality key drops the dedup, so match on
-          // first-name token + amount + currency.
           const firstName = (s: string) => String(s || "").toLowerCase().trim().split(/\s+/)[0] || "";
           const looseKey = (p: any) => `${firstName(p.payee)}|${Number(p.amount || 0)}|${String(p.currency || "").toUpperCase()}`;
           const alreadyStaged = new Set(
@@ -719,8 +720,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
               .map((t) => looseKey((t.input as any) || {})),
           );
           const missing = parsedList.filter((p: any) => !alreadyStaged.has(looseKey(p.payload)));
-          if (missing.length && alreadyStaged.size > 0) {
-            // Genuine partial: the model staged at least one but missed others.
+          if (missing.length) {
             const stagedNow: string[] = [];
             for (const parsed of missing) {
               const payload = { ...parsed.payload, category: "other", source_message_id: opts.sourceMessageId || null };
@@ -728,21 +728,30 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
                 contact_id: opts.contactId || null,
                 kind: "record_payment",
                 payload,
-                summary: `${parsed.summary} (parsed by chat-log partial-stage backstop)`,
+                summary: `${parsed.summary} (parsed by multi-payment backstop)`,
                 status: "awaiting_confirm",
               });
-              toolRuns.push({ name: "record_payment", input: payload, result: { ok: true, summary: `Ready to log ${parsed.summary}. Reply yes to confirm.`, detail: { staged: true, source: "chat_log_partial_backstop" } } });
+              toolRuns.push({ name: "record_payment", input: payload, result: { ok: true, summary: `Ready to log ${parsed.summary}. Reply yes to confirm.`, detail: { staged: true, source: "multi_payment_backstop" } } });
               stagedNow.push(parsed.summary);
             }
-            // Append the missing-staged note to the model's reply so the operator
-            // sees what was added. Don't replace — the model's first-payment text
-            // is still valid; this is an addendum.
-            const note = `\n\nAlso staged from the same message:\n${stagedNow.map((s, i) => `${i + 1}. ${s}`).join("\n")}\nReply "yes" to confirm all.`;
-            reply = (reply || "").trimEnd() + note;
+            if (alreadyStaged.size > 0) {
+              // Partial miss: the model staged some. Append the rest as an addendum.
+              const note = `\n\nAlso staged from the same message:\n${stagedNow.map((s, i) => `${i + 1}. ${s}`).join("\n")}\nReply "yes" to confirm all.`;
+              reply = (reply || "").trimEnd() + note;
+            } else {
+              // Full miss: nothing was staged by the model this turn. Replace the
+              // reply with the canonical multi-payment confirmation so the operator
+              // sees the full list, not whatever stale or hedgy text the model produced.
+              const summaries = parsedList.map((p) => p.summary);
+              const replyText = parsedList.length === 1
+                ? `Ready to log ${summaries[0]}. Reply "yes" to confirm, or tell me the correction.`
+                : `Ready to log ${parsedList.length} payments:\n${summaries.map((s, i) => `${i + 1}. ${s}`).join("\n")}\nReply "yes" to confirm all, or tell me which one to correct.`;
+              reply = humanize(replyText, { now: { long: n.long, today: n.today } });
+            }
           }
         }
       } catch {
-        // partial-stage is best-effort; never break the turn.
+        // multi-payment backstop is best-effort; never break the turn.
       }
       if (claimsStagingWithoutTool(reply, toolRuns)) {
         // v1.3.9: fake-staging. "Ready to log…, reply yes to confirm" text but
