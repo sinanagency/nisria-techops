@@ -697,6 +697,48 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       const toolAsk = [...toolRuns].reverse().find(
         (t) => COMPLETION_TOOLS.has(t.name) && t.result && (t.result as any).ok === false && typeof (t.result as any).summary === "string" && (t.result as any).summary.trim(),
       );
+      // PARTIAL-STAGE BACKSTOP (2026-06-09). When the operator dictates multiple
+      // payments in one message ("log three things: A, B, C"), the model often
+      // calls record_payment once and stops, leaving 2 of 3 silently dropped.
+      // Detect: parseChatLogAll returns more parseable payments than tool calls
+      // with matching payload. Stage the missing ones and append them to the
+      // reply so the operator sees what was actually written.
+      try {
+        const { parseChatLogAll } = await import("../../app/api/whatsapp/worker/parsePayment.mjs");
+        const parsedList = parseChatLogAll(opts.command || "");
+        if (parsedList.length >= 2 && opts.confirmWrites) {
+          const stagedKey = (p: any) => `${String(p.payee || "").toLowerCase().trim()}|${Number(p.amount || 0)}|${String(p.currency || "").toUpperCase()}`;
+          const alreadyStaged = new Set(
+            toolRuns
+              .filter((t) => t.name === "record_payment" && (t.result as any)?.ok === true)
+              .map((t) => stagedKey((t.input as any) || {})),
+          );
+          const missing = parsedList.filter((p: any) => !alreadyStaged.has(stagedKey(p.payload)));
+          if (missing.length && alreadyStaged.size > 0) {
+            // Genuine partial: the model staged at least one but missed others.
+            const stagedNow: string[] = [];
+            for (const parsed of missing) {
+              const payload = { ...parsed.payload, category: "other", source_message_id: opts.sourceMessageId || null };
+              await db.from("pending_actions").insert({
+                contact_id: opts.contactId || null,
+                kind: "record_payment",
+                payload,
+                summary: `${parsed.summary} (parsed by chat-log partial-stage backstop)`,
+                status: "awaiting_confirm",
+              });
+              toolRuns.push({ name: "record_payment", input: payload, result: { ok: true, summary: `Ready to log ${parsed.summary}. Reply yes to confirm.`, detail: { staged: true, source: "chat_log_partial_backstop" } } });
+              stagedNow.push(parsed.summary);
+            }
+            // Append the missing-staged note to the model's reply so the operator
+            // sees what was added. Don't replace — the model's first-payment text
+            // is still valid; this is an addendum.
+            const note = `\n\nAlso staged from the same message:\n${stagedNow.map((s, i) => `${i + 1}. ${s}`).join("\n")}\nReply "yes" to confirm all.`;
+            reply = (reply || "").trimEnd() + note;
+          }
+        }
+      } catch {
+        // partial-stage is best-effort; never break the turn.
+      }
       if (claimsStagingWithoutTool(reply, toolRuns)) {
         // v1.3.9: fake-staging. "Ready to log…, reply yes to confirm" text but
         // no record_payment / record_donation / bank_import / etc. tool ran.
