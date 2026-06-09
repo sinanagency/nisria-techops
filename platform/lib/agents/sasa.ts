@@ -79,6 +79,20 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 // because the model's answer naturally uses action verbs ("I track payments, I
 // schedule meetings, I log tasks") that look like completion claims under the
 // AGENT_COMPLETION regex. There is no "completion" to verify on a meta question.
+// AMBIGUOUS-REFERENCE DETECTOR (2026-06-09). Bare demonstratives like "the
+// thing we talked about" / "that one" / "do that" have no operator-supplied
+// payment intent. The model often replies with "Ready to log..." text
+// because the staging-shape phrasing is overrepresented in recent history,
+// which trips claimsStagingWithoutTool into rewriting the reply with the
+// canned HONEST_NO_STAGING line — even though the real correct response is
+// "which thing?". Skip the staging guard when there's nothing to stage.
+function isAmbiguousReference(command: string): boolean {
+  const t = String(command || "").toLowerCase().trim();
+  if (!t || t.length > 80) return false;
+  return /^(?:the\s+thing|that\s+(?:one|thing)|it|this\s+(?:one|thing)|do\s+(?:that|it|this)|what\s+we\s+(?:said|talked|discussed))\b/i.test(t)
+      || /^the\s+thing\s+we\s+(?:talked|spoke|discussed)\s+about\s*\.?\s*$/i.test(t);
+}
+
 function isCapabilityQuestion(command: string): boolean {
   const t = String(command || "").toLowerCase().trim();
   if (!t) return false;
@@ -753,7 +767,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       } catch {
         // multi-payment backstop is best-effort; never break the turn.
       }
-      if (claimsStagingWithoutTool(reply, toolRuns)) {
+      if (claimsStagingWithoutTool(reply, toolRuns) && !isCapabilityQuestion(opts.command || "") && !isAmbiguousReference(opts.command || "")) {
         // v1.3.9: fake-staging. "Ready to log…, reply yes to confirm" text but
         // no record_payment / record_donation / bank_import / etc. tool ran.
         // v1.4.0 (2026-06-09): the canned HONEST_NO_STAGING was a hedge that
