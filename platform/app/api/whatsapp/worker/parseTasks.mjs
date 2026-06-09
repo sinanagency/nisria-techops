@@ -504,6 +504,52 @@ function matchSelfAssignedBulletList(body, roster, today, senderTeamMember) {
   return out.length >= 2 ? out : [];
 }
 
+// Pattern H: "Remind <RosterName> to <action> by <date>". A roster-target
+// reminder, distinct from Pattern E ("Remind me to ..."). Added 2026-06-09
+// after the harness caught the model interpreting "Remind Wahome to submit the
+// donor report by Friday" as message_person (which then fails because the
+// 24-hour WhatsApp window is closed). The deterministic parser routes it to
+// create_task with assignee = the named roster member.
+function matchTeamReminder(body, roster, today) {
+  // Anchor to start of line / message. Don't match "remind me" (Pattern E owns
+  // that). Require "to" as the splitter so multi-word names ("Wahome Jerry")
+  // match greedily, and the action phrase starts cleanly.
+  const re = /^remind\s+(?!me\b)([A-Z][A-Za-z .'\-]{1,40})\s+to\s+(.+?)\s*$/im;
+  const m = body.match(re);
+  if (!m) return [];
+  // Greedy match may have grabbed too much (e.g. "Wahome Jerry to submit the
+  // donor report" — name="Wahome Jerry"). Walk back token-by-token until we
+  // find a roster hit, so single-word names ("Cynthia") still resolve cleanly
+  // when the full phrase isn't on the roster.
+  const fullName = m[1].trim();
+  const tokens = fullName.split(/\s+/);
+  let member = null;
+  let usedName = fullName;
+  for (let n = tokens.length; n >= 1; n--) {
+    const candidate = tokens.slice(0, n).join(" ");
+    const hit = findMember(candidate, roster);
+    if (hit) { member = hit; usedName = candidate; break; }
+  }
+  if (!member) return [];
+  // Whatever the greedy regex picked up as name but isn't part of the resolved
+  // member's name belongs to the action phrase.
+  const leftover = fullName.slice(usedName.length).trim();
+  const rest = (leftover ? leftover + " " : "") + m[2].trim();
+  if (rest.length < 3) return [];
+  const title = sanitizeTitle(rest);
+  if (title.length < 5) return [];
+  const dueRec = extractDueAndRecurrence(rest, today);
+  return [{
+    assignee_name: member.name,
+    assignee_id: member.id,
+    title,
+    due_on: dueRec.due_on,
+    recurrence: dueRec.recurrence,
+    source_pattern: "remind_team_member",
+    source_offset: m.index || 0,
+  }];
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // DISPATCHER
 // ────────────────────────────────────────────────────────────────────────────
@@ -539,6 +585,7 @@ export function parseTasks(input) {
     (b, r, t) => matchSelfReminder(b, r, t, senderTeamMember),            // E
     matchAtMentionDm,                                                     // F
     (b, r, t) => matchSelfAssignedBulletList(b, r, t, senderTeamMember),  // G
+    matchTeamReminder,                                                    // H
   ];
 
   for (const fn of dispatchers) {
