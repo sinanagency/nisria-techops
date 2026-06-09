@@ -166,7 +166,13 @@ async function tick() {
   }
 
   // Disarm so the next cron tick noops until the next soak starts.
-  await db.from("bot_status").upsert({ key: SOAK_KEY, value: null, updated_at: new Date().toISOString() });
+  // 2026-06-09: was upsert({ value: null }) — bot_status.value is NOT NULL so
+  // the disarm failed silently every tick and the cron re-fired the FAILED
+  // incident every 30 minutes for ~3 hours, spamming the operator allowlist
+  // (including Nur once maintenance flipped off). Switched to DELETE which
+  // matches the "is the soak armed?" semantic — armed = row present, disarmed
+  // = row absent (matches the check at line 44: `if (!row ...)`).
+  await db.from("bot_status").delete().eq("key", SOAK_KEY);
 
   return { ok: true, verdict, parsed_count: parsedCount || 0, lying_done_count: lyingDone.length };
 }
