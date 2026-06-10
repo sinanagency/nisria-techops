@@ -657,8 +657,8 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   const safe = role === "team" ? memories.filter((m) => !carriesMoney(m)) : memories;
   const grounding = groundingText(safe);
   const system = inGroup
-    ? buildGroupSystem(opts.groupName || "the team group", who, n.long, snapshot, grounding)
-    : buildSystem(role, who, n.long, snapshot, grounding, opts.operatorRank ?? null);
+    ? buildGroupSystem(opts.groupName || "the team group", who, `${n.weekdayLong} (Asia/Dubai, ${n.clock})`, snapshot, grounding)
+    : buildSystem(role, who, `${n.weekdayLong} (Asia/Dubai, ${n.clock})`, snapshot, grounding, opts.operatorRank ?? null);
   // Source-of-truth law: when parseTasks already wrote the task row(s) for this
   // turn deterministically, runSasa MUST NOT have create_task in its toolset.
   // Otherwise the model duplicates the write, hits the UNIQUE-index collide,
@@ -918,7 +918,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
 export async function evalSasa(opts: { history?: SasaTurn[]; command: string; role?: "admin" | "team" }): Promise<{ text: string; toolCalls: { name: string; input: any }[] }> {
   const role = opts.role || "admin";
   const who = role === "team" ? "a team member" : "Nur";
-  const dateLong = "Saturday, May 30, 2026";
+  const dateLong = "Saturday, May 30, 2026 (Asia/Dubai, 10:00)";
   const snapshot = "6 items waiting in Needs You, 0 messages need a reply, 3 open tasks.";
   const grounding = "Nisria (By Nisria Inc) is a US nonprofit helping children and families in Kenya. Founder and Executive Director: Nur M'nasria. The team roster lives in team_members. Sister brands: Maisha and AHADI.";
   const system = buildSystem(role, who, dateLong, snapshot, grounding);
@@ -977,7 +977,7 @@ function stubTool(name: string, input: any): { ok: boolean; summary: string } {
 export async function evalSasaMulti(opts: { history?: SasaTurn[]; command: string; role?: "admin" | "team"; maxTurns?: number }): Promise<{ finalText: string; turns: { text: string; toolCalls: { name: string; input: any }[] }[]; allToolCalls: { name: string; input: any }[] }> {
   const role = opts.role || "admin";
   const who = role === "team" ? "a team member" : "Nur";
-  const dateLong = "Tuesday, June 3, 2026";
+  const dateLong = "Wednesday, June 3, 2026 (Asia/Dubai, 10:00)";
   const snapshot = "6 items waiting in Needs You, 0 messages need a reply, 3 open tasks.";
   const grounding = "Nisria (By Nisria Inc) is a US nonprofit helping children and families in Kenya. Founder and Executive Director: Nur M'nasria. The team roster lives in team_members. Sister brands: Maisha and AHADI.";
   const system = buildSystem(role, who, dateLong, snapshot, grounding);

@@ -20,7 +20,7 @@
 // headers/DB via LAZY imports, so the module never pulls next/headers into a
 // client bundle just because a client component imports a formatter.
 
-export const DEFAULT_TZ = "UTC";
+export const DEFAULT_TZ = "Asia/Dubai";
 export const TZ_COOKIE = "nis.tz";
 const TZ_HEADER = "x-tz";
 
@@ -111,6 +111,30 @@ export function formatLong(value: string | Date = new Date(), tz: string = DEFAU
   }
 }
 
+// Long human date WITH WEEKDAY, e.g. "Wednesday, June 10, 2026". Used in the
+// Sasa system prompt so the model never has to derive the day of week, which
+// is where 06-09 / 06-10 date-drift incidents originated (Nur had to correct
+// Tuesday/Wednesday/Saturday three times in one thread).
+export function formatWeekdayLong(value: string | Date = new Date(), tz: string = DEFAULT_TZ): string {
+  const d = value instanceof Date ? value : isoToDate(value);
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(d);
+  } catch {
+    return new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(d);
+  }
+}
+
+// Time of day in the active tz, e.g. "17:32". Pairs with weekdayLong in the
+// Sasa system prompt so the bot also knows whether it is morning or evening.
+export function formatClock(value: string | Date = new Date(), tz: string = DEFAULT_TZ): string {
+  const d = value instanceof Date ? value : isoToDate(value);
+  try {
+    return new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
+  } catch {
+    return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
+  }
+}
+
 // Parse a YYYY-MM-DD ISO date into a Date anchored at local noon, so a tz shift
 // can never bump it to the previous/next calendar day on render.
 function isoToDate(iso: string): Date {
@@ -128,17 +152,19 @@ export function nowISO(): string {
 
 // The one call most generators want: the live, tz-aware bundle for "now".
 // `iso` is the stable date to STORE, `long` is the human date to SHOW.
-export type Now = { tz: string; date: Date; iso: string; today: string; long: string };
+// `weekdayLong` and `clock` are for the Sasa system prompt so the model
+// never has to derive day-of-week or time-of-day on its own.
+export type Now = { tz: string; date: Date; iso: string; today: string; long: string; weekdayLong: string; clock: string };
 
 // Server-side resolver: build the Now bundle for the current request's tz.
 export async function now(explicitTz?: string | null): Promise<Now> {
   const tz = await resolveTz(explicitTz);
   const d = new Date();
-  return { tz, date: d, iso: d.toISOString(), today: today(tz, d), long: formatLong(d, tz) };
+  return { tz, date: d, iso: d.toISOString(), today: today(tz, d), long: formatLong(d, tz), weekdayLong: formatWeekdayLong(d, tz), clock: formatClock(d, tz) };
 }
 
 // Client/pure builder: build a Now bundle from a known tz (no request scope).
 export function nowFor(tz: string = DEFAULT_TZ): Now {
   const d = new Date();
-  return { tz, date: d, iso: d.toISOString(), today: today(tz, d), long: formatLong(d, tz) };
+  return { tz, date: d, iso: d.toISOString(), today: today(tz, d), long: formatLong(d, tz), weekdayLong: formatWeekdayLong(d, tz), clock: formatClock(d, tz) };
 }

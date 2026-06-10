@@ -48,7 +48,7 @@ function ownBrief(name: string | null, mine: any[], today: string): string {
 
 async function run(force: boolean) {
   const db = admin();
-  const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10); // Nairobi morning
+  const today = new Date(Date.now() + 4 * 3600e3).toISOString().slice(0, 10); // Dubai morning (standard clock per CLAUDE.md / now.ts DEFAULT_TZ)
 
   if (!force) {
     const { data: sent } = await db.from("events").select("id").eq("type", "reminder.operator_brief").gte("created_at", today + "T00:00:00Z").limit(1);
