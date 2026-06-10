@@ -29,15 +29,23 @@ export type Job = {
 
 // Enqueue a job. Returns the new row id, or null on failure (best-effort: the
 // daily cron's own scan still picks the work up, so a failed enqueue degrades
-// gracefully rather than blocking). Idempotent for grant.prepare: we skip if an
-// open job already exists for the same grant so rapid taps never pile up.
+// gracefully rather than blocking).
+//
+// v1.3.12: subject-id idempotency is now OPT-IN per kind, not blanket. The
+// 2026-06-10 demo caught the latent bug: while batch 1's whatsapp.reply was
+// still `running`, batch 2's inbound was silently merged into batch 1's slot
+// and its body was lost forever. The original comment named grant.prepare as
+// the only legitimate user of this rule, but the code applied it to every
+// kind. Now only DEDUP_BY_SUBJECT kinds get the open-job check; whatsapp.reply
+// and every per-event kind always enqueues a fresh row.
+const DEDUP_BY_SUBJECT = new Set<JobKind>(["grant.prepare"]);
 export async function enqueueJob(
   kind: JobKind,
   subjectId: string | null,
   payload: Record<string, any> = {},
 ): Promise<string | null> {
   const db = admin();
-  if (subjectId) {
+  if (subjectId && DEDUP_BY_SUBJECT.has(kind)) {
     const { data: open } = await db
       .from("jobs")
       .select("id")
