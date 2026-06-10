@@ -55,17 +55,24 @@ async function findOrCreateEntity(db: any, type: string, name: string, summary?:
   const clean = String(name || "").trim();
   if (!clean) return null;
   const t = String(type || "thing").trim().toLowerCase();
+  // Sandbox isolation (lib/sandbox.ts): the entity-graph is the second pollution
+  // surface (Tournament Test Member, Acme Foundation, Twin Tournament Test all
+  // landed here in 06-10 sweep). Lookup + insert both scoped to the current
+  // sandbox lane so a harness re-run can't dedup-merge with a real Nisria entity.
+  const { isSandbox } = await import("./sandbox");
+  const sandbox = isSandbox();
   const { data: existing } = await db
     .from("memory_entities")
     .select("id,summary")
     .eq("type", t)
     .ilike("name", clean)
+    .eq("sandbox", sandbox)
     .maybeSingle();
   if (existing?.id) {
     if (summary && !existing.summary) await db.from("memory_entities").update({ summary, updated_at: new Date().toISOString() }).eq("id", existing.id);
     return existing.id as string;
   }
-  const { data: ins } = await db.from("memory_entities").insert({ type: t, name: clean, summary: summary || null }).select("id").single();
+  const { data: ins } = await db.from("memory_entities").insert({ type: t, name: clean, summary: summary || null, sandbox }).select("id").single();
   return (ins?.id as string) ?? null;
 }
 

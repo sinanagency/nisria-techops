@@ -6,6 +6,7 @@
 import { admin } from "./supabase-admin";
 import { embed, embedderConfigured, toVectorLiteral } from "./embedder";
 import { OWNER_PRIVATE_KIND } from "./privacy";
+import { isSandbox } from "./sandbox";
 
 export type Memory = {
   kind: string;            // brand_voice | org_fact | approved_reply | message | asset | decision | doc_chunk
@@ -31,7 +32,7 @@ export async function remember(m: Memory) {
     if (embedderConfigured()) {
       embedding = await embed(`${m.title || ""}\n${m.content}`);
     }
-    const row: Record<string, any> = { ...m, metadata: m.metadata || {} };
+    const row: Record<string, any> = { ...m, metadata: m.metadata || {}, sandbox: isSandbox() };
     if (embedding) row.embedding = embedding; // pg accepts a number[] for vector
     await admin().from("agent_memory").insert(row);
   } catch (err) {
@@ -54,16 +55,20 @@ export async function rememberUpsert(
     if (embedderConfigured()) {
       embedding = await embed(`${mem.title || ""}\n${mem.content}`);
     }
+    const sandbox = isSandbox();
     const metadata = { ...(mem.metadata || {}), slug };
-    const row: Record<string, any> = { ...mem, source_id: null, metadata };
+    const row: Record<string, any> = { ...mem, source_id: null, metadata, sandbox };
     if (embedding) row.embedding = embedding;
 
-    // find the existing singleton row for this slug
+    // find the existing singleton row for this slug — scoped to the current
+    // sandbox lane so a harness re-run upserts its OWN row, never overwrites
+    // the live production singleton for the same slug.
     const { data: existing } = await db
       .from("agent_memory")
       .select("id")
       .eq("kind", mem.kind)
       .eq("metadata->>slug", slug)
+      .eq("sandbox", sandbox)
       .maybeSingle();
 
     if (existing?.id) {
@@ -115,12 +120,18 @@ export async function recall(
   // ONLY path org_facts reach the agent. The cap therefore has to cover the whole
   // org-grounding set, not an arbitrary slice. Ordered oldest-first for a stable,
   // deterministic prompt. Revisit if org_facts ever outgrow this bound.
+  // Sandbox isolation: when SASA_SANDBOX_MODE=true the process reads its OWN
+  // tagged rows so eval can test recall end-to-end; otherwise (production) we
+  // exclude every sandbox row, regardless of status. Same filter applied to
+  // both lexical and semantic arms below.
+  const sandbox = isSandbox();
   try {
     let g = db
       .from("agent_memory")
       .select("kind,brand,title,content")
       .in("kind", groundingKinds)
       .eq("status", "active") // never ground in superseded/needs_review/archived facts (librarian lifecycle)
+      .eq("sandbox", sandbox)
       .order("created_at", { ascending: true })
       .limit(50);
     if (opts.brand) g = g.or(`brand.eq.${opts.brand},brand.is.null`);
@@ -154,6 +165,7 @@ export async function recall(
             match_count: pool,
             filter_kinds: opts.kinds?.length ? opts.kinds : null,
             exclude_kinds: blockedKinds, // org grounding (added above) + owner-private for non-owner
+            include_sandbox: sandbox,   // mirror sandbox isolation into the RPC; default false in prod
           });
           if (!error && data?.length) arms.push(data);
         } catch { /* semantic arm down, lexical still answers */ }
@@ -167,6 +179,7 @@ export async function recall(
         .select("kind,brand,title,content")
         .not("kind", "in", `(${blockedKinds.join(",")})`)
         .eq("status", "active")
+        .eq("sandbox", sandbox)
         .limit(pool);
       if (opts.kinds?.length) s = s.in("kind", opts.kinds);
       const { data } = await s.textSearch("tsv", q, { type: "websearch" });
@@ -177,6 +190,7 @@ export async function recall(
           .from("agent_memory")
           .select("kind,brand,title,content")
           .not("kind", "in", `(${blockedKinds.join(",")})`)
+          .eq("sandbox", sandbox)
           .order("created_at", { ascending: false })
           .limit(limit);
         if (opts.kinds?.length) r = r.in("kind", opts.kinds);
@@ -219,10 +233,12 @@ export async function queryMemory(
   const q = (query || "").trim().slice(0, 80);
   if (q) {
     try {
+      const sandbox = isSandbox();
       const { data: ents } = await db
         .from("memory_entities")
         .select("id,type,name,summary")
         .or(`name.ilike.%${q.replace(/[,%()*]/g, "")}%,aliases.cs.{${q.replace(/[,{}%]/g, "")}}`)
+        .eq("sandbox", sandbox)
         .limit(3);
       for (const e of (ents || []) as any[]) {
         const { data: links } = await db
