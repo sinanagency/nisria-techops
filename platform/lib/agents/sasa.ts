@@ -99,8 +99,14 @@ function isCapabilityQuestion(command: string): boolean {
   return /\b(what\s+can\s+you|what\s+(?:are\s+)?(?:can|do)\s+you\s+(?:able\s+to\s+)?do|what\s+do\s+you\s+do|are\s+you\s+able\s+to|how\s+do\s+you\s+work|what\s+(?:tools|features|capabilities)\s+(?:do\s+you|are\s+available)|list\s+(?:your\s+)?(?:tools|capabilities|features|abilities)|show\s+me\s+what\s+you\s+can\s+do|can\s+you\s+(?:help\s+with|do|handle)\b)/i.test(t);
 }
 
-const HONEST_NO_ACTION =
-  "I have not actually done that yet, so I won't say I did. I'll get it done now rather than keep talking about it, and if something is genuinely blocking it I will tell you the real reason instead of asking again.";
+// HONEST_NO_ACTION constant DELETED 2026-06-11 after 58 mis-fires in 7 days,
+// 11 attempted patches that only added edge-exemptions, and a 06-11 audit
+// proving the substitution itself was the failure node. Layer 0 (pending-task-
+// resolver) now catches the conversational-handoff class deterministically.
+// When the guard at finalize() detects a fake completion claim it emits a
+// short neutral re-ask instead of substituting a canned implementation-leak
+// line. See KT lesson on node deletion vs node patching.
+const HONEST_NO_ACTION_REASK = "Tell me a bit more so I can do that for you.";
 
 // v1.3: agent-led past-tense claim. The reply must have AGENT (I/I've/we) +
 // past-tense COMPLETION VERB in the same clause to be a "claim of done." This
@@ -249,7 +255,7 @@ function guardOutputMark(): RegExp {
   // short enough to survive minor copy edits without the regex breaking. If a
   // rewrite is shorter than 60 chars, the whole string is used.
   const prefix = (s: string) => escape(s.slice(0, Math.min(60, s.length)));
-  const rewrites = [HONEST_NO_ACTION, HONEST_NO_SEND, LOOP_BREAK, LOOP_BREAK_READ, HONEST_NO_FIGURE, HONEST_NO_FIGURE_READ, HONEST_NO_STAGING];
+  const rewrites = [HONEST_NO_ACTION_REASK, HONEST_NO_SEND, LOOP_BREAK, LOOP_BREAK_READ, HONEST_NO_FIGURE, HONEST_NO_FIGURE_READ, HONEST_NO_STAGING];
   GUARD_OUTPUT_MARK_CACHED = new RegExp("^(?:" + rewrites.map(prefix).join("|") + ")", "i");
   return GUARD_OUTPUT_MARK_CACHED;
 }
@@ -662,8 +668,8 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   // Source-of-truth law: when parseTasks already wrote the task row(s) for this
   // turn deterministically, runSasa MUST NOT have create_task in its toolset.
   // Otherwise the model duplicates the write, hits the UNIQUE-index collide,
-  // returns ok:false, and the honesty guard rewrites the reply to the canned
-  // HONEST_NO_ACTION line. The model is narrator here, not writer.
+  // returns ok:false, and the honesty guard re-asks. The model is narrator
+  // here, not writer.
   const stripCreateTask = !!opts.parseTasksFired;
   const base = role === "team" ? SMART_TOOLS.filter((t) => TEAM_TOOL_NAMES.has(t.name)) : SMART_TOOLS;
   const tools = (stripCreateTask ? base.filter((t) => t.name !== "create_task") : base) as any[];
@@ -683,9 +689,8 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   // When parseTasks already wrote the row(s), record a synthetic successful
   // create_task into toolRuns so the honesty guard counts it as a real write
   // (the guard scans toolRuns for write-tool successes). Without this, the
-  // guard rewrites a legitimate narration ("Heads up, new task...") to the
-  // HONEST_NO_ACTION canned phrase because, from runSasa's point of view, no
-  // write tool ran this turn.
+  // guard rewrites a legitimate narration ("Heads up, new task...") into a
+  // re-ask because, from runSasa's point of view, no write tool ran this turn.
   if (opts.parseTasksFired) {
     toolRuns.push({ name: "create_task", input: { source: "parseTasks" }, result: { ok: true, summary: "Task already written deterministically by parseTasks before runSasa.", detail: { source_kind: "parsed_task" } } });
   }
@@ -819,13 +824,14 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
       } else if (claimsCompletionWithoutSuccess(reply, toolRuns) && !isCapabilityQuestion(opts.command || "")) {
         // The reply claims something is done but no tool succeeded. If a tool ran and
-        // returned a specific reason/question, relay THAT; else the generic honest line.
-        // 2026-06-09: skip when the operator asked a meta question about what the
-        // bot CAN do (caught: "what can you actually do here?" got nuked by the
-        // canned HONEST_NO_ACTION because the model's natural answer used verbs
-        // like "track" / "schedule" / "log" that look like completion claims.
-        // There is nothing to complete on a capability question.
-        reply = humanize((toolAsk?.result as any)?.summary || HONEST_NO_ACTION, { now: { long: n.long, today: n.today } });
+        // returned a specific reason/question, relay THAT; else a short neutral re-ask
+        // that Layer 0 (pending-task-resolver) can pick up on the next turn.
+        // 2026-06-11: REPLACES the deleted HONEST_NO_ACTION substitution. The old
+        // canned line ("I have not actually done that yet...") mis-fired 58 times in
+        // 7 days because it both leaked implementation detail AND fired on legit
+        // conversational answers. The re-ask is shorter, neutral, and pairs with
+        // Layer 0 to resolve next-turn deterministically.
+        reply = humanize((toolAsk?.result as any)?.summary || HONEST_NO_ACTION_REASK, { now: { long: n.long, today: n.today } });
       } else if (isHedgeLoop(reply, opts.history) && toolRuns.length === 0) {
         // Only a loop if the bot did NOTHING this turn and is re-hedging. A reply
         // BACKED by a tool that ran (even a disambiguation question) is progress, not

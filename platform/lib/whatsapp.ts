@@ -203,27 +203,63 @@ export async function resolveContact(db: any, waId: string, name?: string | null
 // user referenced it. The message log IS the agent's reality: nothing may speak
 // to a user without leaving a trace here. Logging is best-effort relative to the
 // send: a log failure must never swallow the actual delivery.
+// Pre-send deterministic checker. Architecture 2 (2026-06-11). If a Sasa-handled
+// outbound body matches a banned pattern (regressed canned line, leaked
+// implementation detail), rewrite to a short neutral re-ask BEFORE delivery.
+// The defense is in code so a future commit that re-introduces the substitution
+// upstream still cannot land at a user. Logs both the original (pre_send_caught)
+// and the rewritten body so audits stay honest.
+const HONEST_NO_ACTION_BANNED = /i have not actually done that yet|so i won'?t say i did|i'?ll get it done now rather than keep talking about it/i;
+const PRE_SEND_REASK = "Tell me a bit more so I can do that for you.";
+
+function preSendSanitize(body: string, handledBy: string): { body: string; caught: { pattern: string; original: string } | null } {
+  if (handledBy !== "sasa") return { body, caught: null };
+  if (HONEST_NO_ACTION_BANNED.test(body)) {
+    return { body: PRE_SEND_REASK, caught: { pattern: "honest_no_action_canned", original: body.slice(0, 600) } };
+  }
+  return { body, caught: null };
+}
+
 export async function sendTextAndLog(
   db: any,
   to: string,
   body: string,
   opts?: { contactId?: string | null; handledBy?: string },
 ): Promise<{ id: string | null; error?: string }> {
-  const res = await sendText(to, body);
   const handledBy = opts?.handledBy || "sasa";
+  const sanitized = preSendSanitize(body, handledBy);
+  const sendBody = sanitized.body;
+  const res = await sendText(to, sendBody);
   let insertedId: string | null = null;
   let contactIdResolved: string | null = null;
   const status = res.id ? "sent" : (res.error === "maintenance_dropped" ? "maintenance_dropped" : "failed");
   try {
     contactIdResolved = opts?.contactId ?? (await resolveContact(db, to));
     const { data } = await db.from("messages").insert({
-      channel: "whatsapp", direction: "out", body, handled_by: handledBy,
+      channel: "whatsapp", direction: "out", body: sendBody, handled_by: handledBy,
       status, account: "whatsapp",
       external_id: res.id || null, contact_id: contactIdResolved, sender_type: "individual",
     }).select("id").single();
     insertedId = (data as any)?.id ?? null;
   } catch (err) {
     console.error("sendTextAndLog: message log failed (send still happened)", err);
+  }
+  // Pre-send regression alarm: a Sasa outbound matched a banned pattern. Fire
+  // a P0 event so the team is paged and the upstream commit can be reverted.
+  if (sanitized.caught) {
+    try {
+      const { emit } = await import("./events");
+      await emit({
+        type: "pre_send_caught_canned_line",
+        source: "lib:whatsapp.sendTextAndLog",
+        actor: "P-bot",
+        subject_type: "contact",
+        subject_id: contactIdResolved,
+        payload: { pattern: sanitized.caught.pattern, original: sanitized.caught.original, rewritten_to: PRE_SEND_REASK, message_id: insertedId },
+      });
+    } catch (err) {
+      console.error("pre-send alarm emit failed", err);
+    }
   }
   // SASA MEDIC. Fire-and-forget audit of any Sasa outbound that looks like an
   // "I can't see / no access" fumble. Never blocks the send, never throws. The

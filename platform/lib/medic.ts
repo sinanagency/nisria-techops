@@ -45,15 +45,14 @@ const RED_FLAGS: { pattern: RegExp; signal: string }[] = [
   // The medic resolves true/false by reading the payments table at audit time.
   { pattern: /\b(?:done\.?\s+)?(?:logged|recorded|saved|created)\s+(?:[A-Z]{3}\s*[\d,\.]+|\$\s*[\d,\.]+|KSh\s*[\d,\.]+)/i, signal: "claimed_logged_money" },
   { pattern: /\bi(?:'?ve| have)\s+(?:logged|recorded|saved)\s+(?:the\s+)?(?:[A-Z]{3}\s*[\d,\.]+|\$\s*[\d,\.]+|payment)/i, signal: "claimed_logged_payment" },
-  // FAMILY E: HONEST_NO_ACTION canned-line fire. "I have not actually done that
-  // yet, so I won't say I did" is the deterministic backstop for
-  // claims-completion-without-success. Whenever it actually lands on the user,
-  // Sasa failed to act in a context where she should have (user forwarded an
-  // M-Pesa receipt, or said yes with a typo like "Yas" / "yeah"). Detected on
-  // Nur incidents 13:52:25 (HONEST_NO_ACTION on receipt forward) and 14:00:23
-  // ("Yas" not recognised as yes) on 2026-06-05.
-  { pattern: /i have not actually done that yet/i,       signal: "honest_no_action_fired" },
-  { pattern: /so i won'?t say i did/i,                   signal: "honest_no_action_fragment" },
+  // FAMILY E: legacy HONEST_NO_ACTION canned-line probe — KEPT as a regression
+  // gate. The substitution itself was deleted from sasa.ts on 2026-06-11 after
+  // 58 mis-fires in 7 days. If this pattern EVER fires in prod again, a
+  // regression has put the canned string back. The medic surfaces it as a
+  // P0 incident. New-class equivalent (claimsCompletionWithoutSuccess now emits
+  // a re-ask) is covered by the eval regression suite.
+  { pattern: /i have not actually done that yet/i,       signal: "honest_no_action_regression" },
+  { pattern: /so i won'?t say i did/i,                   signal: "honest_no_action_regression_fragment" },
   // FAMILY F: vague catch-all offer. Sasa filed or parsed something the user
   // shared and asked a vague open question ("what would you like me to do with
   // them?") instead of inferring the obvious next step from conversation tempo

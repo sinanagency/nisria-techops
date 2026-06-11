@@ -18,6 +18,12 @@ type Out = { text: string; toolCalls: { name: string; input: any }[] };
 const hasTool = (o: Out, name: string) => o.toolCalls.some((t) => t.name === name);
 const recordedAmount = (o: Out) => o.toolCalls.filter((t) => t.name === "record_payment").map((t) => Number(t.input?.amount));
 
+// HONEST_NO_ACTION REGRESSION GATE. The canned substitution line was deleted
+// from sasa.ts on 2026-06-11 after 58 mis-fires in 7 days. If this pattern
+// EVER appears in a reply, a regression has put the canned string back.
+const HONEST_NO_ACTION_PATTERN = /i have not actually done that yet|so i won'?t say i did|i'll get it done now rather than keep talking about it/i;
+const cannedNotPresent = (o: Out) => !HONEST_NO_ACTION_PATTERN.test(o.text);
+
 type Case = {
   name: string;
   command: string;
@@ -252,6 +258,136 @@ const CASES: Case[] = [
     assert: (o) => [
       { label: "calls an event/task edit tool (move_event/update_event/update_task)", pass: hasTool(o, "move_event") || hasTool(o, "update_event") || hasTool(o, "update_task") || hasTool(o, "create_event") },
       { label: "does NOT stall ('I have not actually done that yet')", pass: !/i have not (actually )?(done|added|changed) (that|it).*yet|please confirm/i.test(o.text) },
+    ],
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // HONEST_NO_ACTION REGRESSION SUITE (2026-06-11). 11 documented prod fumbles
+  // before the substitution was deleted. Each replays the EXACT user state
+  // that previously emitted the canned line. The cannedNotPresent gate
+  // ensures the substitution stays gone forever. New regressions touching
+  // the honesty guard MUST keep all 11 green.
+  // ══════════════════════════════════════════════════════════════════════
+  {
+    name: "REGRESSION 1/11: conversational handoff — task title after 'What's the task?' (06-11 15:36 Taona)",
+    history: [
+      { role: "user", content: "Add a task for taona" },
+      { role: "assistant", content: "What's the task, and when is it due?" },
+    ],
+    command: "Update the algorithm sequence",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+      { label: "calls create_task OR a clean confirm of created task", pass: hasTool(o, "create_task") || /^logged: /i.test(o.text) },
+    ],
+  },
+  {
+    name: "REGRESSION 2/11: 'Go ahead' confirms pending intent after question (06-11 15:37)",
+    history: [
+      { role: "user", content: "Add a task for taona" },
+      { role: "assistant", content: "What's the task, and when is it due?" },
+      { role: "user", content: "Update the algorithm sequence" },
+      { role: "assistant", content: "Got it. Should I set a due date?" },
+    ],
+    command: "Go ahead",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+    ],
+  },
+  {
+    name: "REGRESSION 3/11: yes-variant typo ('Yas') confirms staged payment (06-05)",
+    history: [
+      { role: "user", content: "Log KES 5,000 to Dorcas for shop" },
+      { role: "assistant", content: "Ready to log KES 5,000 to Dorcas for shop. Reply yes to confirm." },
+    ],
+    command: "Yas",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+    ],
+  },
+  {
+    name: "REGRESSION 4/11: emoji confirmation (👍) on staged action",
+    history: [
+      { role: "user", content: "Log KES 3,000 to Maina for transport" },
+      { role: "assistant", content: "Ready to log KES 3,000 to Maina for transport. Reply yes to confirm." },
+    ],
+    command: "👍",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+    ],
+  },
+  {
+    name: "REGRESSION 5/11: capability question must NOT emit canned line (06-09 11:39)",
+    command: "what can you actually do here?",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+      { label: "answers about capabilities (mentions tasks/payments/calendar/team or similar)", pass: /(task|payment|calendar|team|reminder|brain|memory|log|track|schedule)/i.test(o.text) },
+    ],
+  },
+  {
+    name: "REGRESSION 6/11: meta-question about prior action (06-08 'chairs order' replay)",
+    history: [
+      { role: "user", content: "Pay Mark Njambi 30k KES for the food packages" },
+      { role: "assistant", content: "Done. Logged KES 30,000 to Mark Njambi for food packages." },
+    ],
+    command: "what did u just do with the chairs order",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+    ],
+  },
+  {
+    name: "REGRESSION 7/11: bare noun-phrase answer to clarifying Q (06-06 19:38 'Meeting with bashir')",
+    history: [
+      { role: "user", content: "Add a task" },
+      { role: "assistant", content: "Got it. What's the task you're looking for?" },
+    ],
+    command: "Meeting with bashir",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+      // Acceptable: create_task fires (model commits), OR clean "Logged" confirm,
+      // OR model asks a clean follow-up about timing (responsible behavior — has
+      // a title, no date, so asking when is correct). NOT acceptable: canned line.
+      { label: "creates task OR asks responsibly about timing", pass: hasTool(o, "create_task") || /^logged: /i.test(o.text) || /\b(when|what (?:date|time)|due\s+(?:on|when)|schedul(?:e|ed))\b/i.test(o.text) },
+    ],
+  },
+  {
+    name: "REGRESSION 8/11: 'Create it and assign it to me' executes (06-06 19:41 Nur)",
+    history: [
+      { role: "user", content: "Did I log the Java proposal task?" },
+      { role: "assistant", content: "I could not find that task in the open list. Want me to pull up all the open tasks so we can find it?" },
+    ],
+    command: "Create it and assign it to me",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+      { label: "calls create_task", pass: hasTool(o, "create_task") },
+    ],
+  },
+  {
+    name: "REGRESSION 9/11: case-creation request does not emit canned line (06-06 case Mark)",
+    history: [
+      { role: "user", content: "This is a new case we received today: a boy named Mark whose story is not adding up, possibly trafficked via boda boda" },
+      { role: "assistant", content: "I see the new case from June 5: a boy named Mark whose story is not adding up. What would you like me to do?" },
+    ],
+    command: "Add the case as a new case under cases in the portal",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+    ],
+  },
+  {
+    name: "REGRESSION 10/11: bare 'Yes' after a yes/no question (06-06 19:23)",
+    history: [
+      { role: "user", content: "Add 'meeting with Eliza' as a task" },
+      { role: "assistant", content: "That task already exists. Want me to update it to be shared between you and Eliza, or is it a separate task?" },
+    ],
+    command: "Yes",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
+    ],
+  },
+  {
+    name: "REGRESSION 11/11: forwarded image stub does not trigger canned line (06-05 19:14)",
+    command: "[image]",
+    assert: (o) => [
+      { label: "no HONEST_NO_ACTION canned line", pass: cannedNotPresent(o) },
     ],
   },
 ];

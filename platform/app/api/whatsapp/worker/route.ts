@@ -322,6 +322,85 @@ async function processJob(db: any, job: any): Promise<void> {
   if (waMsgId) { const { data: inMsg } = await db.from("messages").select("id").eq("external_id", waMsgId).limit(1); sourceMessageId = inMsg?.[0]?.id || null; }
 
   // ──────────────────────────────────────────────────────────────────────
+  // LAYER 0: deterministic resolver for "reply to a task-clarifying question".
+  // Catches the conversational handoff (Sasa asked "What's the task?", user
+  // answers with a bare title) BEFORE parseTasks/LLM. Without this layer the
+  // bare-title reply falls through every parseTasks regex and the LLM cold-
+  // calls into HONEST_NO_ACTION (see KT lesson on conversational handoff
+  // node). Gated by LAYER0_RESOLVER_ENABLED so rollback is one env flip.
+  // Repro: Taona 06-11 15:36 ("Add a task for taona" → "What's the task?" →
+  // "Update the algorithm sequence" → previously canned line; now: deterministic.).
+  // ──────────────────────────────────────────────────────────────────────
+  let senderTeamMemberHoisted: any = null;
+  if (process.env.LAYER0_RESOLVER_ENABLED !== "0" && contactId && command && sourceMessageId) {
+    try {
+      const { data: rosterRows } = await db
+        .from("team_members")
+        .select("id,name,phone,status,bot_access,role")
+        .or("status.eq.active,status.is.null")
+        .limit(400);
+      const fromDigits = String(from || "").replace(/^\+/, "");
+      senderTeamMemberHoisted = (rosterRows || []).find((r: any) => {
+        const p = String(r?.phone || "").replace(/^\+/, "");
+        return p && (p === fromDigits || ("+" + p) === from);
+      }) || (opName ? (rosterRows || []).find((r: any) => String(r?.name || "").toLowerCase() === String(opName).toLowerCase()) : null) || null;
+      const { resolvePendingTaskTitle } = await import("../../../../lib/pending-task-resolver");
+      const r = await resolvePendingTaskTitle({
+        db, contactId, command, sourceMessageId,
+        senderTeamMember: senderTeamMemberHoisted ? { id: senderTeamMemberHoisted.id, name: senderTeamMemberHoisted.name } : null,
+        opName, fromName: name,
+      });
+      if (r?.ok && r.reply) {
+        await sendTextAndLog(db, from, r.reply, { contactId });
+        await emit({
+          type: "task.collected",
+          source: "agent:sasa-layer0",
+          actor: opName || name || "?",
+          subject_type: "task",
+          subject_id: r.taskId || null,
+          payload: { title: command.trim().slice(0, 200), source_message_id: sourceMessageId, reason: r.reason || "ok" },
+        }).catch(() => {});
+        await markJobDone(job.id);
+        return;
+      }
+    } catch (err: any) {
+      await emit({ type: "layer0.error", source: "agent:sasa-layer0", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { error: String(err?.message || err).slice(0, 240) } }).catch(() => {});
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // ARCHITECTURE 2 — INTENT CLASSIFIER. One Haiku call returns a typed
+  // intent + confidence. Phase 1 (this commit) runs the classifier and logs
+  // the result via emit, then passes the intent into runSasa as a hint. The
+  // only behavior change is the meta_capability override: when classifier
+  // says capability question with high confidence, the honesty guard
+  // skips its substitution path (closes the 06-09 regression where the
+  // regex-based isCapabilityQuestion missed "what can you actually do here?").
+  // Gated by ARCH2_CLASSIFIER_ENABLED so rollback is one env flip.
+  // ──────────────────────────────────────────────────────────────────────
+  let classifiedIntent: string | null = null;
+  let classifierConfidence: string | null = null;
+  if (process.env.ARCH2_CLASSIFIER_ENABLED !== "0" && command) {
+    try {
+      const { classifyIntent } = await import("../../../../lib/intent-classifier");
+      const histForClassifier = (history || []).slice(-4).map((m: any) => ({ role: m.role, content: String(m.content || "") }));
+      const cls = await classifyIntent(command, histForClassifier, { timeoutMs: 3500 });
+      classifiedIntent = cls.intent;
+      classifierConfidence = cls.confidence;
+      await emit({
+        type: "intent.classified",
+        source: "agent:sasa-classifier",
+        actor: opName || name || "?",
+        subject_type: "contact",
+        subject_id: contactId,
+        payload: { intent: cls.intent, confidence: cls.confidence, reason: cls.reason, error: cls.error || null, command_excerpt: command.slice(0, 200), source_message_id: sourceMessageId },
+      }).catch(() => {});
+    } catch (err: any) {
+      await emit({ type: "classifier.error", source: "agent:sasa-classifier", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { error: String(err?.message || err).slice(0, 240) } }).catch(() => {});
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
   // DETERMINISTIC TASK PRE-PROCESSOR (Sasa 727 v1, KT #110). parseTasks is
   // a pure regex over the inbound body that detects task-shaped messages
   // (imperative, bullet list, mixed-assignee bullets, @-mention DM,
