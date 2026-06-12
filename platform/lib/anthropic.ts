@@ -104,16 +104,19 @@ export async function askClaude(opts: {
 export const claude = (system: string, user: string, maxTokens = 1024, model?: string) =>
   askClaude({ system, messages: [{ role: "user", content: user }], maxTokens, model });
 
-// Vision: caption an image for the asset library (also flags possible beneficiary photos).
+// Vision: caption an image for the asset library (also flags possible
+// beneficiary photos). Thin Nisria adapter over @sinanagency/intake's
+// captionImage. Nisria policy: use the same Anthropic key as the brain,
+// keep the beneficiary-flagging prompt (PII signal for the auto-filer).
+import { captionImage as intakeCaptionImage } from "./intake/index.js";
+const NISRIA_CAPTION_PROMPT =
+  "In 1-2 sentences, describe this image for a nonprofit's asset library: what it shows, the mood, and any visible text or logos. If it appears to show identifiable children or beneficiaries, start with 'BENEFICIARY:'.";
 export async function captionImage(base64: string, mediaType: string, model?: string): Promise<string> {
-  const j = await anthropicPOST({
-    model: model || MODEL, max_tokens: 220,
-    messages: [{ role: "user", content: [
-      { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
-      { type: "text", text: "In 1-2 sentences, describe this image for a nonprofit's asset library: what it shows, the mood, and any visible text or logos. If it appears to show identifiable children or beneficiaries, start with 'BENEFICIARY:'." },
-    ] }],
+  return intakeCaptionImage(base64, mediaType, {
+    anthropicKey: KEY(),
+    model: model || MODEL,
+    prompt: NISRIA_CAPTION_PROMPT,
   });
-  return j?.content?.[0]?.text ?? "";
 }
 
 // Multimodal one-shot: a text prompt plus optional images, returning text. Used
