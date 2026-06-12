@@ -894,7 +894,18 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
             payload: {
               command: String(opts.command || "").slice(0, 200),
               original_reply: String(reply || "").slice(0, 600),
-              tool_runs: toolRuns.map((t) => ({ name: t.name, ok: (t.result as any)?.ok === true })),
+              tool_runs: toolRuns.map((t) => {
+                const r = (t.result as any) || {};
+                return {
+                  name: t.name,
+                  ok_is_true: r.ok === true,
+                  ok_is_false: r.ok === false,
+                  has_error: !!r.error,
+                  error_msg: r.error ? String(r.error).slice(0, 120) : null,
+                  result_keys: Object.keys(r).slice(0, 10),
+                  count: typeof r.count === "number" ? r.count : null,
+                };
+              }),
               has_toolAsk: !!(toolAsk?.result),
             },
           });
