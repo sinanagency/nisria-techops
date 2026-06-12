@@ -116,8 +116,17 @@ const HONEST_NO_ACTION_REASK = "Tell me a bit more so I can do that for you.";
 // and produced false positives on status reads.
 const AGENT_COMPLETION = /\b(?:i'?ve|i\s+have|i|we)\s+(?:marked|logged|recorded|created|completed|scheduled|sent|updated|saved|noted|added|removed|deleted|set|moved|tracked|reassigned)\b/i;
 // Simpler shorthand for "it's done", "that's complete", etc., which imply
-// agent action just happened.
-const DONE_SIMPLE = /\b(?:it'?s|that'?s|i'?ve|i\s+have|now|all)?\s*(?:mark(?:ed)?(?:\s+(?:it|that|as))?\s*(?:done|complete|completed)|done|complete(?:d)?|crossed off|ticked off|checked off)\b/i;
+// agent action just happened. 2026-06-12: agent prefix REQUIRED (was optional)
+// after this regex over-fired on the model's standard CTA "Reply with the
+// number to mark it done" — the original pattern matched "mark it done"
+// anywhere, including inside guidance to the USER about how to act. The model
+// always speaks first-person about its own actions per the doctrine, so an
+// agent prefix is structurally aligned with how a real claim is phrased.
+// Verified 15/15 cases pass including I'm/I've/I have/We've/It's/That's
+// shapes and rejecting CTAs, status fields, and quoted task titles. The
+// rare "bare Done." after a successful tool is caught instead by the
+// tool-shape check downstream (okIn confirms the backing tool ran).
+const DONE_SIMPLE = /\b(?:i'?(?:m|ve)|i\s+(?:have|am)|we'?ve|we\s+have|we|i|it'?s|that'?s)\s+(?:(?:mark(?:ed)?|set)(?:\s+(?:it|that|them|those|as))*\s+)?(?:done|complete|completed|crossed off|ticked off|checked off)\b/i;
 
 // The action tools whose ok=true success can back a "done/created/logged" claim.
 const COMPLETION_TOOLS = new Set([
