@@ -176,6 +176,19 @@ function claimsCompletionWithoutSuccess(reply: string, toolRuns: { name: string;
   const hasEventShape = SHAPE_EVENT.test(reply);
   const hasContactShape = SHAPE_CONTACT.test(reply);
   const okIn = (s: Set<string>) => toolRuns.some((t) => s.has(t.name) && (t.result as any)?.ok === true);
+  // Read tools (list_tasks, etc.) don't follow the write-tool {ok:true} convention.
+  // smart-tools list_tasks returns {count, open_tasks} — no ok field. So a "ran
+  // without throwing and produced a shape" counts as a successful read. Used
+  // ONLY for the task-shape exemption (the model legitimately quoting list_tasks
+  // output is not a fake completion claim).
+  const ranIn = (s: Set<string>) => toolRuns.some((t) => {
+    if (!s.has(t.name)) return false;
+    const r = t.result as any;
+    if (r == null) return false;
+    if (r.ok === false) return false;
+    if (r.error) return false;
+    return true;
+  });
   // v1.3.11.1: when parseTasks already wrote the task deterministically this
   // turn, a synthetic create_task is in toolRuns. The TASK category is therefore
   // satisfied even if the task TITLE contains a proper noun like "Event" or
@@ -185,7 +198,7 @@ function claimsCompletionWithoutSuccess(reply: string, toolRuns: { name: string;
   // handled the write — the model is narrating what the parser just did.
   const parseTasksDidIt = toolRuns.some((t) => t.name === "create_task" && (t.result as any)?.ok === true && (t.result as any)?.detail?.source_kind === "parsed_task");
   if (hasMoneyShape && !okIn(PAYMENT_TOOLS)) return true;
-  if (hasTaskShape && !okIn(TASK_TOOLS) && !okIn(TASK_READ_TOOLS)) return true;
+  if (hasTaskShape && !okIn(TASK_TOOLS) && !ranIn(TASK_READ_TOOLS)) return true;
   // v1.3.11.2 (R1 Judge-4 catch): SHAPE_CONTACT was originally missing the
   // parseTasksDidIt exemption (only SHAPE_CASE and SHAPE_EVENT had it).
   // Symmetry now: any title-foreign category words (contact / team member /
