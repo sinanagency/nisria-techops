@@ -124,6 +124,11 @@ export async function POST(req: NextRequest) {
             external_id: waMsgId,
             contact_id: contactId,
           });
+          // Mirror inbound into Chatwoot (Path B, read-only). Best-effort.
+          try {
+            const { mirrorToChatwoot } = await import("@/lib/chatwoot-mirror");
+            mirrorToChatwoot("incoming", from, body).catch(() => {});
+          } catch { /* never block */ }
           if (insErr) {
             if (/duplicate key|unique/i.test(insErr.message || "")) continue; // Meta retry: already owned
             // A non-duplicate insert failure must not lose the inbound: surface

@@ -34,6 +34,7 @@ async function anthropicPOST(payload: Record<string, any>): Promise<any> {
   const body = JSON.stringify(payload);
   let lastErr = "Claude request failed";
   let claudeFailed = false;
+  const startedAt = Date.now();
   try {
     for (let attempt = 0; attempt < 4; attempt++) {
       const r = await fetch(ANTHROPIC_URL, {
@@ -42,7 +43,24 @@ async function anthropicPOST(payload: Record<string, any>): Promise<any> {
         body,
         cache: "no-store",
       });
-      if (r.ok) return await r.json();
+      if (r.ok) {
+        const data = await r.json();
+        // Fire-and-forget Langfuse trace. Best-effort.
+        try {
+          const { traceLLM } = await import("./langfuse-trace");
+          traceLLM({
+            name: "sasa.anthropicPOST",
+            model: payload?.model || "claude",
+            input: { messages: payload?.messages, system: typeof payload?.system === "string" ? payload.system.slice(0, 500) : "complex" },
+            output: typeof data?.content?.[0]?.text === "string" ? data.content[0].text : JSON.stringify(data?.content || ""),
+            startedAt,
+            endedAt: Date.now(),
+            usage: { input: data?.usage?.input_tokens, output: data?.usage?.output_tokens },
+            metadata: { attempt },
+          });
+        } catch { /* never block */ }
+        return data;
+      }
       const j = await r.json().catch(() => ({} as any));
       lastErr = j?.error?.message || `Claude request failed (${r.status})`;
       if (r.status !== 429 && r.status !== 529) { claudeFailed = true; break; }

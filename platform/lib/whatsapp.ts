@@ -311,6 +311,11 @@ export async function sendTextAndLog(
     return devRes;
   }
   const res = await sendText(to, sendBody);
+  // Mirror outbound into Chatwoot (Path B, read-only). Best-effort.
+  try {
+    const { mirrorToChatwoot } = await import("./chatwoot-mirror");
+    mirrorToChatwoot("outgoing", to, sendBody).catch(() => {});
+  } catch { /* never block */ }
   let insertedId: string | null = null;
   let contactIdResolved: string | null = null;
   const status = res.id ? "sent" : (res.error === "maintenance_dropped" ? "maintenance_dropped" : "failed");
