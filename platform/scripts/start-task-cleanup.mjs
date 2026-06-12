@@ -132,7 +132,7 @@ const res = await fetch(url, {
   },
   body: JSON.stringify({
     messaging_product: 'whatsapp',
-    to: contact.phone.replace(/^\+/, ''),
+    to: contact.phone.replace(/^\+/, '').replace(/^00/, ''),
     type: 'text',
     text: { body: message },
   }),
