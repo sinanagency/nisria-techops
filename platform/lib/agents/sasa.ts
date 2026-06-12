@@ -391,19 +391,28 @@ function alreadySympathized(history: { role: string; content: string }[] = []): 
 // OpenAI via the translator and hand back an Anthropic-shaped response, so the
 // agent loop below is unchanged. The bot only admits "tripped me up" if BOTH
 // providers are down. This is the fix for the rate-limit dead-air the operator saw.
-async function callClaude(system: string, messages: any[], tools: any[]) {
+async function callClaude(system: string | Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }>, messages: any[], tools: any[]) {
+  // CROSS-TURN PROMPT CACHE (2026-06-12). Callers may pass system as BLOCKS:
+  // [static persona+laws (cache_control), dynamic grounding/snapshot/clock].
+  // Anthropic caching is prefix based, so the static block now hits cache on
+  // every turn from every contact, not just iterations 2..n of one turn —
+  // the heavy ~4-6k token prefix drops to cache-read pricing fleet wide.
+  // A plain string keeps the old single-block behavior (graceful fallback).
+  const systemText = Array.isArray(system) ? system.map((b) => b.text).join("") : system;
   // GYM BRAIN-SWAP (eval-only): when SASA_BRAIN_BASE_URL is set, run the entire
   // turn on a local OpenAI-compatible model (DGX) via the translator and never
   // touch Anthropic or OpenAI. The env is never set in production, so this branch
   // is dead in prod and the Claude path below is unchanged.
   if (brainOverrideActive()) {
-    const resp = await anthropicViaOpenAI({ model: MODEL, max_tokens: 1400, system, tools, messages });
+    const resp = await anthropicViaOpenAI({ model: MODEL, max_tokens: 1400, system: systemText, tools, messages });
     return { ...resp, _via: "gym" };
   }
   const cachedTools = Array.isArray(tools) && tools.length
     ? tools.map((t, i) => (i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t))
     : tools;
-  const cachedSystem = [{ type: "text", text: system, cache_control: { type: "ephemeral" } }];
+  const cachedSystem = Array.isArray(system)
+    ? system
+    : [{ type: "text", text: system, cache_control: { type: "ephemeral" } }];
   const body = JSON.stringify({ model: MODEL, max_tokens: 1400, system: cachedSystem, tools: cachedTools, messages });
 
   let lastErr = "Claude failed";
@@ -663,8 +672,28 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   const safe = role === "team" ? memories.filter((m) => !carriesMoney(m)) : memories;
   const grounding = groundingText(safe);
   const system = inGroup
-    ? buildGroupSystem(opts.groupName || "the team group", who, `${n.weekdayLong} (Asia/Dubai, ${n.clock})`, snapshot, grounding)
-    : buildSystem(role, who, `${n.weekdayLong} (Asia/Dubai, ${n.clock})`, snapshot, grounding, opts.operatorRank ?? null);
+    ? buildGroupSystem(opts.groupName || "the team group", who, `${n.weekdayLong} (Asia/Dubai)`, snapshot, grounding)
+    : buildSystem(role, who, `${n.weekdayLong} (Asia/Dubai)`, snapshot, grounding, opts.operatorRank ?? null);
+  // CROSS-TURN PROMPT CACHE SPLIT (2026-06-12, SASA_PROMPT_SPLIT=0 to roll
+  // back). The prompt's only per turn material is everything from the Brain
+  // grounding onward (grounding + snapshot) — the persona and laws ahead of
+  // it are byte stable per (role, who, rank, weekday). Splitting at the
+  // grounding marker puts the heavy stable prefix in its own cached block, so
+  // Anthropic serves it at cache-read pricing across turns and contacts, not
+  // just within one agent loop. The wall clock (which used to bust the cache
+  // every minute from inside the date line) now lives in the dynamic tail.
+  const SPLIT_MARKER = "What you know about Nisria";
+  const clockLine = `\n\nCurrent clock: ${n.clock} (Asia/Dubai).`;
+  let systemForModel: string | Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> = system + clockLine;
+  if (process.env.SASA_PROMPT_SPLIT !== "0") {
+    const splitAt = system.indexOf(SPLIT_MARKER);
+    if (splitAt > 0) {
+      systemForModel = [
+        { type: "text", text: system.slice(0, splitAt), cache_control: { type: "ephemeral" } },
+        { type: "text", text: system.slice(splitAt) + clockLine },
+      ];
+    }
+  }
   // Source-of-truth law: when parseTasks already wrote the task row(s) for this
   // turn deterministically, runSasa MUST NOT have create_task in its toolset.
   // Otherwise the model duplicates the write, hits the UNIQUE-index collide,
@@ -881,7 +910,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   }
 
   for (let i = 0; i < 6; i++) {
-    const resp = await callClaude(system, convo, tools);
+    const resp = await callClaude(systemForModel, convo, tools);
     if (resp?._via === "openai") viaFallback = true;
     if (resp.stop_reason !== "tool_use") {
       const modelText = (resp.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();

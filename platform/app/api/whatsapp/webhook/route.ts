@@ -76,12 +76,13 @@ export async function POST(req: NextRequest) {
           const from = digits(m.from);
           const waMsgId = m.id || null;
 
-          // DEDUPE: Meta retries webhooks. If we already stored this message id,
-          // skip it entirely so the bot never double-replies.
-          if (waMsgId) {
-            const { data: dupe } = await db.from("messages").select("id").eq("external_id", waMsgId).limit(1);
-            if (dupe && dupe.length) continue;
-          }
+          // DEDUPE, ATOMIC (2026-06-12). Meta retries webhooks, and retries can
+          // land CONCURRENTLY: the old select-then-skip raced (both invocations
+          // miss the select, both insert, both enqueue → double reply). The
+          // dedupe truth is now the partial UNIQUE INDEX on messages.external_id
+          // (migration 2026-06-12_wall_and_efficiency.sql): we attempt the
+          // insert FIRST; a unique violation means a sibling invocation already
+          // owns this wamid, so we skip it entirely. One round trip, no race.
 
           const contactName = contacts.find((c) => digits(c.wa_id) === from)?.profile?.name || null;
           // The text we have on the message itself: a typed message, a button, or
@@ -113,7 +114,7 @@ export async function POST(req: NextRequest) {
 
           const contactId = await resolveContact(db, from, contactName);
 
-          await db.from("messages").insert({
+          const { error: insErr } = await db.from("messages").insert({
             channel: "whatsapp",
             direction: "in",
             body,
@@ -123,6 +124,13 @@ export async function POST(req: NextRequest) {
             external_id: waMsgId,
             contact_id: contactId,
           });
+          if (insErr) {
+            if (/duplicate key|unique/i.test(insErr.message || "")) continue; // Meta retry: already owned
+            // A non-duplicate insert failure must not lose the inbound: surface
+            // it and still attempt the enqueue path below (worker resolves the
+            // message row lazily and tolerates its absence).
+            try { await emit({ type: "whatsapp.error", source: "whatsapp", actor: "system", payload: { stage: "ingress_insert", error: String(insErr.message || insErr).slice(0, 240), wa_message_id: waMsgId } }); } catch {}
+          }
 
           await emit({
             type: "whatsapp.message_in",

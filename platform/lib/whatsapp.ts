@@ -42,6 +42,42 @@ async function send(payload: Record<string, any>): Promise<{ id: string | null; 
   if (maintenanceDropTarget(payload)) {
     return { id: null, error: "maintenance_dropped" };
   }
+  // ── THE WALL (Architecture 2, 2026-06-12). sanitizeReply runs HERE, in the
+  // primitive, not in a wrapper. Before this date the check lived only in
+  // sendTextAndLog while the worker's main reply, the reassurance lines, the
+  // group fanouts, and smart-tools all called sendText directly — fourteen
+  // bypasses. Now there is no unsanitized door: every text body and every
+  // media caption passes Sasa's BotGuardsConfig (brand wall + canned line
+  // regression gate) before Meta sees it. Catches emit a P0 event,
+  // fire-and-forget, so the alert never delays or blocks the send.
+  try {
+    const { sanitizeReply } = await import("./bot-guards/index.js");
+    const { SASA_BOT_GUARDS_CONFIG } = await import("./bot/guards-config");
+    let caught: any[] | null = null;
+    if (payload?.text?.body) {
+      const s = sanitizeReply(String(payload.text.body), SASA_BOT_GUARDS_CONFIG);
+      if (s.caught.length) { payload = { ...payload, text: { ...payload.text, body: s.body } }; caught = s.caught; }
+    } else if (payload?.image?.caption) {
+      const s = sanitizeReply(String(payload.image.caption), SASA_BOT_GUARDS_CONFIG);
+      if (s.caught.length) { payload = { ...payload, image: { ...payload.image, caption: s.body } }; caught = s.caught; }
+    } else if (payload?.document?.caption) {
+      const s = sanitizeReply(String(payload.document.caption), SASA_BOT_GUARDS_CONFIG);
+      if (s.caught.length) { payload = { ...payload, document: { ...payload.document, caption: s.body } }; caught = s.caught; }
+    }
+    if (caught) {
+      import("./events").then(({ emit }) => emit({
+        type: "pre_send_caught",
+        source: "lib:whatsapp.send",
+        actor: "P-bot",
+        subject_type: "contact",
+        subject_id: null,
+        payload: { to: String(payload?.to || ""), caught: caught!.map((c: any) => ({ kind: c.kind, pattern: c.pattern, mode: c.mode, original: String(c.original || "").slice(0, 400) })) },
+      })).catch(() => {});
+    }
+  } catch {
+    // The wall must never break delivery. A guards failure means the body
+    // ships unfiltered this once; the import error will surface in logs.
+  }
   const r = await fetch(`${GRAPH}/${PHONE_ID()}/messages`, {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN()}`, "Content-Type": "application/json" },
@@ -76,9 +112,21 @@ export function sendDocument(to: string, link: string, filename: string, caption
 // a template never does. `params` fill the body variables ({{1}},{{2}},...) in
 // order. WhatsApp rejects a body param containing a newline/tab, so callers pass
 // short single-line strings. Defaults to hello_world (no params) for probes.
-export function sendTemplate(to: string, name = "hello_world", params: string[] = [], lang = "en_US") {
-  const components = params.length
-    ? [{ type: "body", parameters: params.map((t) => ({ type: "text", text: String(t).replace(/\s+/g, " ").slice(0, 1000) })) }]
+export async function sendTemplate(to: string, name = "hello_world", params: string[] = [], lang = "en_US") {
+  // Template frames are Meta approved copy, but the PARAMS are live text and
+  // can carry a leak ("task from Stephen"). Sanitize each param against the
+  // wall; a brand inside a param drops THAT param to the reask phrase, never
+  // the whole template. Best effort: a guards failure ships params as-is.
+  let cleanParams = params;
+  try {
+    if (params.length) {
+      const { sanitizeReply } = await import("./bot-guards/index.js");
+      const { SASA_BOT_GUARDS_CONFIG } = await import("./bot/guards-config");
+      cleanParams = params.map((p) => sanitizeReply(String(p), SASA_BOT_GUARDS_CONFIG).body);
+    }
+  } catch { /* wall must never break delivery */ }
+  const components = cleanParams.length
+    ? [{ type: "body", parameters: cleanParams.map((t) => ({ type: "text", text: String(t).replace(/\s+/g, " ").slice(0, 1000) })) }]
     : undefined;
   return send({ to, type: "template", template: { name, language: { code: lang }, ...(components ? { components } : {}) } });
 }
@@ -221,16 +269,29 @@ export async function resolveContact(db: any, waId: string, name?: string | null
 // The defense is in code so a future commit that re-introduces the substitution
 // upstream still cannot land at a user. Logs both the original (pre_send_caught)
 // and the rewritten body so audits stay honest.
-const HONEST_NO_ACTION_BANNED = /i have not actually done that yet|so i won'?t say i did|i'?ll get it done now rather than keep talking about it/i;
-const PRE_SEND_REASK = "Tell me a bit more so I can do that for you.";
-
-function preSendSanitize(body: string, handledBy: string): { body: string; caught: { pattern: string; original: string } | null } {
+// Pre-send deterministic checker — Architecture 2 (2026-06-11), rebuilt
+// 2026-06-12 on the shared @sinanagency/bot-guards lib. The PRIMITIVE send()
+// above is the actual wall (brand leaks + banned patterns, every outbound).
+// This wrapper runs the SAME sanitizeReply first only so that (a) the
+// messages-table transcript records exactly what shipped, never diverging
+// from the wire, and (b) the P0 event carries the resolved contactId. The
+// second pass inside send() is then a no-op on the already-clean body.
+async function preSendSanitize(body: string, handledBy: string): Promise<{ body: string; caught: { pattern: string; original: string } | null }> {
   if (handledBy !== "sasa") return { body, caught: null };
-  if (HONEST_NO_ACTION_BANNED.test(body)) {
-    return { body: PRE_SEND_REASK, caught: { pattern: "honest_no_action_canned", original: body.slice(0, 600) } };
+  try {
+    const { sanitizeReply } = await import("./bot-guards/index.js");
+    const { SASA_BOT_GUARDS_CONFIG } = await import("./bot/guards-config");
+    const s = sanitizeReply(body, SASA_BOT_GUARDS_CONFIG);
+    if (s.caught.length) {
+      const first = s.caught[0];
+      return { body: s.body, caught: { pattern: `${first.kind}:${first.pattern}`, original: String(first.original || "").slice(0, 600) } };
+    }
+    return { body: s.body, caught: null };
+  } catch {
+    return { body, caught: null };
   }
-  return { body, caught: null };
 }
+const PRE_SEND_REASK = "Tell me a bit more so I can do that for you.";
 
 export async function sendTextAndLog(
   db: any,
@@ -239,7 +300,7 @@ export async function sendTextAndLog(
   opts?: { contactId?: string | null; handledBy?: string; dev?: boolean },
 ): Promise<{ id: string | null; error?: string }> {
   const handledBy = opts?.handledBy || "sasa";
-  const sanitized = preSendSanitize(body, handledBy);
+  const sanitized = await preSendSanitize(body, handledBy);
   const sendBody = sanitized.body;
   // Law 12 (test-mode). Reroute to the developer phone, skip the messages
   // insert, skip medic + pre-send alarm. Single chokepoint preserved; dev

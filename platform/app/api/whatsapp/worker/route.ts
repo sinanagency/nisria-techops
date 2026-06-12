@@ -332,13 +332,24 @@ async function processJob(db: any, job: any): Promise<void> {
   // "Update the algorithm sequence" → previously canned line; now: deterministic.).
   // ──────────────────────────────────────────────────────────────────────
   let senderTeamMemberHoisted: any = null;
+  // ROSTER, ONCE PER TURN (efficiency fix 2026-06-12). Layer 0 and parseTasks
+  // each independently fetched up to 400 team_members rows on every inbound —
+  // two identical round trips before the brain even woke. One lazy loader,
+  // both consumers share it.
+  let rosterRowsHoisted: any[] | null = null;
+  const getRoster = async (): Promise<any[]> => {
+    if (rosterRowsHoisted) return rosterRowsHoisted;
+    const { data } = await db
+      .from("team_members")
+      .select("id,name,phone,status,bot_access,role")
+      .or("status.eq.active,status.is.null")
+      .limit(400);
+    rosterRowsHoisted = (data || []) as any[];
+    return rosterRowsHoisted;
+  };
   if (process.env.LAYER0_RESOLVER_ENABLED !== "0" && contactId && command && sourceMessageId) {
     try {
-      const { data: rosterRows } = await db
-        .from("team_members")
-        .select("id,name,phone,status,bot_access,role")
-        .or("status.eq.active,status.is.null")
-        .limit(400);
+      const rosterRows = await getRoster();
       const fromDigits = String(from || "").replace(/^\+/, "");
       senderTeamMemberHoisted = (rosterRows || []).find((r: any) => {
         const p = String(r?.phone || "").replace(/^\+/, "");
@@ -369,36 +380,14 @@ async function processJob(db: any, job: any): Promise<void> {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // ARCHITECTURE 2 — INTENT CLASSIFIER. One Haiku call returns a typed
-  // intent + confidence. Phase 1 (this commit) runs the classifier and logs
-  // the result via emit, then passes the intent into runSasa as a hint. The
-  // only behavior change is the meta_capability override: when classifier
-  // says capability question with high confidence, the honesty guard
-  // skips its substitution path (closes the 06-09 regression where the
-  // regex-based isCapabilityQuestion missed "what can you actually do here?").
-  // Gated by ARCH2_CLASSIFIER_ENABLED so rollback is one env flip.
+  // ARCHITECTURE 2 — INTENT CLASSIFIER moved (2026-06-12). It used to run
+  // HERE, before parseTasks, which meant every task-shaped message paid a
+  // Haiku call (up to 3.5s) whose output was then irrelevant because
+  // parseTasks fired. It now runs just before the brain (see below), only on
+  // turns that are actually going to the LLM, gated by !parsedContextNote.
   // ──────────────────────────────────────────────────────────────────────
   let classifiedIntent: string | null = null;
   let classifierConfidence: string | null = null;
-  if (process.env.ARCH2_CLASSIFIER_ENABLED !== "0" && command) {
-    try {
-      const { classifyIntent } = await import("../../../../lib/intent-classifier");
-      const histForClassifier = (history || []).slice(-4).map((m: any) => ({ role: m.role, content: String(m.content || "") }));
-      const cls = await classifyIntent(command, histForClassifier, { timeoutMs: 3500 });
-      classifiedIntent = cls.intent;
-      classifierConfidence = cls.confidence;
-      await emit({
-        type: "intent.classified",
-        source: "agent:sasa-classifier",
-        actor: opName || name || "?",
-        subject_type: "contact",
-        subject_id: contactId,
-        payload: { intent: cls.intent, confidence: cls.confidence, reason: cls.reason, error: cls.error || null, command_excerpt: command.slice(0, 200), source_message_id: sourceMessageId },
-      }).catch(() => {});
-    } catch (err: any) {
-      await emit({ type: "classifier.error", source: "agent:sasa-classifier", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { error: String(err?.message || err).slice(0, 240) } }).catch(() => {});
-    }
-  }
 
   // ──────────────────────────────────────────────────────────────────────
   // DETERMINISTIC TASK PRE-PROCESSOR (Sasa 727 v1, KT #110). parseTasks is
@@ -418,11 +407,9 @@ async function processJob(db: any, job: any): Promise<void> {
   if (process.env.PARSE_TASKS_ENABLED === "1" && sourceMessageId && command) {
     try {
       const { parseTasks } = await import("./parseTasks.mjs");
-      const { data: rosterRows } = await db
-        .from("team_members")
-        .select("id,name,phone,status,bot_access,role")
-        .or("status.eq.active,status.is.null")
-        .limit(400);
+      // Roster comes from the once-per-turn loader (shared with Layer 0); the
+      // duplicate 400 row fetch that used to live here is gone (2026-06-12).
+      const rosterRows = await getRoster();
       // Resolve the sender's own team_members row so parseTasks can route
       // "remind me" / self-assigned bullet items to the actual sender rather
       // than to a hardcoded default. Match on phone (E.164 with or without "+")
@@ -902,6 +889,36 @@ async function processJob(db: any, job: any): Promise<void> {
       }
     } catch (err: any) {
       await emit({ type: "reaction_complete.error", source: "agent:sasa", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { error: String(err?.message || err).slice(0, 240) } }).catch(() => {});
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────────
+  // ARCHITECTURE 2 — INTENT CLASSIFIER (relocated 2026-06-12). One Haiku
+  // call returns a typed intent + confidence, logged via emit for grading.
+  // Runs ONLY here, on turns that reached the brain: every deterministic
+  // layer above (confirm gate, Layer 0, parseTasks, parseTaskOps, payment
+  // pre-parser, reactions) has already returned, and parsedContextNote
+  // means parseTasks owned the turn so classification adds nothing. The
+  // observe-first contract is unchanged: grade intent.classified events
+  // against real outcomes BEFORE making routing load-bearing. Gated by
+  // ARCH2_CLASSIFIER_ENABLED so rollback is one env flip.
+  // ──────────────────────────────────────────────────────────────────────
+  if (process.env.ARCH2_CLASSIFIER_ENABLED !== "0" && command && !parsedContextNote) {
+    try {
+      const { classifyIntent } = await import("../../../../lib/intent-classifier");
+      const histForClassifier = (history || []).slice(-4).map((m: any) => ({ role: m.role, content: String(m.content || "") }));
+      const cls = await classifyIntent(command, histForClassifier, { timeoutMs: 3500 });
+      classifiedIntent = cls.intent;
+      classifierConfidence = cls.confidence;
+      await emit({
+        type: "intent.classified",
+        source: "agent:sasa-classifier",
+        actor: opName || name || "?",
+        subject_type: "contact",
+        subject_id: contactId,
+        payload: { intent: cls.intent, confidence: cls.confidence, reason: cls.reason, error: cls.error || null, command_excerpt: command.slice(0, 200), source_message_id: sourceMessageId },
+      }).catch(() => {});
+    } catch (err: any) {
+      await emit({ type: "classifier.error", source: "agent:sasa-classifier", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { error: String(err?.message || err).slice(0, 240) } }).catch(() => {});
     }
   }
   // SLOW HANDLING around the brain (the long pole of the turn):
