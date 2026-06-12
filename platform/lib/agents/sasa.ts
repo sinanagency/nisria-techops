@@ -213,12 +213,32 @@ function claimsCompletionWithoutSuccess(reply: string, toolRuns: { name: string;
   // Symmetry now: any title-foreign category words (contact / team member /
   // saved someone's number) that appear in a reply backed by a parseTasks
   // create_task should pass the same way.
-  if (hasCaseShape && !okIn(CASE_TOOLS) && !parseTasksDidIt) return true;
-  if (hasEventShape && !okIn(EVENT_TOOLS) && !parseTasksDidIt) return true;
-  if (hasContactShape && !okIn(CONTACT_TOOLS) && !parseTasksDidIt) return true;
+  // v1.3.11.9 (2026-06-12 Nur 15:50-16:33 incident): the SHAPE_TASK exemption
+  // on line above already passes "ranIn(TASK_READ_TOOLS)" because list_tasks
+  // output legitimately contains task-shape words. The SAME symmetry must
+  // apply to the case/event/contact shapes: a successful list_tasks read
+  // returns task TITLES that can carry ANY category word ("move story to
+  // cases", "Meet with Cynthia", "Save Mama Njambi's number"). Without this
+  // exemption, the guard fired three times against Nur on 2026-06-12 16:12,
+  // 16:20, 16:33 against the same "Give me my open tasks numbered" prompt
+  // because item #3 of the list mentioned "cases" + "beneficiaries". The
+  // model was quoting a task title, not claiming a case action.
+  if (hasCaseShape && !okIn(CASE_TOOLS) && !parseTasksDidIt && !ranIn(TASK_READ_TOOLS)) return true;
+  if (hasEventShape && !okIn(EVENT_TOOLS) && !parseTasksDidIt && !ranIn(TASK_READ_TOOLS)) return true;
+  if (hasContactShape && !okIn(CONTACT_TOOLS) && !parseTasksDidIt && !ranIn(TASK_READ_TOOLS)) return true;
   // Generic done-claim with no specific category: any completion tool backs it.
   const anySuccess = toolRuns.some((t) => COMPLETION_TOOLS.has(t.name) && (t.result as any)?.ok === true);
-  return !anySuccess && text.length > 0;
+  if (anySuccess) return false;
+  // v1.3.11.9: extend the read-tool exemption to the generic catch-all. When
+  // list_tasks ran successfully, the assistant text is a read narration of the
+  // model's own list ("I've noted your tasks. Item 3 about Mark's case is …").
+  // The generic check above doesn't distinguish narration verbs ("noted") from
+  // action verbs ("completed"), and the catch-all otherwise fires on every such
+  // narration that mentions any category word. Same trade-off the engineer
+  // accepted on line 210: a rare false negative ("I've completed task 3" with
+  // list_tasks running passes) buys eliminating the systemic narration loop.
+  if (ranIn(TASK_READ_TOOLS)) return false;
+  return text.length > 0;
 }
 
 // SEND/NOTIFY HONESTY (the "claimed it told a person when it only logged a task"
@@ -257,6 +277,18 @@ const LOOP_BREAK =
 // shape as the HONEST_NO_FIGURE_READ fix from v1.3.11.5: intent-aware text.
 const LOOP_BREAK_READ =
   "Let me just pull it. Tell me in one line what you're looking for, a name, a doc, or a date, and I'll fetch it without asking again.";
+// v1.3.11.9 (2026-06-12 Nur incident, KT #235): SUBSTITUTION_LOOP_BREAK fires
+// when claimsCompletionWithoutSuccess would substitute HONEST_NO_ACTION_REASK
+// while the LAST assistant turn was already that same rewrite. Even after
+// Fix A removed the trigger that caused Nur's seven-in-a-row loop, the next
+// guard regression that misfires twice in a row will hit this break-out
+// instead of looping again. Defense in depth for the whole rewrite family.
+// The reaskPhrase is short and neutral, which makes it survivable on a
+// single misfire but devastating in a loop. This line names the loop
+// explicitly, gives the operator something to do, and prevents the
+// "lol it's okay thank u" giving-up failure mode from re-shipping.
+const SUBSTITUTION_LOOP_BREAK =
+  "I keep landing on the same hedge. Try saying it a different way, or paste an example of what you want, and I will deliver. I will not repeat that line on this thread until you give me a new angle.";
 const HEDGE_MARK =
   /\b(?:please confirm|confirm if you|would you like me to|do you want me to|should i\b|shall i\b|let me know if you|want me to|i have not (?:done|created|set|yet)|i haven'?t (?:done|created|set)|not done yet|have not done it yet)\b/i;
 const isHedge = (s: string) => HEDGE_MARK.test(String(s || ""));
@@ -284,7 +316,7 @@ function guardOutputMark(): RegExp {
   // short enough to survive minor copy edits without the regex breaking. If a
   // rewrite is shorter than 60 chars, the whole string is used.
   const prefix = (s: string) => escape(s.slice(0, Math.min(60, s.length)));
-  const rewrites = [HONEST_NO_ACTION_REASK, HONEST_NO_SEND, LOOP_BREAK, LOOP_BREAK_READ, HONEST_NO_FIGURE, HONEST_NO_FIGURE_READ, HONEST_NO_STAGING];
+  const rewrites = [HONEST_NO_ACTION_REASK, HONEST_NO_SEND, LOOP_BREAK, LOOP_BREAK_READ, HONEST_NO_FIGURE, HONEST_NO_FIGURE_READ, HONEST_NO_STAGING, SUBSTITUTION_LOOP_BREAK];
   GUARD_OUTPUT_MARK_CACHED = new RegExp("^(?:" + rewrites.map(prefix).join("|") + ")", "i");
   return GUARD_OUTPUT_MARK_CACHED;
 }
@@ -295,6 +327,21 @@ function isHedgeLoop(reply: string, history: { role: string; content: string }[]
   const prior = String(lastAssistant.content || "");
   if (guardOutputMark().test(prior)) return false; // prior was a guard, not a model hedge
   return isHedge(prior);
+}
+
+// Was the last assistant turn ALREADY a guard substitution (HONEST_NO_ACTION_REASK
+// or SUBSTITUTION_LOOP_BREAK itself)? If yes, the rewrite block should ship the
+// loop-break line instead of repeating the same canned hedge. Conservative: only
+// matches by prefix of the constant strings, so a humanize() addition of a
+// trailing note (e.g. "(Note: I am on backup AI)") still triggers the bypass.
+// Also catches the oscillation case where loop-break would re-fire — both prior
+// strings collapse to "same rewrite family" so the operator never sees a 3+ cycle.
+function priorWasGuardReask(history: { role: string; content: string }[] = []): boolean {
+  const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
+  if (!lastAssistant) return false;
+  const c = String(lastAssistant.content || "");
+  return c.startsWith(HONEST_NO_ACTION_REASK.slice(0, 40))
+      || c.startsWith(SUBSTITUTION_LOOP_BREAK.slice(0, 40));
 }
 
 // BLIND-MODE FIGURE BACKSTOP. When the OpenAI verifier could not run (unverified:
@@ -919,7 +966,17 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
             },
           });
         } catch {}
-        reply = humanize((toolAsk?.result as any)?.summary || HONEST_NO_ACTION_REASK, { now: { long: n.long, today: n.today } });
+        // KT #235: if the LAST assistant turn was already this same canned
+        // rewrite, ship SUBSTITUTION_LOOP_BREAK instead of repeating. Without
+        // this, a single missed exemption produces an N-turn dead loop (Nur
+        // 2026-06-12 15:50-16:33 shipped HONEST_NO_ACTION_REASK seven times).
+        // toolAsk wins over both: if a real tool returned a specific reason,
+        // that's the highest-signal reply available and beats either canned line.
+        if (priorWasGuardReask(opts.history) && !(toolAsk?.result as any)?.summary) {
+          reply = humanize(SUBSTITUTION_LOOP_BREAK, { now: { long: n.long, today: n.today } });
+        } else {
+          reply = humanize((toolAsk?.result as any)?.summary || HONEST_NO_ACTION_REASK, { now: { long: n.long, today: n.today } });
+        }
       } else if (isHedgeLoop(reply, opts.history) && toolRuns.length === 0) {
         // Only a loop if the bot did NOTHING this turn and is re-hedging. A reply
         // BACKED by a tool that ran (even a disambiguation question) is progress, not
@@ -1108,3 +1165,17 @@ function fallbackReply(actions: ToolResult[]): string {
 function serialize(actions: ToolResult[]) {
   return actions.filter((a) => a.affordance).map((a) => ({ ok: a.ok, summary: a.summary, affordance: a.affordance }));
 }
+
+// Test-only exports. Internal honesty-guard helpers exposed so the verify
+// scripts (scripts/_test-*.mjs) can replay real prod fixtures without booting
+// a Claude client. KT #235 verify uses these to assert: (1) Fix A — the three
+// 2026-06-12 Nur events no longer return true from claimsCompletionWithoutSuccess
+// once the TASK_READ_TOOLS exemption extends to SHAPE_CASE/EVENT/CONTACT; and
+// (2) Fix B — when the last assistant turn is HONEST_NO_ACTION_REASK, the
+// rewrite decision flips to SUBSTITUTION_LOOP_BREAK.
+export const __testing = {
+  claimsCompletionWithoutSuccess,
+  priorWasGuardReask,
+  HONEST_NO_ACTION_REASK,
+  SUBSTITUTION_LOOP_BREAK,
+};
