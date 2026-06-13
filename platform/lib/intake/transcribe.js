@@ -37,7 +37,8 @@ export async function transcribeAudio(base64, mime, opts) {
         const form = new FormData();
         form.append("file", new Blob([buf], { type: mime || "audio/ogg" }), `audio.${extFor(mime)}`);
         form.append("model", opts.model || "gpt-4o-transcribe");
-        const r = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        const base = (opts.baseUrl || "https://api.openai.com").replace(/\/+$/, "");
+        const r = await fetch(`${base}/v1/audio/transcriptions`, {
             method: "POST",
             headers: { Authorization: `Bearer ${opts.openaiKey}` },
             body: form,
