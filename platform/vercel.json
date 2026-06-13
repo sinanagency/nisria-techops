@@ -10,6 +10,7 @@
     { "path": "/api/cron/librarian", "schedule": "0 3 * * *" },
     { "path": "/api/cron/group-bot-health", "schedule": "*/15 * * * *" },
     { "path": "/api/cron/v1-soak-watchdog", "schedule": "*/30 * * * *" },
-    { "path": "/api/cron/digital-u-sweep", "schedule": "*/5 * * * *" }
+    { "path": "/api/cron/digital-u-sweep", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/stale-ingest-audit", "schedule": "15 */4 * * *" }
   ]
 }
