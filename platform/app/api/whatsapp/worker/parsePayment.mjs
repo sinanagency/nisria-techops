@@ -149,9 +149,16 @@ const CHAT_LOG_VERB = /\b(log|record|stage|pay(?:ment)?\s+(?:logged|recorded)?|n
 const CHAT_PAYMENT_RE = /(?:^|[\s.,])(USD|KES|Ksh|\$)\s*\.?\s*([\d,]+(?:\.\d{1,2})?)(?:\s+[a-z]+){0,3}?\s+to\s+([A-Z][A-Za-z .'\-]{1,40}?)(?=\s*(?:[,.]|$|\bfor\b|\bpaid\b|\bon\b|\band\b))/im;
 // "200 USD to Mark" / "1,500 KES to John"
 const CHAT_AMOUNT_FIRST_RE = /(?:^|[\s.,])([\d,]+(?:\.\d{1,2})?)\s*(USD|KES|Ksh|\$)(?:\s+[a-z]+){0,3}?\s+to\s+([A-Z][A-Za-z .'\-]{1,40}?)(?=\s*(?:[,.]|$|\bfor\b|\bpaid\b|\bon\b|\band\b))/im;
+// "Sanara trainer-Ksh 25,000" / "Transport for trainer-Ksh 1,500" — Nur's casual
+// finance-group shorthand: payee, hyphen, currency, amount. Items are separated
+// by either a newline or a slash. The hyphen-currency anchor ("-Ksh"/"-KES"/"-USD")
+// is specific enough that we don't need a CHAT_LOG_VERB co-trigger; the shape
+// IS the log signal. v1.3.13 (2026-06-13 audit: two real expenses dropped).
+const CHAT_PAYEE_FIRST_RE = /(?:^|[\n\r\/])\s*([A-Z][A-Za-z .'\-]{1,60}?)\s*-\s*(USD|KES|Ksh|\$)\s*\.?\s*([\d,]+(?:\.\d{1,2})?)(?=\s*(?:[,.\n\r\/]|$|\bfor\b|\bpaid\b|\bon\b))/im;
 // Same regexes but global, for multi-payment messages ("log 3 things: A, B, C").
 const CHAT_PAYMENT_RE_G = new RegExp(CHAT_PAYMENT_RE.source, "gim");
 const CHAT_AMOUNT_FIRST_RE_G = new RegExp(CHAT_AMOUNT_FIRST_RE.source, "gim");
+const CHAT_PAYEE_FIRST_RE_G = new RegExp(CHAT_PAYEE_FIRST_RE.source, "gim");
 const CHAT_PURPOSE = /\bfor\s+([A-Za-z][A-Za-z 0-9\-]{2,60}?)\s*(?:[,.]|$|\bpaid\b|\bon\b|\band\b)/i;
 const CHAT_DATE_LONG = /\b(?:paid|on)\s+((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})(?:\s*,?\s*(\d{4}))?)/i;
 const CHAT_DATE_ISO = /\b(?:paid|on)\s+(\d{4}-\d{2}-\d{2})\b/i;
@@ -213,9 +220,23 @@ export function parseChatLog(body) {
 export function parseChatLogAll(body) {
   const t = String(body || "");
   if (!t || t.length < 8 || t.length > 2000) return [];
-  if (!CHAT_LOG_VERB.test(t)) return [];
   const paid_at = resolveDate(t);
   const results = [];
+  // Payee-first hyphen-currency shape ("Sanara trainer-Ksh 25,000") is its own
+  // log signal; runs INDEPENDENT of CHAT_LOG_VERB. Both newline and slash split
+  // multi-item messages, e.g. "X-Ksh 25,000 / Y-Ksh 1,500".
+  const matchesPF = [...t.matchAll(CHAT_PAYEE_FIRST_RE_G)];
+  if (matchesPF.length) {
+    for (const m of matchesPF) {
+      const payee = cleanPayee(m[1]);
+      const currency = normalizeCurrency(m[2]);
+      const amount = normalizeAmount(m[3]);
+      if (!amount || !payee || payee.length < 2) continue;
+      results.push(buildChatLogParsed(currency, amount, payee, paid_at, null));
+    }
+    if (results.length) return results;
+  }
+  if (!CHAT_LOG_VERB.test(t)) return [];
   // Pull each "<currency> <amount> to <payee>" pattern in order.
   const matches = [...t.matchAll(CHAT_PAYMENT_RE_G)];
   if (matches.length) {
