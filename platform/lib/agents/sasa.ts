@@ -214,10 +214,7 @@ function _SASA_COMPLETION_GUARD(reply: string, toolRuns: { name: string; result:
   }
   return _SASA_COMPLETION_GUARD_CACHED(reply, toolRuns);
 }
-// The legacy inline body (preserved as comments below for the 06-12 incident
-// lineage; the guard config above is byte-equivalent in behavior to v0.5
-// brain-core which dropped per-shape globalReadExempt to match Sasa policy).
-function _legacyClaimsCompletionWithoutSuccess(reply: string, toolRuns: { name: string; result: any }[]): boolean {
+[]): boolean {
   const text = reply.toLowerCase();
   const claimsDone = (AGENT_COMPLETION.test(reply) || DONE_SIMPLE.test(reply));
   if (!claimsDone) return false;
