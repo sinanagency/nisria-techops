@@ -666,11 +666,12 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   // Today's calendar block (authoritative). Empty days say so explicitly,
   // so the model can never paper over a clear day with yesterday's items.
   const todayBoardText = (todayEvents as any[]).length
-    ? "\n\nTODAY'S CALENDAR (" + n.today + " Asia/Dubai, authoritative — use this for any \"today\" claim, do NOT invent from chat history):\n"
+    ? "\n\nTODAY'S CALENDAR (" + n.today + " Asia/Dubai, authoritative, use this for any \"today\" claim, do NOT invent from chat history):\n"
       + (todayEvents as any[])
           .map((e) => `- ${e.time || (e.allDay ? "(all day)" : "(no time)")} ${e.title} [${e.source}:${e.type}]`)
           .join("\n")
-    : "\n\nTODAY'S CALENDAR (" + n.today + " Asia/Dubai, authoritative): no items scheduled for today.";
+      + "\n\nCALENDAR DISCIPLINE (HARD WALL): every event or meeting you mention by name in this turn MUST appear in TODAY'S CALENDAR above. You do NOT list anything from chat history, yesterday's mentions, or memory as today's items. Naming an event that is not in TODAY'S CALENDAR is a hallucination, not a fact."
+    : "\n\nTODAY'S CALENDAR (" + n.today + " Asia/Dubai, authoritative): no items scheduled for today.\n\nCALENDAR DISCIPLINE (HARD WALL): today's board is empty. If the user asks what is on today, say \"today is clear\" verbatim. You do NOT list anything from chat history, yesterday's mentions, or memory as today's items. Naming an event today is a hallucination, not a fact.";
   const snapshot = `${pending || 0} items waiting in Needs You, ${newMsgs || 0} messages need a reply, ${openTasks || 0} open tasks.${groupsLine}${todayBoardText}`;
   const safe = role === "team" ? memories.filter((m) => !carriesMoney(m)) : memories;
   const grounding = groundingText(safe);
