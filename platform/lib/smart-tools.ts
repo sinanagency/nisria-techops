@@ -136,6 +136,34 @@ async function findMemberByPhone(db: any, phone?: string | null): Promise<any | 
   return (data || []).find((t: any) => phoneKey(t.phone) === p) || null;
 }
 
+// Speaker pronoun set — "Me", "myself", "I", etc. (KT #261). When an LLM passes
+// any of these as assignee_name, the right answer is the speaker's phone-resolved
+// team_member row, NEVER a fuzzy name guess. findMember("Me") would otherwise
+// happily match any team member whose name contains "me" (Mehmet, Mediha, …)
+// and assign tasks to the wrong person — or, as on 2026-06-14, silently return
+// ok:false while the LLM narrated "now assigned to you".
+const SELF_PRONOUNS = new Set([
+  "me","myself","i","mine","my",
+  "to me","for me","on me",
+  "this person","this user","this account",
+]);
+
+function isSelfPronoun(s: string | null | undefined): boolean {
+  if (!s) return false;
+  return SELF_PRONOUNS.has(String(s).trim().toLowerCase());
+}
+
+// Resolve an assignee_name to a team_member row, taking speaker-pronoun shortcuts
+// into account. Returns the row, or null if no match (caller decides the error
+// message). Read-after-write narration depends on this returning a concrete row.
+async function resolveAssignee(db: any, senderPhone: string | null | undefined, assigneeName?: string | null): Promise<any | null> {
+  if (!assigneeName) return null;
+  if (isSelfPronoun(assigneeName)) {
+    return await findMemberByPhone(db, senderPhone);
+  }
+  return await findMember(db, assigneeName);
+}
+
 // ===========================================================================
 // TOOL SCHEMAS — the contract Claude sees. READ tools first, then ACTION tools.
 // ===========================================================================
@@ -848,7 +876,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // second one (stops the bot re-creating the same task across a burst of messages).
     const { data: dupe } = await db.from("tasks").select("id,title").neq("status", "done").ilike("title", title).limit(1);
     if (dupe?.[0]) return { ok: true, summary: humanize(`Already tracked: "${dupe[0].title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: dupe[0].id, deduped: true } };
-    const member = await findMember(db, input.assignee_name);
+    // KT #261: speaker-pronoun "Me"/"myself"/"I" must resolve via senderPhone,
+    // never via findMember (which would happily fuzzy-match "me" against any
+    // name containing "me" — Mehmet, Mediha, etc).
+    const member = await resolveAssignee(db, ctx.senderPhone, input.assignee_name);
     const priority = ["low", "medium", "high"].includes(input.priority) ? input.priority : "medium";
     const due_on = /^\d{4}-\d{2}-\d{2}$/.test(String(input.due_on || "")) ? input.due_on : null;
     // source_group: when the task is born in a team group, remember which one so
@@ -911,7 +942,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // "who did it" defaults to the person speaking. In a group we know their phone,
     // so resolve them EXACTLY by phone before falling back to a name guess. This is
     // what makes a bare "done" tick the right person's task.
-    const member = (await findMember(db, input.assignee_name)) || (input.assignee_name ? null : await findMemberByPhone(db, ctx.senderPhone));
+    // KT #261: speaker-pronoun "Me"/"myself"/"I" routes via senderPhone, not findMember.
+    const member = (await resolveAssignee(db, ctx.senderPhone, input.assignee_name)) || (input.assignee_name ? null : await findMemberByPhone(db, ctx.senderPhone));
     // The lookup must see what the user sees. The UI lists EVERY open task (any
     // assignee); so does our list_tasks. So when the user names a task by its
     // title, we resolve it against ALL open tasks, exactly the set on the board,
@@ -933,6 +965,23 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       const f = frag.toLowerCase();
       // 1) substring hit (case-insensitive), what ilike used to do.
       let hits = open.filter((t) => String(t.title || "").toLowerCase().includes(f));
+      // Stop-list refusal (KT #261, Law 11 Honesty). When the LLM passes a
+      // verb-prefix fragment like "meeting" instead of the proper noun
+      // ("Bashir"), a single substring match is NOT authoritative: it landed on
+      // whatever ELSE happens to share that prefix. Refuse the silent write and
+      // ask. The 2026-06-14 Eliza false-close (matched "meeting with Eliza" on a
+      // Bashir sentence) lives here.
+      const TASK_FRAG_STOPLIST = new Set([
+        "meeting","meet","call","task","email","mail","do","done","the","a","an",
+        "today","tomorrow","yesterday","this","that","one","it","item","thing",
+        "stuff","work","job",
+      ]);
+      const fragTokens = f.split(/\s+/).filter(Boolean);
+      const fragIsAllStopwords = fragTokens.length > 0 && fragTokens.every((w) => TASK_FRAG_STOPLIST.has(w));
+      if (fragIsAllStopwords) {
+        const titles = open.slice(0, 12).map((t) => `"${t.title}"`).join(", ");
+        return { ok: false, summary: humanize(`"${frag}" is too generic for me to pick the right task. Which one of these: ${titles}?`, opts) };
+      }
       // 2) fuzzy word-overlap fallback so a natural reference ("the canva access
       //    task", "taona canva") still resolves to "Give Taona access to CANVA".
       if (!hits.length) {
@@ -1013,7 +1062,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // Same speaker resolution as complete_task (phone-exact, name as fallback), so
     // "reopen the canva one" or a bare "that is not actually done" can scope to the
     // right person's work. Mirrors complete_task, but over the DONE column.
-    const member = (await findMember(db, input.assignee_name)) || (input.assignee_name ? null : await findMemberByPhone(db, ctx.senderPhone));
+    // KT #261: speaker-pronoun "Me"/"myself"/"I" routes via senderPhone, not findMember.
+    const member = (await resolveAssignee(db, ctx.senderPhone, input.assignee_name)) || (input.assignee_name ? null : await findMemberByPhone(db, ctx.senderPhone));
     const frag = String(input.title || "").trim().slice(0, 60);
     // Look at DONE tasks only (the board's done column), most recently completed first.
     const { data: doneRows } = await db
@@ -1639,8 +1689,16 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const patch: any = { updated_at: new Date().toISOString() };
     const changed: string[] = [];
     if (input.assignee_name) {
-      const m = await findMember(db, input.assignee_name);
-      if (!m) return { ok: false, summary: humanize(`I could not find a team member called ${input.assignee_name}.`, opts) };
+      // KT #261: speaker-pronoun "Me"/"myself"/"I" routes via senderPhone, not findMember.
+      // The 2026-06-14 Ashraf×2 silent-fail ("now assigned to you" but assignee_id=NULL)
+      // happened because findMember("Me") returned null and the LLM narrated success anyway.
+      const m = await resolveAssignee(db, ctx.senderPhone, input.assignee_name);
+      if (!m) {
+        const detail = isSelfPronoun(input.assignee_name)
+          ? `I don't recognise this WhatsApp number as a team member yet, so I can't assign to "you" automatically. Tell me your name and I'll wire it.`
+          : `I could not find a team member called ${input.assignee_name}.`;
+        return { ok: false, summary: humanize(detail, opts) };
+      }
       patch.assignee_id = m.id; changed.push(`assigned to ${m.name}`);
     }
     if (/^\d{4}-\d{2}-\d{2}$/.test(String(input.due_on || ""))) { patch.due_on = input.due_on; changed.push(`due ${input.due_on}`); }
