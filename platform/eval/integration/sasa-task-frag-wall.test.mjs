@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Sasa task-fragment WALL-AT-PRIMITIVE — 2026-06-15 (KT #264).
+// Sasa task-fragment WALL-AT-PRIMITIVE — 2026-06-15 (KT #274).
 //
 // Same-class-of-bug doctrine port. KT #261 fixed complete_task's wrong-target
 // close via TASK_FRAG_STOPLIST. The 06-14 audit found three sibling write-

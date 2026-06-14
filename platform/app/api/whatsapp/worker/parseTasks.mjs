@@ -94,7 +94,7 @@ function defaultSenderRole(s) { return s === "team" ? "team" : "admin"; }
 // to me", the worker silently skipped every row at the assignee_unresolved
 // gate, the model still narrated "Logged seven" because recent activity from
 // the previous turn had flipped parseTasksFired=true and stripped create_task.
-// KT #264 (2026-06-15): also accept connector-prefixed self-targets
+// KT #274 (2026-06-15): also accept connector-prefixed self-targets
 // ("for me" / "to me" / "on me" / "for myself") so the parser still wins when
 // Pattern A's regex captures the connector along with the pronoun. Same
 // surface as smart-tools' SELF_PRONOUNS; both walls now match. The 2026-06-14
@@ -334,7 +334,7 @@ function cleanReminderTitle(raw) {
 // colon. The 2026-06-10 audit found "Assign this to me\n- meeting with Eliza
 // at 2 PM" fell through every pattern and Sasa ghost-confirmed it. The colon
 // is now optional when bullets follow, and "this"/"these"/"those" all accept.
-// KT #264 (2026-06-15): connector relaxed from "to" to "(?:to|for|on)" so
+// KT #274 (2026-06-15): connector relaxed from "to" to "(?:to|for|on)" so
 // "Assign this tasks for me: ..." now matches. The 2026-06-14 17:07 Nur
 // incident fell through Pattern A because of the connector word; smart-tools'
 // SELF_PRONOUNS catches "for me" downstream but only if the LLM routes the

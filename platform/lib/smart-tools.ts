@@ -53,7 +53,7 @@ export type ToolResult = {
   // structured detail for the model's next turn (not shown raw to Nur)
   detail?: Record<string, any>;
   error?: string;
-  // KT #264 (2026-06-15): set on complete_task when the requested row is
+  // KT #274 (2026-06-15): set on complete_task when the requested row is
   // already in status=done. The honesty-guard (sasa.ts) reads this flag to
   // count partial vs claimed plural successes and refuse silent ghost-match
   // narrations. Distinct from {ok:false}: the user's intent already holds.
@@ -175,7 +175,7 @@ async function resolveAssignee(db: any, senderPhone: string | null | undefined, 
 // share that prefix. Refuse the silent write and ask which task. KT #261 +
 // 2026-06-14 17:03 Eliza false-close (matched "meeting with Eliza" on a Bashir
 // sentence) is the canonical incident. 2026-06-15: hoisted to module level so
-// reopen_task / update_task / delete_task share the same guard (KT #264 same-
+// reopen_task / update_task / delete_task share the same guard (KT #274 same-
 // class-of-bug doctrine port). Wall-at-primitive: every write-primitive that
 // takes a free-text title fragment goes through isAllStopwords first.
 const TASK_FRAG_STOPLIST = new Set([
@@ -1027,7 +1027,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     }
 
     if (!list.length) {
-      // ALREADY_DONE branch (KT #264, 2026-06-15). Before saying "no open task
+      // ALREADY_DONE branch (KT #274, 2026-06-15). Before saying "no open task
       // matching X", check if the frag substring-hits a row that is ALREADY
       // closed. The 2026-06-14 17:04 ghost-match incident lives here: a "Both
       // are done" plural close fired complete_task twice on overlapping frags;
@@ -1131,7 +1131,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const done = (doneRows || []) as any[];
     if (!done.length) return { ok: false, summary: humanize("There are no completed tasks to reopen right now.", opts) };
 
-    // KT #264 (2026-06-15): mirror complete_task's stop-list refusal. "reopen the
+    // KT #274 (2026-06-15): mirror complete_task's stop-list refusal. "reopen the
     // meeting" / "reopen that task" lands on whichever done row happens to substring
     // hit, which is non-deterministic. Refuse on all-stopword frags, ask which one.
     if (isAllStopwords(frag)) {
@@ -1747,7 +1747,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "update_task") {
     const frag = String(input.title || "").trim().slice(0, 40);
     if (!frag) return { ok: false, summary: "Which task?", error: "no title" };
-    // KT #264 (2026-06-15): stop-list refusal mirrored from complete_task.
+    // KT #274 (2026-06-15): stop-list refusal mirrored from complete_task.
     // "update the meeting" / "rename the task" would otherwise lock the first
     // substring hit silently, then reassign or rename the wrong row. Wall-at-
     // primitive on every write that takes a free-text title fragment.
@@ -2547,7 +2547,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "delete_task") {
     let q = db.from("tasks").select("id,title,status").order("created_at", { ascending: false }).limit(12);
     const frag = String(input.title || "").trim().slice(0, 40);
-    // KT #264 (2026-06-15): stop-list refusal mirrored from complete_task. Delete
+    // KT #274 (2026-06-15): stop-list refusal mirrored from complete_task. Delete
     // is IRREVERSIBLE so the wall has to be tighter here: stop-list refusal AND
     // we never fall through to "newest row" when the frag itself is a generic
     // word. "Delete the meeting" / "remove that task" must always ask.

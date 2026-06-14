@@ -216,7 +216,7 @@ function _SASA_COMPLETION_GUARD(reply: string, toolRuns: { name: string; result:
   return _SASA_COMPLETION_GUARD_CACHED(reply, toolRuns);
 }
 
-// PASSIVE_COMPLETION (2026-06-15, KT #264). AGENT_COMPLETION + DONE_SIMPLE both
+// PASSIVE_COMPLETION (2026-06-15, KT #274). AGENT_COMPLETION + DONE_SIMPLE both
 // require a first-person agent prefix (i/i've/we/it's/that's). The 2026-06-14
 // 17:05 ghost-match incident slipped past them because Sasa narrated PASSIVELY:
 // "either way, both meetings are handled." No agent prefix, so the existing
@@ -918,7 +918,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         // ran. Logging a task is not telling the person, so say so honestly and offer.
         reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
       } else if ((() => {
-        // KT #264 (2026-06-15) PASSIVE-PLURAL MISMATCH check, runs BEFORE the
+        // KT #274 (2026-06-15) PASSIVE-PLURAL MISMATCH check, runs BEFORE the
         // generic completion-without-success guard so the honest replacement
         // is specific (X closed, Y already done) rather than the canned re-ask.
         // The 2026-06-14 17:05 "both meetings are handled" false plural lives
