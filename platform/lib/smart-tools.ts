@@ -365,6 +365,7 @@ export const SMART_TOOLS = [
   { name: "create_event", description: "Put something on the calendar: a meeting, team travel, a site visit, a reminder, a one-off event. SAFE: lands on the calendar immediately and syncs to the Google Calendar so it shows on her phone. Use for 'put the donor meeting on Tuesday at 3', 'block Thursday for the Kibera visit', 'add a team day on the 14th', 'I am traveling Friday'. Provide a clear title and date. Add a time for a timed event, leave it off for an all-day one. Before scheduling team travel, you may check_conflicts first so you can flag a holiday.", input_schema: { type: "object", properties: { title: { type: "string" }, date: { type: "string", description: "YYYY-MM-DD" }, end_date: { type: "string", description: "YYYY-MM-DD for a multi-day event, optional" }, time: { type: "string", description: "HH:MM 24h start time, omit for all-day" }, end_time: { type: "string", description: "HH:MM 24h end time, optional" }, location: { type: "string" }, notes: { type: "string" }, kind: { type: "string", enum: ["event", "meeting", "travel", "visit", "reminder"] }, recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly"], description: "set for a repeating event; the next instance is created automatically once this one passes" } }, required: ["title", "date"] } },
   { name: "move_event", description: "Reschedule a calendar event you previously added (a meeting, visit, travel, reminder) to a new date and/or time. SAFE: updates it on the calendar and on Google. Use for 'move the donor meeting to Friday', 'push the Kibera visit to next week', 'shift it to 4pm'. Match the event by a fragment of its title. If several match, ask which. This is for calendar EVENTS; to move a task due date use create_task, to move a payment use update_payment.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the event title to match" }, new_date: { type: "string", description: "YYYY-MM-DD" }, new_time: { type: "string", description: "HH:MM 24h, optional" } }, required: ["title"] } },
   { name: "delete_event", description: "Remove a calendar event you previously added (meeting, visit, travel, reminder). SAFE and recoverable. Use for 'cancel the donor meeting', 'drop the Thursday visit', 'remove that event'. Match by a fragment of the title. If several match, ask which. Only affects calendar EVENTS, never tasks, payments, grants, or holidays.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the event title to match" } }, required: ["title"] } },
+  { name: "complete_calendar_event", description: "Mark a calendar EVENT (meeting, visit, travel) as completed. SAFE: stamps the event's notes with a completion marker; no row deletion. Use when someone reports a meeting actually happened: 'meeting with Taona is done', 'I met Bashir', 'the donor visit happened'. Resolve the event by a fragment of its title. If more than one upcoming or today event matches, ask which. THIS IS FOR CALENDAR EVENTS ONLY — for to-do TASKS use complete_task. If the user's frag matches both a calendar event AND a task, prefer the calendar event when the user says 'meeting/visit/call/event done'; prefer the task when they say 'task done' or 'finished it'.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the event title to match" }, note: { type: "string", description: "optional one-line note on how it went" } }, required: ["title"] } },
 
   // ---- ACTION · GATED SENDS (queue into approvals, NEVER auto-send) ----
   { name: "draft_thank_you", description: "Draft a donor thank-you and QUEUE it into Needs-You for Nur's approval. GATED: never auto-sent. Pass donor_name OR use latest_gift first.", input_schema: { type: "object", properties: { donor_name: { type: "string", description: "donor name, or omit to thank the latest gift" } } } },
@@ -3059,6 +3060,68 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (e.gcal_event_id && gcalConfigured()) { try { await gcalDelete(e.gcal_event_id); } catch { /* best-effort */ } }
     await emit({ type: "calendar.event_deleted", source: "agent:sasa", actor: "Nur", subject_type: "calendar_event", subject_id: e.id, payload: { title: e.title, date: e.starts_on } });
     return { ok: true, summary: humanize(`Removed "${e.title}" from ${e.starts_on}.`, opts), affordance: { kind: "open", label: "Open calendar", href: "/calendar" }, detail: { event_id: e.id } };
+  }
+
+  // ---- SAFE: complete_calendar_event (KT #288) ----
+  // When Nur says "meeting with Taona is done", Sasa used to fuzzy-match the
+  // frag against TASKS — landing on a wrong row ("Meeting with Haneen"
+  // 2026-06-15 13:10) — then admit "that was a calendar event, not a task".
+  // The fix at the primitive layer: give the bot a real tool. Stamps the
+  // event's notes with a completion marker (no completed_at column yet, so
+  // notes carries the audit trail). Emits calendar.event_completed for the
+  // event log. NEVER calls Google Calendar — it's just a status stamp.
+  if (name === "complete_calendar_event") {
+    const frag = String(input.title || "").trim().slice(0, 60);
+    if (!frag) return { ok: false, summary: humanize("Which calendar event was completed? Tell me a few words from its title.", opts), error: "no title" };
+    // Same stop-list refusal we use on complete_task (KT #261) — the LLM must
+    // pass a real proper-noun frag, not "meeting" or "the call".
+    if (isAllStopwords(frag)) {
+      return { ok: false, summary: humanize(`"${frag}" is too generic to single out a calendar event. Which one specifically?`, opts) };
+    }
+    // Look at events within a sensible window: anything from 14 days ago up to
+    // 1 day ahead. Past events are usually what's being closed; near-future
+    // catches "we just had the meeting".
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 86400_000).toISOString().slice(0, 10);
+    const oneDayAhead = new Date(Date.now() + 86400_000).toISOString().slice(0, 10);
+    const f = frag.toLowerCase();
+    const { data: rows } = await db
+      .from("calendar_events")
+      .select("id,title,starts_on,start_time,notes,kind,brand")
+      .gte("starts_on", fourteenDaysAgo)
+      .lte("starts_on", oneDayAhead)
+      .order("starts_on", { ascending: false })
+      .limit(40);
+    const all = (rows || []) as any[];
+    // Substring match first; if zero, two-word overlap fallback.
+    let hits = all.filter((e) => String(e.title || "").toLowerCase().includes(f));
+    if (!hits.length) {
+      const words = f.split(/\s+/).filter((w) => w.length >= 3);
+      const scored = all
+        .map((e) => ({ e, score: words.filter((w) => String(e.title || "").toLowerCase().includes(w)).length }))
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score);
+      const best = scored.length ? scored[0].score : 0;
+      if (best >= 2 || (best >= 1 && words.length === 1)) {
+        hits = scored.filter((x) => x.score === best).map((x) => x.e);
+      }
+    }
+    // Refuse to mark done one already stamped.
+    const open = hits.filter((e) => !String(e.notes || "").startsWith("[completed "));
+    if (!open.length) {
+      const titles = all.slice(0, 8).map((e) => `"${e.title}" (${e.starts_on})`).join(", ");
+      return { ok: false, summary: humanize(`I could not find an open calendar event matching "${frag}". Recent events: ${titles || "none in the last two weeks"}. Did you mean one of these, or is this on a task instead?`, opts) };
+    }
+    if (open.length > 1) {
+      return { ok: false, summary: humanize(`There are ${open.length} calendar events matching that: ${open.slice(0, 6).map((e) => `"${e.title}" (${e.starts_on})`).join(", ")}. Which one?`, opts) };
+    }
+    const e = open[0];
+    const note = String(input.note || "").trim().slice(0, 200);
+    const stampDate = new Date().toISOString().slice(0, 10);
+    const marker = note ? `[completed ${stampDate} Dubai: ${note}]` : `[completed ${stampDate} Dubai]`;
+    const newNotes = e.notes ? `${marker}\n${e.notes}` : marker;
+    await db.from("calendar_events").update({ notes: newNotes, updated_at: new Date().toISOString() }).eq("id", e.id);
+    await emit({ type: "calendar.event_completed", source: "agent:sasa", actor: ctx.operatorName || "Nur", subject_type: "calendar_event", subject_id: e.id, payload: { title: e.title, date: e.starts_on, note: note || null, via: "smart" } });
+    return { ok: true, summary: humanize(`Marked "${e.title}" as done${note ? `. Note: ${note}` : ""}.`, opts), affordance: { kind: "open", label: "Open calendar", href: "/calendar" }, detail: { event_id: e.id } };
   }
 
   return { ok: false, summary: "I do not have a tool for that yet.", error: "unknown action" };

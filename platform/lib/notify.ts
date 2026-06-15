@@ -22,6 +22,36 @@ function operatorKeys(): string[] {
   return (process.env.WHATSAPP_OPERATORS || "").split(",").map((x) => phoneKey(x)).filter(Boolean);
 }
 
+// QUIET HOURS (KT #288). On 2026-06-14 night Nur got 13 proactive pings
+// between 01:33 and 02:47 Dubai. Inbound conversations stay free at any hour
+// (those go through sendTextAndLog, not these surfaces), but every PROACTIVE
+// push must respect a no-disturb window. Defaults to 22:00 → 07:00 Asia/Dubai;
+// override per-deployment via QUIET_HOURS_START_DUBAI + QUIET_HOURS_END_DUBAI
+// (integer hour 0-23 each). The morning brief at ~09:00 picks up everything
+// that was deferred, so nothing is lost — only delayed to a humane hour.
+//
+// pushDailyBrief is exempted (IT IS the morning brief). pushIncident is
+// exempted (operators need ops alerts at any hour). pushCalendarAlert in mode
+// "now" is exempted (the start-of-meeting ping must fire at meeting time).
+function withinQuietHours(): boolean {
+  const startEnv = process.env.QUIET_HOURS_START_DUBAI;
+  const endEnv = process.env.QUIET_HOURS_END_DUBAI;
+  // Disable when explicitly set to empty.
+  if (startEnv === "" || endEnv === "") return false;
+  const start = Number.isFinite(Number(startEnv)) ? Number(startEnv) : 22;
+  const end = Number.isFinite(Number(endEnv)) ? Number(endEnv) : 7;
+  if (start < 0 || start > 23 || end < 0 || end > 23 || start === end) return false;
+  // Current hour in Asia/Dubai. Intl avoids DST issues (the UAE does not observe
+  // DST so this is a fixed +04:00, but Intl is the safe path for any future TZ).
+  const hour = Number(
+    new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: "Asia/Dubai" }).format(new Date()),
+  );
+  if (!Number.isFinite(hour)) return false;
+  // Wrap-around window (22 → 7): inside means hour >= start OR hour < end.
+  // Non-wrap window (e.g. 1 → 6): inside means hour >= start AND hour < end.
+  return start > end ? (hour >= start || hour < end) : (hour >= start && hour < end);
+}
+
 // Was an event of this type already emitted for this UUID subject within `mins`?
 // This is the burst guard: one urgent task pings once, not once per retry.
 // (subject_id is a uuid column, so this is only for real ids like task.id.)
@@ -50,8 +80,18 @@ export async function pushTaskAlert(
   db: any,
   task: { id: string | null; title: string; due_on?: string | null; priority?: string | null; assignee_id?: string | null },
   kind: AlertKind = "new",
-): Promise<{ pinged: string[]; deduped?: boolean }> {
+): Promise<{ pinged: string[]; deduped?: boolean; deferredQuietHours?: boolean }> {
   try {
+    // Quiet-hours gate (KT #288). Inbound conversation stays free; proactive
+    // task pings sleep until the next morning brief at ~09:00 Dubai. Emit a
+    // deferral event so observability sees the queueing without a send.
+    if (withinQuietHours()) {
+      await emit({
+        type: "task.alert_deferred_quiet_hours", source: "notify", actor: "system", subject_type: "task", subject_id: task.id,
+        payload: { kind, title: String(task.title || "").slice(0, 200), priority: task.priority || null, due_on: task.due_on || null },
+      }).catch(() => null);
+      return { pinged: [], deferredQuietHours: true };
+    }
     if (await pushedRecently(db, "task.alert_sent", task.id, kind === "escalation" ? 20 * 60 : 6 * 60)) {
       return { pinged: [], deduped: true };
     }
@@ -128,6 +168,17 @@ export async function pushTaskDigest(
   try {
     const list = (tasks || []).filter(Boolean);
     if (!list.length) return { pinged: [] };
+    // Quiet-hours gate (KT #288). Defer the whole digest as one batch — morning
+    // brief (pushDailyBrief at ~09:00) will surface the same items via LIST.
+    if (withinQuietHours()) {
+      for (const t of list) {
+        await emit({
+          type: "task.alert_deferred_quiet_hours", source: "notify", actor: "system", subject_type: "task", subject_id: t?.id || null,
+          payload: { kind: "new", digest: true, count: list.length, title: String(t?.title || "").slice(0, 200) },
+        }).catch(() => null);
+      }
+      return { pinged: [] };
+    }
     // N=1: reuse the single-task template exactly. Same body, same dedup, same
     // recipients. Guarantees no "you have 1 tasks" plural slip and no break of
     // anything that already works for the one-task case.
@@ -253,8 +304,17 @@ function ownerKeys(): string[] {
 export async function pushApprovalRequest(
   db: any,
   approval: { id: string | null; title?: string | null; kind?: string | null },
-): Promise<{ pinged: boolean; deduped?: boolean }> {
+): Promise<{ pinged: boolean; deduped?: boolean; deferredQuietHours?: boolean }> {
   try {
+    // Quiet-hours gate (KT #288). Approvals are time-sensitive but a 2am ping
+    // is not — the morning brief picks them up via the Needs You queue.
+    if (withinQuietHours()) {
+      await emit({
+        type: "approval.ping_deferred_quiet_hours", source: "notify", actor: "system", subject_type: "approval", subject_id: approval.id,
+        payload: { title: String(approval.title || approval.kind || "").slice(0, 150), kind: approval.kind || null },
+      }).catch(() => null);
+      return { pinged: false, deferredQuietHours: true };
+    }
     if (await pushedRecently(db, "approval.ping_sent", approval.id, 6 * 60)) return { pinged: false, deduped: true };
     const owners = ownerKeys();
     const opsKeys = operatorKeys();
@@ -287,8 +347,19 @@ export async function pushOperatorUpdate(
   name: string | null,
   text: string,
   opts?: { needsReply?: boolean; dev?: boolean },
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; deferredQuietHours?: boolean }> {
   try {
+    // Quiet-hours gate (KT #288). The free-form operator_update template was
+    // the surface that fired 13 times at Nur between 01:33 and 02:47 Dubai on
+    // 2026-06-14. Defer outside business hours. The {dev:true} branch is NOT
+    // gated (Taona testing on his own line at any hour).
+    if (!opts?.dev && withinQuietHours()) {
+      await emit({
+        type: "operator_update.deferred_quiet_hours", source: "notify", actor: "system", subject_type: "contact", subject_id: null,
+        payload: { to_last4: String(toWa).slice(-4), needsReply: !!opts?.needsReply, preview: String(text).slice(0, 160) },
+      }).catch(() => null);
+      return { ok: false, deferredQuietHours: true };
+    }
     const first = (name || "there").trim().split(/\s+/)[0] || "there";
     const body = String(text).replace(/\s+/g, " ").trim().slice(0, 900);
     const tmpl = opts?.needsReply ? "operator_request" : "operator_update";
@@ -315,10 +386,20 @@ export async function pushCalendarAlert(
   db: any,
   ev: { id: string | null; title: string; when: string; location?: string | null; kind?: string | null },
   mode: "added" | "now" = "added",
-): Promise<{ pinged: string[]; deduped?: boolean }> {
+): Promise<{ pinged: string[]; deduped?: boolean; deferredQuietHours?: boolean }> {
   try {
     if (mode === "now" && (await pushedRecently(db, "calendar.alert_sent", ev.id, 6 * 60))) {
       return { pinged: [], deduped: true };
+    }
+    // Quiet-hours gate (KT #288). "added" mode is a heads-up that can wait for
+    // morning. "now" mode is the start-of-event ping and MUST fire at meeting
+    // time regardless of hour — never gate it.
+    if (mode === "added" && withinQuietHours()) {
+      await emit({
+        type: "calendar.alert_deferred_quiet_hours", source: "notify", actor: "system", subject_type: "event", subject_id: ev.id,
+        payload: { title: String(ev.title || "").slice(0, 200), when: ev.when, kind: ev.kind || null },
+      }).catch(() => null);
+      return { pinged: [], deferredQuietHours: true };
     }
     const ops = operatorKeys();
     const { data: members } = await db.from("team_members").select("id,name,phone,status").limit(400);
