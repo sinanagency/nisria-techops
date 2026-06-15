@@ -972,7 +972,7 @@ function sasaTurnDedupSimilarity(a: string, b: string): number {
 // the voice for the WhatsApp caller (omit for the full-admin web console).
 // surface 'group' puts Sasa inside a team group: team-tier tools, a reply gate
 // (returns empty reply when it should stay silent), and the group system prompt.
-export async function runSasa(opts: { history?: SasaTurn[]; command: string; operatorName?: string; operatorRole?: "admin" | "team"; operatorRank?: "owner" | "founder" | "member" | null; surface?: "dm" | "group"; groupName?: string; speakerPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string; casesIntake?: boolean; parseTasksFired?: boolean; recentTaskActivity?: boolean }): Promise<SasaResult> {
+export async function runSasa(opts: { history?: SasaTurn[]; command: string; operatorName?: string; operatorRole?: "admin" | "team"; operatorRank?: "owner" | "founder" | "member" | null; surface?: "dm" | "group"; groupName?: string; speakerPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string; casesIntake?: boolean; parseTasksFired?: boolean; recentTaskActivity?: boolean; swipeAnchor?: { subject_type: string; subject_id: string; label?: string; quotedExcerpt?: string } | null }): Promise<SasaResult> {
   const db = admin();
   const inGroup = opts.surface === "group";
   // a group is team-tier regardless of who posts: no donor/finance in a group
@@ -1038,7 +1038,20 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   const SPLIT_MARKER = "What you know about Nisria";
   // Dynamic tail: agent-clock canonical block + the existing 06-09 clockLine.
   // Both contain HH:MM, both belong AFTER the cached prefix.
-  const clockLine = `\n\n${clockBlock()}\n\nCurrent clock: ${n.clock} (Asia/Dubai).`;
+  // Wall 1 of "fragment match without anchor" (2026-06-15): when the inbound
+  // was a WhatsApp swipe-reply, the worker resolves it to a subject and passes
+  // swipeAnchor here. We render it as a hard-wall block in the dynamic tail
+  // (per turn, so it never sits in the cached prefix) telling the model
+  // EXACTLY which task/event/donor the human is referring to. Mirrors the
+  // CALENDAR DISCIPLINE pattern above.
+  let anchorBlock = "";
+  if (opts.swipeAnchor && opts.swipeAnchor.subject_type && opts.swipeAnchor.subject_id) {
+    const a = opts.swipeAnchor;
+    const lab = a.label ? ` titled "${a.label}"` : "";
+    const ex = a.quotedExcerpt ? `\nQuoted message body: "${String(a.quotedExcerpt).slice(0, 200)}"` : "";
+    anchorBlock = `\n\nSWIPE-REPLY ANCHOR (HARD WALL): The human reply-quoted your prior message about ${a.subject_type} ${a.subject_id}${lab}.${ex}\nThis turn is a continuation of THAT thread. If the human says "done", "got it", "closed", "yes", "no", or any short verb-target phrase, you MUST resolve it against ${a.subject_type} ${a.subject_id} and NOT a different ${a.subject_type}. Targeting a different subject when an anchor is present is a hallucination, not a fuzzy-match.`;
+  }
+  const clockLine = `${anchorBlock}\n\n${clockBlock()}\n\nCurrent clock: ${n.clock} (Asia/Dubai).`;
   const systemForModel = splitForCache(system, clockLine, SPLIT_MARKER, {
     disabled: process.env.SASA_PROMPT_SPLIT === "0",
   });

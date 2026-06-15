@@ -685,6 +685,7 @@ CREATE TABLE public.messages (
   "external_id" text,
   "account" text,
   "sender_type" text,
+  "reply_to_external_id" text,
   CONSTRAINT "messages_pkey" PRIMARY KEY (id),
   CONSTRAINT "messages_contact_id_fkey" FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL,
   CONSTRAINT "messages_channel_check" CHECK ((channel = ANY (ARRAY['whatsapp'::text, 'email'::text])))
@@ -692,6 +693,7 @@ CREATE TABLE public.messages (
 CREATE INDEX idx_messages_contact ON public.messages USING btree (contact_id);
 CREATE INDEX idx_messages_status ON public.messages USING btree (status);
 CREATE UNIQUE INDEX uq_messages_external ON public.messages USING btree (external_id) WHERE (external_id IS NOT NULL);
+CREATE INDEX idx_messages_reply_to_external ON public.messages USING btree (reply_to_external_id) WHERE (reply_to_external_id IS NOT NULL);
 
 -- ===== table: org_profile =====
 CREATE TABLE public.org_profile (

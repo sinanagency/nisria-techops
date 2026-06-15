@@ -256,6 +256,44 @@ function isAllStopwords(frag: string | null | undefined): boolean {
   return tokens.length > 0 && tokens.every((w) => TASK_FRAG_STOPLIST.has(w));
 }
 
+// Wall 2 of "fragment match without anchor" (2026-06-15, KT #274 same-class).
+// When complete/reopen/update/delete_task resolves a candidate task whose
+// TITLE contains a team-member first-name, but the operator's most recent
+// inbound message names a DIFFERENT team-member first-name, refuse the write
+// and surface the disagreement. The 2026-06-15 17:xx "meeting taona done"
+// → closed "meeting with haneen" misroute lives here: the LLM dispatched a
+// title with the wrong name; the matcher matched exactly; the wall above
+// (TASK_FRAG_STOPLIST) doesn't trigger because the title isn't all stopwords.
+// Wall-at-primitive: every task-target write primitive calls this guard.
+async function discriminatorMismatch(db: any, ctx: { contactId?: string }, candidateTitle: string): Promise<{ ok: true } | { ok: false; expected: string; got: string }> {
+  try {
+    const titleLower = String(candidateTitle || "").toLowerCase();
+    const { data: tm } = await db.from("team_members").select("name").eq("status", "active");
+    const firstNames = ((tm || []) as any[])
+      .map((r) => String(r?.name || "").trim().toLowerCase().split(/\s+/)[0])
+      .filter((s) => s && s.length >= 3);
+    const nameRe = (n: string) => new RegExp(`(^|[^a-z])${n}([^a-z]|$)`, "i");
+    const namesInTitle = Array.from(new Set(firstNames.filter((n) => nameRe(n).test(titleLower))));
+    if (namesInTitle.length !== 1) return { ok: true };
+    if (!ctx.contactId) return { ok: true };
+    const { data: lastIn } = await db.from("messages")
+      .select("body")
+      .eq("contact_id", ctx.contactId)
+      .eq("direction", "in")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const userBody = String(((lastIn || []) as any[])[0]?.body || "").toLowerCase();
+    if (!userBody) return { ok: true };
+    const expected = namesInTitle[0];
+    if (nameRe(expected).test(userBody)) return { ok: true };
+    const userNamed = firstNames.filter((n) => n !== expected && nameRe(n).test(userBody));
+    if (userNamed.length === 0) return { ok: true };
+    return { ok: false, expected, got: userNamed[0] };
+  } catch {
+    return { ok: true };
+  }
+}
+
 // ===========================================================================
 // TOOL SCHEMAS — the contract Claude sees. READ tools first, then ACTION tools.
 // ===========================================================================
@@ -1268,6 +1306,13 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       }
     }
     const task = list[0];
+    // Wall 2: discriminator-name mismatch guard. Refuse if the resolved title
+    // names a team member the operator did not name in their last message.
+    const disc = await discriminatorMismatch(db, ctx, String(task.title || ""));
+    if (!disc.ok) {
+      await emit({ type: "sasa.discriminator_mismatch_refused", source: "agent:sasa", actor: ctx.operatorName || "operator", subject_type: "task", subject_id: task.id, payload: { tool: "complete_task", expected: disc.expected, got: disc.got, title: task.title, frag } }).catch(() => null);
+      return { ok: false, summary: humanize(`I cannot close "${task.title}" from your message about ${disc.got}. Those name different people. Tell me which task you meant.`, opts) };
+    }
     const completeUpdate: Record<string, any> = { status: "done", updated_at: new Date().toISOString() };
     if (reason) completeUpdate.reason = reason;
     await db.from("tasks").update(completeUpdate).eq("id", task.id);
@@ -1351,6 +1396,12 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       else return { ok: false, summary: humanize(`More than one completed task could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) };
     }
     const task = list[0];
+    // Wall 2: discriminator-name mismatch guard (mirror of complete_task).
+    const disc = await discriminatorMismatch(db, ctx, String(task.title || ""));
+    if (!disc.ok) {
+      await emit({ type: "sasa.discriminator_mismatch_refused", source: "agent:sasa", actor: ctx.operatorName || "operator", subject_type: "task", subject_id: task.id, payload: { tool: "reopen_task", expected: disc.expected, got: disc.got, title: task.title, frag } }).catch(() => null);
+      return { ok: false, summary: humanize(`I cannot reopen "${task.title}" from your message about ${disc.got}. Those name different people. Tell me which task you meant.`, opts) };
+    }
     const reopenUpdate: Record<string, any> = { status: "todo", updated_at: new Date().toISOString() };
     if (reason) reopenUpdate.reason = reason;
     await db.from("tasks").update(reopenUpdate).eq("id", task.id);
@@ -2013,6 +2064,12 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!list.length) return { ok: false, summary: humanize(`I could not find an open task matching "${frag}".`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few tasks match: ${list.map((t) => `"${t.title}"`).join(", ")}. Which one?`, opts) };
     const t = list[0];
+    // Wall 2: discriminator-name mismatch guard (mirror of complete_task).
+    const discU = await discriminatorMismatch(db, ctx, String(t.title || ""));
+    if (!discU.ok) {
+      await emit({ type: "sasa.discriminator_mismatch_refused", source: "agent:sasa", actor: ctx.operatorName || "operator", subject_type: "task", subject_id: t.id, payload: { tool: "update_task", expected: discU.expected, got: discU.got, title: t.title, frag } }).catch(() => null);
+      return { ok: false, summary: humanize(`I cannot update "${t.title}" from your message about ${discU.got}. Those name different people. Tell me which task you meant.`, opts) };
+    }
     const patch: any = { updated_at: new Date().toISOString() };
     const changed: string[] = [];
     if (input.assignee_name) {
@@ -2833,6 +2890,13 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!cands.length) return { ok: false, summary: humanize("I could not find that task to remove.", opts) };
     if (cands.length > 1) return { ok: false, summary: humanize(`Which task: ${cands.slice(0, 5).map((t) => `"${t.title}"`).join(", ")}?`, opts), detail: { ambiguous: true } };
     const t = cands[0];
+    // Wall 2: discriminator-name mismatch guard. Delete is irreversible so this
+    // wall is doubly important here.
+    const discD = await discriminatorMismatch(db, ctx, String(t.title || ""));
+    if (!discD.ok) {
+      await emit({ type: "sasa.discriminator_mismatch_refused", source: "agent:sasa", actor: ctx.operatorName || "operator", subject_type: "task", subject_id: t.id, payload: { tool: "delete_task", expected: discD.expected, got: discD.got, title: t.title, frag } }).catch(() => null);
+      return { ok: false, summary: humanize(`I will not delete "${t.title}" from your message about ${discD.got}. Those name different people. Tell me which task you meant.`, opts) };
+    }
     await db.from("tasks").delete().eq("id", t.id);
     await emit({ type: "task.deleted", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: t.id, payload: t });
     return { ok: true, summary: humanize(`Removed the task "${t.title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { deleted_id: t.id } };

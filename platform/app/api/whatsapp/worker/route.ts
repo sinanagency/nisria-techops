@@ -75,6 +75,12 @@ async function processJob(db: any, job: any): Promise<void> {
   const mediaName: string | null = p.media_name || null;
   const waMsgId: string | null = p.wa_message_id || null;
   const msgType: string = p.msg_type || "text";
+  // Swipe-to-reply anchor (Wall 1 of "fragment match without anchor"). When the
+  // user reply-quoted a prior Sasa message, the webhook captured its wamid into
+  // p.reply_to_external_id. We resolve it to a subject at turn-time (lazy, so
+  // the webhook hot path stays a single insert) and feed the result into the
+  // LLM turn below.
+  const replyToExternalId: string | null = p.reply_to_external_id ? String(p.reply_to_external_id) : null;
   if (!from || (!text && !mediaId)) { await markJobDone(job.id); return; }
 
   // ACCESS CONTROL (tiered). The 727 answers:
@@ -1011,12 +1017,67 @@ async function processJob(db: any, job: any): Promise<void> {
   const slowTimer2 = setTimeout(() => { reassure("Still working on this, it is a big one."); }, 120000);
   const stopTimers = () => { settled = true; if (keepAlive) clearInterval(keepAlive); clearTimeout(slowTimer); clearTimeout(slowTimer2); };
 
+  // Swipe-to-reply anchor resolution. If the inbound was a reply-quote, look up
+  // the original Sasa outbound row (messages.external_id is uniquely indexed),
+  // then find the most recent whatsapp.message_out event for that outbound to
+  // recover its subject_type+subject_id (tasks, events, donors, etc.). If we
+  // find one, we synthesize an anchor note + structured subject and feed both
+  // into the LLM turn so the matcher never has to fuzz on "done"/"got it" when
+  // Nur explicitly pointed at a specific message.
+  let swipeAnchorNote = "";
+  let swipeAnchorSubject: { subject_type: string; subject_id: string; label?: string } | null = null;
+  if (replyToExternalId) {
+    try {
+      const { data: quoted } = await db
+        .from("messages")
+        .select("id,body,external_id,direction,created_at")
+        .eq("external_id", replyToExternalId)
+        .limit(1);
+      const quotedRow = (quoted || [])[0] as any;
+      if (quotedRow) {
+        const { data: evRows } = await db
+          .from("events")
+          .select("subject_type,subject_id,payload,created_at")
+          .eq("type", "whatsapp.message_out")
+          .eq("source", "agent:sasa")
+          .gte("created_at", new Date(new Date(quotedRow.created_at).getTime() - 30000).toISOString())
+          .lte("created_at", new Date(new Date(quotedRow.created_at).getTime() + 30000).toISOString())
+          .order("created_at", { ascending: false })
+          .limit(5);
+        const ev = ((evRows || []) as any[]).find((e) =>
+          e?.subject_type && e?.subject_id && e.subject_type !== "contact"
+        ) || null;
+        if (ev) {
+          swipeAnchorSubject = { subject_type: String(ev.subject_type), subject_id: String(ev.subject_id) };
+          if (ev.subject_type === "task") {
+            const { data: tRow } = await db.from("tasks").select("title,status").eq("id", ev.subject_id).limit(1);
+            const tt = (tRow || [])[0] as any;
+            if (tt) swipeAnchorSubject.label = String(tt.title || "");
+          } else if (ev.subject_type === "event") {
+            const { data: eRow } = await db.from("events").select("payload").eq("id", ev.subject_id).limit(1);
+            const lbl = ((eRow || [])[0] as any)?.payload?.title;
+            if (lbl) swipeAnchorSubject.label = String(lbl);
+          }
+        }
+        const quotedExcerpt = String(quotedRow.body || "").replace(/\s+/g, " ").slice(0, 200);
+        if (swipeAnchorSubject) {
+          swipeAnchorNote = `swipe_reply_anchor: Nur reply-quoted your prior ${swipeAnchorSubject.subject_type} message "${quotedExcerpt}"${swipeAnchorSubject.label ? ` (${swipeAnchorSubject.subject_type}: ${swipeAnchorSubject.label})` : ""}. Treat THIS turn as continuation of THAT thread. Do not fuzzy-match a different subject.`;
+        } else if (quotedExcerpt) {
+          swipeAnchorNote = `swipe_reply_anchor: Nur reply-quoted your prior message "${quotedExcerpt}". Treat THIS turn as continuation of THAT thread.`;
+        }
+        try { await emit({ type: "sasa.swipe_reply_resolved", source: "agent:sasa", actor: name || from, subject_type: swipeAnchorSubject?.subject_type || "contact", subject_id: swipeAnchorSubject?.subject_id || contactId || undefined, payload: { wa_message_id: waMsgId, quoted_wa_id: replyToExternalId, resolved: !!swipeAnchorSubject } }); } catch {}
+      }
+    } catch {}
+  }
+
   let reply: string | undefined;
   try {
     // Inject the parseTasks context note (if any) so the model narrates the
     // task that code already wrote rather than re-asking or re-trying to
-    // create one. The original body stays in `command` verbatim.
-    const cmdForBrain = parsedContextNote ? `${command}\n\n[system: ${parsedContextNote}]` : command;
+    // create one. The original body stays in `command` verbatim. We also
+    // inject the swipe-reply anchor note when present (Wall 1).
+    const systemNotes = [parsedContextNote, swipeAnchorNote].filter(Boolean).join("\n");
+    const cmdForBrain = systemNotes ? `${command}\n\n[system: ${systemNotes}]` : command;
     // v1.3.2: also flag recent task activity (within 5 min) for THIS contact.
     // Catches follow-up turns where the user is asking about something Sasa
     // just did in a previous turn (e.g. "whats the note u added?"). Without
@@ -1045,12 +1106,15 @@ async function processJob(db: any, job: any): Promise<void> {
     // the KT #195 hole: the harness fires real webhook payloads at prod, so
     // process-env SASA_SANDBOX_MODE doesn't help — the isolation has to come
     // from the message itself.
+    const swipeAnchorOpt = swipeAnchorSubject
+      ? { subject_type: swipeAnchorSubject.subject_type, subject_id: swipeAnchorSubject.subject_id, label: swipeAnchorSubject.label, quotedExcerpt: swipeAnchorNote ? swipeAnchorNote.split('"')[1] : undefined }
+      : null;
     const runner = isHarnessMessageId(waMsgId)
-      ? () => runSasa({ history, command: cmdForBrain, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote, recentTaskActivity })
+      ? () => runSasa({ history, command: cmdForBrain, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote, recentTaskActivity, swipeAnchor: swipeAnchorOpt })
       : null;
     var sasaResult = runner
       ? await (withSandbox(runner) as Promise<Awaited<ReturnType<typeof runSasa>>>)
-      : await runSasa({ history, command: cmdForBrain, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote, recentTaskActivity });
+      : await runSasa({ history, command: cmdForBrain, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote, recentTaskActivity, swipeAnchor: swipeAnchorOpt });
     reply = sasaResult.reply;
   } catch (e: any) {
     // A REAL backend failure (Claude API error, tool/DB throw). This is the only

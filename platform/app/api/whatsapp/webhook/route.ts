@@ -108,6 +108,13 @@ export async function POST(req: NextRequest) {
           // so route both through.
           const reactionTargetId: string | null = m.type === "reaction" && m.reaction?.message_id ? String(m.reaction.message_id) : null;
           const reactionEmoji: string | null = m.type === "reaction" && m.reaction?.emoji ? String(m.reaction.emoji) : null;
+          // Swipe-to-reply anchor (WhatsApp Cloud API). When the user reply-quotes
+          // a specific prior message, Meta includes messages[].context.id = the
+          // wamid of the quoted message. We persist it on the inbound row and
+          // thread it to the worker so the LLM turn gets anchored to the same
+          // subject Nur was pointing at (no fuzzy fragment match for "done",
+          // "got it", or any partial verb-target phrase).
+          const replyToExternalId: string | null = m.context?.id ? String(m.context.id) : null;
           // Show the filename for a document (so the thread reads "STP Report.pdf"
           // not "[document]"); fall back to the bare type tag for other media.
           const body = caption || mediaName || (m.type === "reaction" && reactionEmoji ? reactionEmoji : (m.type && m.type !== "text" ? `[${m.type}]` : ""));
@@ -123,6 +130,7 @@ export async function POST(req: NextRequest) {
             account: "whatsapp",
             external_id: waMsgId,
             contact_id: contactId,
+            reply_to_external_id: replyToExternalId,
           });
           // Mirror inbound into Chatwoot (Path B, read-only). Best-effort.
           try {
@@ -154,6 +162,7 @@ export async function POST(req: NextRequest) {
               from, name: contactName, text: reactionEmoji || caption, wa_message_id: waMsgId, contact_id: contactId,
               msg_type: m.type, media_id: mediaId, media_mime: mediaMime, media_name: mediaName,
               reaction_target_id: reactionTargetId, reaction_emoji: reactionEmoji,
+              reply_to_external_id: replyToExternalId,
             });
             shouldTrigger = true;
           }
