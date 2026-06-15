@@ -1847,10 +1847,16 @@ a.trio-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md, 0 
 .lanestrip::-webkit-scrollbar { height: 8px; }
 .lanestrip::-webkit-scrollbar-thumb { background: var(--line-2, rgba(0,0,0,.14)); border-radius: 999px; }
 .lanecard {
-  flex: 0 0 280px;
-  min-width: 280px;
-  max-width: 280px;
+  /* One-card-per-lane viewport: each card fills the lane's content box so the
+     mandatory scroll-snap reveals exactly one card at a time. Replaces the
+     fixed 280px width (Taona feedback 2026-06-15: "viewport must match the
+     size of the cards, each scroll reveals a new card"). Mobile keeps its own
+     76vw override below so the next card peeks at the edge. */
+  flex: 0 0 100%;
+  min-width: 0;
+  max-width: 100%;
   scroll-snap-align: start;
+  scroll-snap-stop: always;
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
