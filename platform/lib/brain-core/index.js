@@ -11,4 +11,7 @@ export { splitForCache } from "./prompt-cache.js";
 export { runClaude } from "./claude-client.js";
 export { isAmbiguousReference, isCapabilityQuestion, isHedge, isHedgeLoop } from "./intent-detect.js";
 export { makeCompletionGuard, makeSendGuard, makeStagingGuard, makeSympathyGuard } from "./honesty-guards.js";
+// v0.6 (2026-06-16): schema-drift detector. See schema-guard.ts header for
+// the 2026-06-15 Sasa cascade that motivated this.
+export { checkSchema, formatSchemaResult } from "./schema-guard.js";
 //# sourceMappingURL=index.js.map

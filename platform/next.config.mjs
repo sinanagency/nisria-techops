@@ -6,6 +6,9 @@ const nextConfig = {
     // them breaks the launch. Marking them external makes Next trace them as raw
     // node_modules on the serverless function (the supported pattern on Vercel).
     serverComponentsExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
+    // Boot-time schema-drift guard (KT #295). The hook runs once per server
+    // process and probes the schema-manifest against the live DB.
+    instrumentationHook: true,
   },
 };
 
