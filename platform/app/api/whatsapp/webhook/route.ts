@@ -139,9 +139,28 @@ export async function POST(req: NextRequest) {
           } catch { /* never block */ }
           if (insErr) {
             if (/duplicate key|unique/i.test(insErr.message || "")) continue; // Meta retry: already owned
-            // A non-duplicate insert failure must not lose the inbound: surface
-            // it and still attempt the enqueue path below (worker resolves the
-            // message row lazily and tolerates its absence).
+            // SCHEMA DRIFT (2026-06-15 cascade lesson): a missing column / table
+            // / function is NOT a transient failure. The worker resolves the
+            // message row lazily, so failing OPEN here means the agent runs the
+            // turn on STALE history (its view of the conversation freezes at the
+            // last successfully persisted inbound). On 2026-06-15 23:07-23:19,
+            // 11 swipe-reply inbounds hit 42703 reply_to_external_id-missing,
+            // ingress fail-opened, and the agent emitted 12 off-topic Mark
+            // replies while the operator typed "I told you 10 times" + 😫. Hard
+            // refuse to enqueue when the error code is a schema-class SQLSTATE.
+            // Transient (timeout, network) errors keep the legacy lossless path
+            // because the worker can recover from those without a stale-history
+            // failure mode.
+            const pgCode = String((insErr as any).code || "");
+            const SCHEMA_DRIFT_CODES = /^(42703|42P01|42883|42704|23502|42P10)$/;
+            if (SCHEMA_DRIFT_CODES.test(pgCode)) {
+              try { await emit({ type: "whatsapp.schema_drift", source: "whatsapp", actor: "system", subject_type: "contact", subject_id: contactId, payload: { stage: "ingress_insert", pg_code: pgCode, error: String(insErr.message || insErr).slice(0, 300), wa_message_id: waMsgId, from } }); } catch {}
+              try {
+                const { pushIncident } = await import("@/lib/notify");
+                await pushIncident("whatsapp.ingress", `Schema drift on messages insert: inbound from ${from} dropped, pg_code=${pgCode} ${String(insErr.message).slice(0, 200)}. Apply the missing migration.`);
+              } catch {}
+              continue; // do NOT enqueue worker; do NOT emit message_in
+            }
             try { await emit({ type: "whatsapp.error", source: "whatsapp", actor: "system", payload: { stage: "ingress_insert", error: String(insErr.message || insErr).slice(0, 240), wa_message_id: waMsgId } }); } catch {}
           }
 
