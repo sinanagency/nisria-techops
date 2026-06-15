@@ -112,3 +112,62 @@ export async function deleteTask(formData: FormData) {
   revalidatePath("/tasks");
   revalidatePath("/");
 }
+
+// EDIT a task (owner power). Nur can fix the title, description, assignee, priority,
+// or due date on a task the bot logged. Only fields she sends are changed, and this
+// only ever touches a row that already exists (no insert path), mirroring editCase.
+export async function editTask(fd: FormData) {
+  const id = String(fd.get("id") || "");
+  if (!id) return;
+  const db = admin();
+  const { data: row } = await db
+    .from("tasks")
+    .select("id,title,assignee_id,priority,due_on,status")
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) return;
+
+  const patch: any = {};
+  if (fd.has("title")) {
+    const t = String(fd.get("title") || "").trim().slice(0, 200);
+    if (t) patch.title = t;
+  }
+  if (fd.has("description")) {
+    const d = String(fd.get("description") || "").trim().slice(0, 2000);
+    patch.description = d || null;
+  }
+  if (fd.has("assignee_id")) {
+    const raw = String(fd.get("assignee_id") || "");
+    if (raw === "") {
+      patch.assignee_id = null;
+    } else {
+      const { data: member } = await db.from("team_members").select("id").eq("id", raw).maybeSingle();
+      if (member) patch.assignee_id = raw;
+    }
+  }
+  if (fd.has("priority")) {
+    const p = String(fd.get("priority") || "");
+    if (["low", "medium", "high"].includes(p)) patch.priority = p;
+  }
+  if (fd.has("due_on")) {
+    const raw = String(fd.get("due_on") || "");
+    if (raw === "") {
+      patch.due_on = null;
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      patch.due_on = raw;
+    }
+  }
+  if (Object.keys(patch).length === 0) return;
+
+  await db.from("tasks").update(patch).eq("id", id);
+  await emit({
+    type: "task.edited",
+    source: "tasks",
+    actor: getCurrentUser()?.name || "Nur",
+    subject_type: "task",
+    subject_id: id,
+    payload: { title: (row as any).title, fields: Object.keys(patch) },
+  });
+  revalidatePath("/tasks");
+  revalidatePath("/");
+}

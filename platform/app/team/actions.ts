@@ -10,11 +10,65 @@ import { sendEmail } from "../../lib/email";
 import { emit } from "../../lib/events";
 import { getCurrentUser } from "../../lib/auth";
 import { notifyTaskCompleted } from "../../lib/notify";
+import { phoneKey } from "../../lib/whatsapp";
 import { revalidatePath } from "next/cache";
 
 const MEMBER_TYPES = ["staff", "tailor", "volunteer", "contractor"];
 const PAY_TYPES = ["monthly", "piece", "stipend", "hourly", "none"];
 const STATUSES = ["active", "paused", "exited", "invited", "inactive"];
+
+// --- dedupe guard helpers ---------------------------------------------------
+// Why app-level and not a SQL UNIQUE: legitimate same-name cases exist (two
+// active members genuinely sharing a first name; a successor with the same
+// name after an attrition). The DB constraint would refuse those rows. The
+// app-level check refuses *accidental* duplicates against the ACTIVE roster
+// only (exited members are ignored — a successor is allowed).
+function normName(s: string | null | undefined): string {
+  return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+function normEmail(s: string | null | undefined): string {
+  return (s || "").toLowerCase().trim();
+}
+function memberTypeLabel(t: string | null | undefined): string {
+  switch ((t || "").toLowerCase()) {
+    case "tailor": return "tailor";
+    case "volunteer": return "volunteer";
+    case "contractor": return "contractor";
+    default: return "staff";
+  }
+}
+// Returns an error message if the (name, email, phone) collide with an active
+// team_member row, else null. excludeId lets updateMember skip the row being
+// edited. Only active rows are checked: exited people are not blockers.
+async function checkDuplicateActive(
+  candidate: { name?: string | null; email?: string | null; phone?: string | null },
+  excludeId?: string | null,
+): Promise<string | null> {
+  const nameNorm = normName(candidate.name);
+  const emailNorm = normEmail(candidate.email);
+  const phoneNorm = candidate.phone ? phoneKey(candidate.phone) : "";
+  if (!nameNorm && !emailNorm && !phoneNorm) return null;
+
+  const { data } = await admin()
+    .from("team_members")
+    .select("id,name,email,phone,member_type,status")
+    .eq("status", "active");
+  const rows = (data || []) as any[];
+
+  for (const r of rows) {
+    if (excludeId && r.id === excludeId) continue;
+    if (nameNorm && normName(r.name) === nameNorm) {
+      return `A team member named '${r.name}' already exists (active, ${memberTypeLabel(r.member_type)}). If this is a different person, add a distinguishing surname or middle name.`;
+    }
+    if (emailNorm && normEmail(r.email) === emailNorm) {
+      return `Email '${r.email}' is already on '${r.name}' (active, ${memberTypeLabel(r.member_type)}). One email per person.`;
+    }
+    if (phoneNorm && r.phone && phoneKey(r.phone) === phoneNorm) {
+      return `Phone '${r.phone}' is already on '${r.name}' (active, ${memberTypeLabel(r.member_type)}). One number per person.`;
+    }
+  }
+  return null;
+}
 
 // Coerce a form value to a trimmed string or null.
 function s(fd: FormData, k: string): string | null {
@@ -69,6 +123,10 @@ export async function addMember(fd: FormData) {
     status: "active",
     activated: false,
   };
+
+  // App-level dedupe guard against the ACTIVE roster. See helper for rationale.
+  const dupe = await checkDuplicateActive({ name: row.name, email: row.email, phone: row.phone });
+  if (dupe) throw new Error(dupe);
 
   const { data: member } = await admin().from("team_members").insert(row).select().single();
 
@@ -129,6 +187,33 @@ export async function updateMember(fd: FormData) {
   };
   // drop undefined so we never clobber name/member_type with null
   Object.keys(patch).forEach((k) => patch[k] === undefined && delete patch[k]);
+
+  // App-level dedupe guard: only fire if name/email/phone is in this patch AND
+  // actually changes vs the existing row. Skip when the operator is only
+  // editing role/pay/notes etc.
+  const touchesIdentity = ["name", "email", "phone"].some((k) => k in patch);
+  if (touchesIdentity) {
+    const { data: existing } = await admin()
+      .from("team_members")
+      .select("name,email,phone")
+      .eq("id", id)
+      .maybeSingle();
+    const cur: any = existing || {};
+    const nextName = "name" in patch ? patch.name : cur.name;
+    const nextEmail = "email" in patch ? patch.email : cur.email;
+    const nextPhone = "phone" in patch ? patch.phone : cur.phone;
+    const identityChanged =
+      ("name" in patch && normName(patch.name) !== normName(cur.name)) ||
+      ("email" in patch && normEmail(patch.email) !== normEmail(cur.email)) ||
+      ("phone" in patch && phoneKey(patch.phone || "") !== phoneKey(cur.phone || ""));
+    if (identityChanged) {
+      const dupe = await checkDuplicateActive(
+        { name: nextName, email: nextEmail, phone: nextPhone },
+        id,
+      );
+      if (dupe) throw new Error(dupe);
+    }
+  }
 
   await admin().from("team_members").update(patch).eq("id", id);
 

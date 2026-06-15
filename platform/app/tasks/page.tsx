@@ -5,7 +5,7 @@ import { admin, date } from "../../lib/supabase-admin";
 import { getCurrentUser } from "../../lib/auth";
 import { getCurrentTeamMember } from "../../lib/profile";
 import DispatchBox from "../../components/DispatchBox";
-import DeleteTaskButton from "../../components/DeleteTaskButton";
+import TaskManage from "../../components/TaskManage";
 import { setTaskStatus } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +21,9 @@ export default async function Tasks({ searchParams }: { searchParams?: { mine?: 
   const db = admin();
   const { data } = await db.from("tasks").select("*,assignee:team_members!tasks_assignee_id_fkey(name)").order("created_at", { ascending: false }).limit(300);
   let tasks = data || [];
+
+  const { data: teamRows } = await db.from("team_members").select("id,name").eq("status", "active").order("name");
+  const team = (teamRows || []) as { id: string; name: string }[];
 
   // Personal lens: keep full visibility, just filter the view to what's mine,
   // either assigned to my profile (reliable team_member id) or created by me.
@@ -108,7 +111,7 @@ export default async function Tasks({ searchParams }: { searchParams?: { mine?: 
                         )}
                       </div>
                       <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end", gap: 6 }}>
-                        <DeleteTaskButton id={t.id} title={t.title} />
+                        <TaskManage t={t} team={team} />
                         <form action={setTaskStatus}>
                           <input type="hidden" name="id" value={t.id} />
                           <input type="hidden" name="status" value={col.key === "done" ? "todo" : col.key === "todo" ? "in_progress" : "done"} />

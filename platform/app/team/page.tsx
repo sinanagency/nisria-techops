@@ -3,6 +3,7 @@ import { Badge, Stat } from "../../components/ui";
 import { admin } from "../../lib/supabase-admin";
 import TeamPeek from "../../components/TeamPeek";
 import TeamAdd from "../../components/TeamAdd";
+import TeamDuplicateWarnings, { type DuplicateWarning } from "../../components/TeamDuplicateWarnings";
 import TabbedPane, { type TabbedTab } from "../../components/TabbedPane";
 import { Users } from "lucide-react";
 
@@ -70,8 +71,76 @@ export default async function Team({
 
   const sub = `${headcount} ${headcount === 1 ? "person" : "people"} · who does what, how long`;
 
+  // Possible-duplicates panel, derived only from the already-fetched roster.
+  // The app-level guard in actions.ts blocks NEW duplicates; this panel surfaces
+  // legacy / soft duplicates so Nur knows the AI will ask "which one?" when she
+  // says just a first name. Three classes:
+  //   1. Same first-name token across 2+ active members (the Lucy/Lucy case).
+  //   2. Same full name across 2+ active members (legacy only — refuse-on-create
+  //      blocks new ones).
+  //   3. Active members with bot_access=true but no email/phone (Sasa can't
+  //      reach them).
+  const activeRows = all.filter((m) => (m.status || "active") === "active");
+  const warnings: DuplicateWarning[] = [];
+
+  const normNameTeam = (s: any) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const firstTokenTeam = (s: any) => normNameTeam(s).split(" ")[0] || "";
+
+  // class 1: shared first name on active roster
+  const byFirst: Record<string, any[]> = {};
+  for (const m of activeRows) {
+    const f = firstTokenTeam(m.name);
+    if (!f) continue;
+    (byFirst[f] ||= []).push(m);
+  }
+  for (const f of Object.keys(byFirst).sort()) {
+    const group = byFirst[f];
+    if (group.length < 2) continue;
+    const display = String(group[0].name || "").split(/\s+/)[0];
+    warnings.push({
+      kind: "shared_first_name",
+      severity: "info",
+      message: `First name '${display}' is shared by ${group.length} active members — the AI will ask which one when you say just '${display}'.`,
+      members: group.map((m) => ({ id: m.id, name: m.name })),
+    });
+  }
+
+  // class 2: exact full-name collision on active roster (legacy only)
+  const byFull: Record<string, any[]> = {};
+  for (const m of activeRows) {
+    const k = normNameTeam(m.name);
+    if (!k) continue;
+    (byFull[k] ||= []).push(m);
+  }
+  for (const k of Object.keys(byFull).sort()) {
+    const group = byFull[k];
+    if (group.length < 2) continue;
+    warnings.push({
+      kind: "duplicate_full_name",
+      severity: "warn",
+      message: `${group.length} active members share the exact name '${group[0].name}'. Add a distinguishing surname or middle name to one of them.`,
+      members: group.map((m) => ({ id: m.id, name: m.name })),
+    });
+  }
+
+  // class 3: bot_access on, no contact channel
+  for (const m of activeRows) {
+    if (!m.bot_access) continue;
+    const hasEmail = !!(m.email && String(m.email).trim());
+    const hasPhone = !!(m.phone && String(m.phone).trim());
+    if (hasEmail || hasPhone) continue;
+    warnings.push({
+      kind: "bot_access_no_channel",
+      severity: "warn",
+      message: `${m.name} has bot access on but no email or phone — Sasa can't reach them.`,
+      members: [{ id: m.id, name: m.name }],
+    });
+  }
+
   return (
     <Shell title="Team" sub={sub} action={<TeamAdd />}>
+      {warnings.length > 0 && <TeamDuplicateWarnings warnings={warnings} />}
+
       {/* summary: headcount-led, no fabricated payroll total */}
       <div className="grid cols-3" style={{ marginBottom: 16 }}>
         <Stat label="People" value={headcount} delta={`${activeCount} active`} />
