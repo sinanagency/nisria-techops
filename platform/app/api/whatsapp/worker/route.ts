@@ -125,9 +125,32 @@ async function processJob(db: any, job: any): Promise<void> {
     if (meetingLink) {
       const titleFromText = (text || "").replace(meetingLink, "").trim().slice(0, 120) || "Meeting";
       const displayName = opRank === "owner" ? "Digital Taona" : "Digital Nur";
-      const dispatch = await dispatchMeetingBot({ link: meetingLink, title: titleFromText, displayName });
+      // Extract scheduled time from text like "at 8:15 PM today" or "tomorrow at 3pm"
+      const nowLocal = new Date();
+      const dubaiOffset = 4 * 60 * 60 * 1000;
+      const nowDubai = new Date(nowLocal.getTime() + dubaiOffset);
+      const timeMatch = (text || "").match(/(?:at|for)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(today|tomorrow)?/i);
+      let scheduledAt;
+      if (timeMatch) {
+        let hour = parseInt(timeMatch[1]);
+        const min = parseInt(timeMatch[2] || "0");
+        const ampm = timeMatch[3].toLowerCase();
+        const day = (timeMatch[4] || "today").toLowerCase();
+        if (ampm === "pm" && hour < 12) hour += 12;
+        if (ampm === "am" && hour === 12) hour = 0;
+        const target = new Date(nowDubai);
+        if (day === "tomorrow") target.setDate(target.getDate() + 1);
+        target.setHours(hour, min, 0, 0);
+        const targetDubai = target.getTime();
+        if (targetDubai > Date.now() + 60_000) {
+          scheduledAt = new Date(targetDubai - dubaiOffset).toISOString();
+        }
+      }
+      const dispatch = await dispatchMeetingBot({ link: meetingLink, title: titleFromText, scheduledAt, displayName });
       const reply = dispatch.ok
-        ? `On it. I'm sending the notetaker to that meeting now as ${displayName}. I will message you here with the summary and your action items when the room closes.`
+        ? scheduledAt
+          ? `On it. Digital Nur will join that meeting when it starts and send you the notes here.`
+          : `On it. I'm sending the notetaker to that meeting now as ${displayName}. I will message you here with the summary and your action items when the room closes.`
         : `I tried to dispatch the notetaker but the service returned: ${dispatch.error}. I will save the link, you can ask me to retry.`;
       await sendTextAndLog(db, from, reply, { contactId, handledBy: "sasa", dev: opRank === "owner" ? true : undefined, trace_id: traceId });
       await markJobDone(job.id);
