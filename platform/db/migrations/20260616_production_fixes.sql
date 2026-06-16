@@ -1,7 +1,8 @@
 -- PRODUCTION FIXES: pending_actions table, constraints, indexes, RLS
 -- Applied: 2026-06-16
 
--- 1. pending_actions table (was created manually, never in migrations)
+-- 1. pending_actions table (was created manually, never in migrations).
+-- DO block ensures constraints are added even if table already exists.
 CREATE TABLE IF NOT EXISTS public.pending_actions (
   id uuid DEFAULT gen_random_uuid() NOT NULL,
   contact_id uuid,
@@ -11,10 +12,17 @@ CREATE TABLE IF NOT EXISTS public.pending_actions (
   status text NOT NULL DEFAULT 'awaiting_confirm'::text,
   created_at timestamp with time zone DEFAULT now() NOT NULL,
   resolved_at timestamp with time zone,
-  CONSTRAINT pending_actions_pkey PRIMARY KEY (id),
-  CONSTRAINT pending_actions_kind_check CHECK (kind = ANY (ARRAY['record_payment', 'bank_import', 'parsed_task_from_group', 'case_to_approve', 'task_cleanup'])),
-  CONSTRAINT pending_actions_status_check CHECK (status = ANY (ARRAY['awaiting_confirm', 'awaiting_review', 'committed', 'superseded', 'cancelled']))
+  CONSTRAINT pending_actions_pkey PRIMARY KEY (id)
 );
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pending_actions_kind_check') THEN
+    ALTER TABLE public.pending_actions ADD CONSTRAINT pending_actions_kind_check CHECK (kind = ANY (ARRAY['record_payment', 'bank_import', 'parsed_task_from_group', 'case_to_approve', 'task_cleanup']));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pending_actions_status_check') THEN
+    ALTER TABLE public.pending_actions ADD CONSTRAINT pending_actions_status_check CHECK (status = ANY (ARRAY['awaiting_confirm', 'awaiting_review', 'committed', 'superseded', 'cancelled']));
+  END IF;
+END $$;
 
 -- 2. contacts unique constraint (prevents duplicate contacts by phone+channel)
 CREATE UNIQUE INDEX IF NOT EXISTS contacts_phone_channel_idx ON public.contacts (phone, channel) WHERE phone IS NOT NULL;

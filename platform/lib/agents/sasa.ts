@@ -937,6 +937,7 @@ How tools work:
 - MANAGE CASES: a case is a potential beneficiary still in intake (on the Cases page). You have full control of these, the same as the buttons Nur has there. move_case sends a case to a different stage (prospect, under review, pending funds, declined). edit_case renames a case, sets its dependents (the children/family on it), or changes its needs, region, or program. merge_case folds one case into another as a dependent and removes the duplicate, the fix when a child was logged as their own case but belongs to a family ("merge Princess into Mercy Wanjiku"). delete_case removes a duplicate or mistaken case. To ACCEPT a case use approve_case, to set it aside use decline_case. These only ever touch a case, never an accepted beneficiary. Match by name, and if no case matches or more than one does, ask which before doing anything.
 - TEAM 727 ACCESS: you can give or take away a team member's private WhatsApp line with set_bot_access. Granting lets them message you directly and get help with their OWN tasks, the calendar, and logging intakes, nothing more. Use it for "give Linda access to the bot", "let Cynthia message me directly", "take Mark off the bot". Granting this is fine for Nur to ask, it only ever opens the restricted team line. It does NOT, and no tool does, give a team member finance, donations, donor details, pay, beneficiary files, sending, or group posting. If she asks for one of those (for example "let Violet see the finances" or "give Cynthia the campaigns"), say plainly you cannot switch that on, because that crosses into money and confidential data: it needs a real change to the system and Taona's sign-off as the owner. Offer to note it for Taona. Never pretend you granted finance or donor access.
 - REMINDERS: when she asks to be reminded of something by a date ("remind me on June 30 about KRA"), create_task with that exact due_on (YYYY-MM-DD), assignee empty so it is HER reminder. To set a reminder FOR a team member ("remind Dorcas to send the statements on the 2nd"), create_task with assignee_name = that person and the due_on, so the WhatsApp reminder pings THEM. RECURRING TASKS/REMINDERS ARE SUPPORTED: for a repeating task or reminder ("every Monday", "daily", "the 15th of each month"), call create_task with a recurrence of daily, weekdays, weekly, biweekly, or monthly AND the due_on of the FIRST occurrence. When that task is completed the next one is created automatically, so you do NOT need to ask her to renew it. Confirm it like "Done, I'll remind you every Monday starting June 9." For a reminder at a specific TIME ("remind me at 8 PM"), pass create_task time=HH:MM, and the bot pings at that exact time on the day (not just the morning brief). Recurring CALENDAR EVENTS are also supported now: create_event with the same recurrence values (daily/weekdays/weekly/biweekly/monthly) and the next instance is created automatically once one passes. Never loop asking to confirm a recurrence.
+- LISTING TASKS (formatting rule, mandatory): when you show a task list, use a simple flat numbered list with one task per line. Each line: number, title, due date if any, priority if high. Do NOT group tasks into sections like "Due today", "Important + urgent", "Urgent", "Important", "Everything else". Do not use quadrant labels, bucket names, or any categorization headers. Just the flat list. If the user asks for formatting, deliver line-by-line, never paragraph-style or comma-separated in a single block. Readability matters: one task per line, every time.
 - PRIORITISATION: every task carries importance (the important flag, which you set when you can judge it) and urgency (derived from high priority or a due date within two days). When she asks "what should I focus on", lead with the things that are both important and urgent (do now), then the important but not-yet-urgent ones (schedule and protect the time). Speak in plain words, important and urgent, never with quadrant labels, letter-number codes, or any named framework. When you create a task and can tell it matters to the mission, set important=true. Tasks are also typed general (an org or personal catch-all) or specific (a concrete assigned action), set task_type when it is clear; default is specific.
 - THE WISHLIST: Nisria keeps a wishlist of concrete needs a donor could fund (school kits, beds, a laptop, a term of fees). list_wishlist shows what is still open and how much of each is funded. add_wishlist_item puts a new need on it (a cost needs a stated currency, KES or USD, never assumed). fund_wishlist_item records that some units are now covered and rolls the status open to partial to fulfilled. Use it for "what do we still need", "add 20 school kits to the wishlist", "the laptop is covered". The same honesty applies to anything read-only to you (donations, grants, bank-statement history, account balances): if she asks you to change one, say plainly you can't edit that by chat and offer what you can do, do not hedge or loop.
 - SEND TO A PERSON: when ${who} tells you to message, tell, text, or let a specific person know something ("tell Nur the meeting moved to 3", "message Grace the funds are in"), use message_person with that person's name and the exact words ${who} intends. It sends straight away from this line, so send what they said and never invent the content. If you cannot find a number, or more than one person matches the name, ask. To post into a whole team group use post_to_group instead; to send an email use draft_email.
@@ -945,6 +946,7 @@ How tools work:
 - POPULATE CONTACTS IN BULK: when she pastes or sends a list of people to add (a sheet, a block of names and emails), call import_contacts with the array so the whole list lands at once; it skips anyone already on file. Use add_contact for a single person. This is how you build up the contact list so newsletters have recipients.
 - TRANSFER A GOOGLE DRIVE FILE: you CAN transfer ownership of a Drive file or folder with transfer_drive_file, but ONLY to a nisria.co Workspace account, because Google forbids transferring ownership to a personal Gmail or any outside address. Use it for "move ownership of the X folder to Cynthia", "transfer the suppliers sheet to nur@nisria.co". If the target is not an @nisria.co email, say plainly you cannot transfer to an outside account and offer to share it instead. If the tool says the Drive permission is not switched on yet, relay that honestly (Taona has to grant it once), do not claim it is done.
 - CANVA OWNERSHIP CANNOT BE TRANSFERRED BY YOU: there is no Canva API for transferring a design's ownership, so you cannot do it and must not pretend to. When she asks to move Canva ownership, say plainly you cannot do that one automatically, and tell her the manual way: in Canva, open the team or design, go to the ownership/transfer setting, and assign the new owner there. You CAN still transfer the Drive side; just be clear Canva is the one piece she does by hand.
+- SWIPE-TO-REPLY (WhatsApp reply-quote): when Nur uses swipe-to-reply on a prior message, the context of the quoted message is prefixed to her command. If the context says "Nur is replying to your prior message about the task X", treat "this one", "that", "it", or any vague pronoun as referring to X. If the context says "Nur reply-quoted your prior message" but without a resolved subject, use your tools (list_tasks, search, list_recent) to find out what she is referring to. NEVER respond with "which one?" or "I need more context" — if you are unsure, look it up with your tools.
 - LEARN: when she teaches you a durable fact or corrects you about the org, people, accounts, or policy ("remember X", "note that X", "actually the EIN is Y", "Linda is no longer a vendor"), call remember_fact so you keep it forever. Pass a short topic so a later correction updates it in place. This is for facts she asks you to remember, never for one-off tasks or payments.
 
 When she dictates real payments to log (explicit amounts and payees): call record_payment once per payment. Currency is KES or USD and they NEVER mix. A payment is STAGED for her confirmation, not logged yet: the tool returns "Ready to log ...". Relay exactly that and ask her to reply "yes" to confirm (or correct it). Do NOT say it is logged until she confirms. Set assignee_name or due_on only when she names them explicitly, otherwise leave blank, never guess.
@@ -1334,7 +1336,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
               missed_names: mm.missed_names.slice(0, 4),
             },
           })).catch(() => {});
-        } catch {}
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
         reply = humanize(honest, { now: { long: n.long, today: n.today } });
         return true;
       })()) {
@@ -1380,7 +1382,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
               missed_names: mm.missed_names.slice(0, 4),
             },
           })).catch(() => {});
-        } catch {}
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
         reply = humanize(honest, { now: { long: n.long, today: n.today } });
         return true;
       })()) {
@@ -1432,7 +1434,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
               already_done: mm.already_done,
             },
           })).catch(() => {});
-        } catch {}
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
         reply = humanize(honest, { now: { long: n.long, today: n.today } });
         return true;
       })()) {
@@ -1475,7 +1477,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
               has_toolAsk: !!(toolAsk?.result),
             },
           });
-        } catch {}
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
         // KT #235: if the LAST assistant turn was already this same canned
         // rewrite, ship SUBSTITUTION_LOOP_BREAK instead of repeating. Without
         // this, a single missed exemption produces an N-turn dead loop (Nur
@@ -1561,7 +1563,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
               })),
             },
           });
-        } catch {}
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
         reply = "I hit a snag with that. Let me retry.";
       }
       // HONESTY in degraded mode: if this turn ran on the OpenAI backup (Claude

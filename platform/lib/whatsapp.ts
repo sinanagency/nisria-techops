@@ -301,7 +301,7 @@ export async function sendTextAndLog(
   db: any,
   to: string,
   body: string,
-  opts?: { contactId?: string | null; handledBy?: string; dev?: boolean },
+  opts?: { contactId?: string | null; handledBy?: string; dev?: boolean; trace_id?: string | null },
 ): Promise<{ id: string | null; error?: string }> {
   const handledBy = opts?.handledBy || "sasa";
   const sanitized = await preSendSanitize(body, handledBy);

@@ -469,7 +469,7 @@ async function processJob(db: any, job: any): Promise<void> {
         return;
       }
     } catch (err: any) {
-      await emit({ type: "layer0.error", source: "agent:sasa-layer0", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, payload: { error: String(err?.message || err).slice(0, 240) } }).catch(() => {});
+      await emit({ type: "layer0.error", source: "agent:sasa-layer0", actor: opName || name || "?", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { error: String(err?.message || err).slice(0, 240) } }).catch(() => {});
     }
   }
 
@@ -683,13 +683,13 @@ async function processJob(db: any, job: any): Promise<void> {
         const hits = fuzzyMatchTasks(st.title_fragment, openRows);
         if (hits.length === 0) {
           const titles = openRows.slice(0, 8).map((t: any) => `"${t.title}"`).join(", ");
-          await sendTextAndLog(db, from, `I don't see an open task matching "${st.title_fragment}". The open ones right now are: ${titles}. Tell me which to mark ${st.status.replace("_", " ")}.`, { contactId });
+          await sendTextAndLog(db, from, `I don't see an open task matching "${st.title_fragment}". The open ones right now are: ${titles}. Tell me which to mark ${st.status.replace("_", " ")}.`, { contactId, trace_id: traceId });
           return;
         }
         const picked = pickMostRecent(hits) as any;
         if (picked.status === st.status) {
           const label = st.status.replace("_", " ");
-          await sendTextAndLog(db, from, `"${picked.title}" is already ${label}, no change needed.`, { contactId });
+          await sendTextAndLog(db, from, `"${picked.title}" is already ${label}, no change needed.`, { contactId, trace_id: traceId });
           opsNote += ` state_noop:"${picked.title}"`;
           return;
         }
@@ -699,7 +699,7 @@ async function processJob(db: any, job: any): Promise<void> {
         await emit({ type: "task.status_changed", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, correlation_id: traceId, payload: { title: picked.title, to: st.status, reason: st.reason, source_message_id: sourceMessageId } });
         const label = st.status.replace("_", " ");
         const reasonTail = st.reason ? ` (${st.reason})` : "";
-        await sendTextAndLog(db, from, `Marked "${picked.title}" as ${label}${reasonTail}.`, { contactId });
+        await sendTextAndLog(db, from, `Marked "${picked.title}" as ${label}${reasonTail}.`, { contactId, trace_id: traceId });
         // Local mirror so subsequent segments in the same batch see the change.
         picked.status = st.status;
         opsNote += ` state:"${picked.title}"->${st.status}`;
@@ -708,20 +708,20 @@ async function processJob(db: any, job: any): Promise<void> {
       const handleComment = async (ct: any) => {
         const hits = fuzzyMatchTasks(ct.title_fragment, openRows);
         if (hits.length === 0) {
-          await sendTextAndLog(db, from, `I don't see an open task matching "${ct.title_fragment}" to add a comment to.`, { contactId });
+          await sendTextAndLog(db, from, `I don't see an open task matching "${ct.title_fragment}" to add a comment to.`, { contactId, trace_id: traceId });
           return;
         }
         const picked = (hits.length > 1 ? pickMostRecent(hits) : hits[0]) as any;
         const cutISO = new Date(Date.now() - 5 * 60 * 1000).toISOString();
         const { data: dupComment } = await db.from("task_comments").select("id").eq("task_id", picked.id).eq("body", ct.comment_body).gte("created_at", cutISO).limit(1);
         if (dupComment && dupComment.length) {
-          await sendTextAndLog(db, from, `The note on "${picked.title}" is already saved, nothing to add.`, { contactId });
+          await sendTextAndLog(db, from, `The note on "${picked.title}" is already saved, nothing to add.`, { contactId, trace_id: traceId });
           opsNote += ` comment_dedup:"${picked.title}"`;
           return;
         }
         const { data: c } = await db.from("task_comments").insert({ task_id: picked.id, author_id: null, author_name: opName || name || null, body: ct.comment_body, source: "bot" }).select("id").single();
         await emit({ type: "task.comment_added", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, correlation_id: traceId, payload: { comment_id: c?.id, source_message_id: sourceMessageId } });
-        await sendTextAndLog(db, from, `Added the note on "${picked.title}".`, { contactId });
+        await sendTextAndLog(db, from, `Added the note on "${picked.title}".`, { contactId, trace_id: traceId });
         opsNote += ` comment:"${picked.title}"`;
       };
 
@@ -729,13 +729,13 @@ async function processJob(db: any, job: any): Promise<void> {
         const blockerHits = fuzzyMatchTasks(dt.blocker_fragment, openRows);
         const blockedHits = fuzzyMatchTasks(dt.blocked_fragment, openRows);
         if (!blockerHits.length || !blockedHits.length) {
-          await sendTextAndLog(db, from, `I could not match both tasks for the dependency ("${dt.blocker_fragment}" blocks "${dt.blocked_fragment}"). Try again with more of each title.`, { contactId });
+          await sendTextAndLog(db, from, `I could not match both tasks for the dependency ("${dt.blocker_fragment}" blocks "${dt.blocked_fragment}"). Try again with more of each title.`, { contactId, trace_id: traceId });
           return;
         }
         const blocker = pickMostRecent(blockerHits) as any;
         const blocked = pickMostRecent(blockedHits) as any;
         if (blocker.id === blocked.id) {
-          await sendTextAndLog(db, from, `That dependency points at one task ("${blocker.title}"). I need two distinct task titles.`, { contactId });
+          await sendTextAndLog(db, from, `That dependency points at one task ("${blocker.title}"). I need two distinct task titles.`, { contactId, trace_id: traceId });
           return;
         }
         const { data: deps } = await db.from("task_dependencies").select("task_id,blocks_task_id").limit(2000);
@@ -751,12 +751,12 @@ async function processJob(db: any, job: any): Promise<void> {
           for (const e of edges) if (e.task_id === cur) stack.push(e.blocks_task_id);
         }
         if (cycle) {
-          await sendTextAndLog(db, from, `That would create a cycle. "${blocked.title}" already blocks "${blocker.title}" (directly or through another task). Not linking.`, { contactId });
+          await sendTextAndLog(db, from, `That would create a cycle. "${blocked.title}" already blocks "${blocker.title}" (directly or through another task). Not linking.`, { contactId, trace_id: traceId });
           return;
         }
         await db.from("task_dependencies").insert({ task_id: blocked.id, blocks_task_id: blocker.id, created_by_id: (senderTeamMember as any)?.id || null }).select("id");
         await emit({ type: "task.dependency_linked", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: blocked.id, correlation_id: traceId, payload: { blocks_task_id: blocker.id, source_message_id: sourceMessageId } });
-        await sendTextAndLog(db, from, `Linked: "${blocker.title}" blocks "${blocked.title}".`, { contactId });
+        await sendTextAndLog(db, from, `Linked: "${blocker.title}" blocks "${blocked.title}".`, { contactId, trace_id: traceId });
         opsNote += ` dep:"${blocker.title}"->"${blocked.title}"`;
       };
 
@@ -768,18 +768,18 @@ async function processJob(db: any, job: any): Promise<void> {
         const hits = fuzzyMatchTasks(pt.title_fragment, openRows);
         if (hits.length === 0) {
           const titles = openRows.slice(0, 8).map((t: any) => `"${t.title}"`).join(", ");
-          await sendTextAndLog(db, from, `I don't see an open task matching "${pt.title_fragment}" to change priority on. The open ones are: ${titles}.`, { contactId });
+          await sendTextAndLog(db, from, `I don't see an open task matching "${pt.title_fragment}" to change priority on. The open ones are: ${titles}.`, { contactId, trace_id: traceId });
           return;
         }
         const picked = pickMostRecent(hits) as any;
         if (picked.priority === pt.priority) {
-          await sendTextAndLog(db, from, `"${picked.title}" is already ${pt.priority} priority, no change needed.`, { contactId });
+          await sendTextAndLog(db, from, `"${picked.title}" is already ${pt.priority} priority, no change needed.`, { contactId, trace_id: traceId });
           opsNote += ` priority_noop:"${picked.title}"`;
           return;
         }
         await db.from("tasks").update({ priority: pt.priority, updated_at: new Date().toISOString() }).eq("id", picked.id);
         await emit({ type: "task.priority_changed", source: "agent:sasa-parseops", actor: opName || name || "?", subject_type: "task", subject_id: picked.id, correlation_id: traceId, payload: { title: picked.title, to: pt.priority, source_message_id: sourceMessageId } });
-        await sendTextAndLog(db, from, `Set "${picked.title}" priority to ${pt.priority}.`, { contactId });
+        await sendTextAndLog(db, from, `Set "${picked.title}" priority to ${pt.priority}.`, { contactId, trace_id: traceId });
         picked.priority = pt.priority;
         opsNote += ` priority:"${picked.title}"->${pt.priority}`;
       };
@@ -874,7 +874,7 @@ async function processJob(db: any, job: any): Promise<void> {
         if (fresh.length === 0) {
           // every line was already staged → confirm in one line.
           const summaries = pays.map((p: any) => p.summary).join("; ");
-          await sendTextAndLog(db, from, `Those are already staged: ${summaries}. Reply yes to commit, or tell me the correction.`, { contactId });
+          await sendTextAndLog(db, from, `Those are already staged: ${summaries}. Reply yes to commit, or tell me the correction.`, { contactId, trace_id: traceId });
           await markJobDone(job.id);
           return;
         }
@@ -902,7 +902,7 @@ async function processJob(db: any, job: any): Promise<void> {
         const replyMsg = fresh.length === 1
           ? `Staged: ${fresh[0].summary}${methodLabel}. Reply "yes" to commit, or tell me the correction (wrong amount, wrong payee, or a purpose to add).`
           : `Staged ${fresh.length} payments:\n${fresh.map((p: any, i: number) => `${i + 1}. ${p.summary}`).join("\n")}\nReply "yes" to confirm all, or tell me which one to correct.`;
-        await sendTextAndLog(db, from, replyMsg, { contactId });
+        await sendTextAndLog(db, from, replyMsg, { contactId, trace_id: traceId });
         await markJobDone(job.id);
         return;
       }
@@ -1092,13 +1092,28 @@ async function processJob(db: any, job: any): Promise<void> {
         }
         const quotedExcerpt = String(quotedRow.body || "").replace(/\s+/g, " ").slice(0, 200);
         if (swipeAnchorSubject) {
-          swipeAnchorNote = `swipe_reply_anchor: Nur reply-quoted your prior ${swipeAnchorSubject.subject_type} message "${quotedExcerpt}"${swipeAnchorSubject.label ? ` (${swipeAnchorSubject.subject_type}: ${swipeAnchorSubject.label})` : ""}. Treat THIS turn as continuation of THAT thread. Do not fuzzy-match a different subject.`;
+          swipeAnchorNote = `Nur is replying to your prior message about the ${swipeAnchorSubject.subject_type} "${swipeAnchorSubject.label || quotedExcerpt}". Her reply is: `;
         } else if (quotedExcerpt) {
-          swipeAnchorNote = `swipe_reply_anchor: Nur reply-quoted your prior message "${quotedExcerpt}". Treat THIS turn as continuation of THAT thread.`;
+          swipeAnchorNote = `Nur is replying to your prior message: "${quotedExcerpt}". Her reply is: `;
+        }
+        if (!swipeAnchorNote) {
+          // Found the quoted row but could not resolve the subject AND the
+          // excerpt is empty. This should not happen (body is not null) but
+          // guard anyway.
+          swipeAnchorNote = "Nur used swipe-to-reply on a prior message. Use your tools to find what she means. ";
         }
         try { await emit({ type: "sasa.swipe_reply_resolved", source: "agent:sasa", actor: name || from, subject_type: swipeAnchorSubject?.subject_type || "contact", subject_id: swipeAnchorSubject?.subject_id || contactId || undefined, correlation_id: traceId, payload: { wa_message_id: waMsgId, quoted_wa_id: replyToExternalId, resolved: !!swipeAnchorSubject } }); } catch {}
+      } else if (!swipeAnchorNote && replyToExternalId) {
+        // Quoted message not found in DB at all (stale, deleted, or mismatched).
+        swipeAnchorNote = "Nur used swipe-to-reply. Use your tools to figure out what she is referring to. ";
       }
-    } catch {}
+    } catch {
+      // Catch block for the entire swipe resolution try — if it fails entirely,
+      // still tell the model swipe was used so it does not ask "which one?".
+      if (replyToExternalId && !swipeAnchorNote) {
+        swipeAnchorNote = "Nur used swipe-to-reply. Use your tools to figure out what she is referring to. ";
+      }
+    }
   }
 
   let reply: string | undefined;
@@ -1107,8 +1122,12 @@ async function processJob(db: any, job: any): Promise<void> {
     // task that code already wrote rather than re-asking or re-trying to
     // create one. The original body stays in `command` verbatim. We also
     // inject the swipe-reply anchor note when present (Wall 1).
-    const systemNotes = [parsedContextNote, swipeAnchorNote].filter(Boolean).join("\n");
-    const cmdForBrain = systemNotes ? `${command}\n\n[system: ${systemNotes}]` : command;
+    // Swipe anchor note is PREFIXED to the command so the model reads
+    // the context as part of the user's turn, not as optional system metadata.
+    // e.g. 'Nur is replying to your prior message about the task "X". Her reply is: this one'
+    const cmdForBrain = swipeAnchorNote ? `${swipeAnchorNote}${command}` : command;
+    const systemNotes = parsedContextNote;
+    const cmdWithSystem = systemNotes ? `${cmdForBrain}\n\n[system: ${systemNotes}]` : cmdForBrain;
     // v1.3.2: also flag recent task activity (within 5 min) for THIS contact.
     // Catches follow-up turns where the user is asking about something Sasa
     // just did in a previous turn (e.g. "whats the note u added?"). Without
@@ -1140,7 +1159,7 @@ async function processJob(db: any, job: any): Promise<void> {
     const swipeAnchorOpt = swipeAnchorSubject
       ? { subject_type: swipeAnchorSubject.subject_type, subject_id: swipeAnchorSubject.subject_id, label: swipeAnchorSubject.label, quotedExcerpt: swipeAnchorNote ? swipeAnchorNote.split('"')[1] : undefined }
       : null;
-    const runSasaOpts = { history, command: cmdForBrain, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote, recentTaskActivity, swipeAnchor: swipeAnchorOpt, traceId: traceId || undefined };
+    const runSasaOpts = { history, command: cmdWithSystem, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote, recentTaskActivity, swipeAnchor: swipeAnchorOpt, traceId: traceId || undefined };
     const runner = isHarnessMessageId(waMsgId)
       ? () => runSasa(runSasaOpts)
       : null;
