@@ -3014,6 +3014,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const date = String(input.date || "").trim();
     if (!title) return { ok: false, summary: humanize("I need a title for the event.", opts), error: "no title" };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, summary: humanize("I need a date (YYYY-MM-DD) for the event.", opts), error: "no date" };
+    // dedup: if an event with the same title and date already exists, do not duplicate
+    const { data: existingEvent } = await db.from("calendar_events").select("id").eq("title", title).eq("starts_on", date).limit(1);
+    if (existingEvent?.length) {
+      return { ok: true, summary: humanize(`Already on the calendar: "${title}" on ${date}.`, opts), affordance: { kind: "open", label: "Open calendar", href: "/calendar" }, detail: { event_id: existingEvent[0].id, deduped: true } };
+    }
     const time = /^\d{2}:\d{2}$/.test(String(input.time || "")) ? input.time : null;
     const kind = ["event", "meeting", "travel", "visit", "reminder"].includes(input.kind) ? input.kind : "event";
     const row = {
@@ -3060,13 +3065,16 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const e = list[0];
     const new_date = /^\d{4}-\d{2}-\d{2}$/.test(String(input.new_date || "")) ? input.new_date : e.starts_on;
     const new_time = /^\d{2}:\d{2}$/.test(String(input.new_time || "")) ? input.new_time : e.start_time;
+    const todayISO = new Date().toISOString().slice(0, 10);
+    const wasPast = e.starts_on < todayISO;
     const patch = { ...e, starts_on: new_date, start_time: new_time || null, all_day: !new_time, updated_at: new Date().toISOString() };
-    await db.from("calendar_events").update({ starts_on: new_date, start_time: new_time || null, all_day: !new_time, updated_at: patch.updated_at }).eq("id", e.id);
+    await db.from("calendar_events").update({ starts_on: new_date, start_time: new_time || null, all_day: !new_time, reminded_at: null, updated_at: patch.updated_at }).eq("id", e.id);
     if (e.gcal_event_id && gcalConfigured()) { try { await gcalPatch(e.gcal_event_id, patch); } catch { /* best-effort */ } }
     await emit({ type: "calendar.event_updated", source: "agent:sasa", actor: "Nur", subject_type: "calendar_event", subject_id: e.id, payload: { title: e.title, from: e.starts_on, to: new_date } });
     const holiday = await holidayOn(new_date);
     const flag = holiday ? ` Note that ${new_date} is ${holiday}, a public holiday.` : "";
-    return { ok: true, summary: humanize(`Moved "${e.title}" to ${new_time ? `${new_date} at ${new_time}` : new_date}.${flag}`, opts), affordance: { kind: "open", label: "Open calendar", href: "/calendar" }, detail: { event_id: e.id } };
+    const past = wasPast ? ` (was from ${e.starts_on}, which has passed).` : "";
+    return { ok: true, summary: humanize(`Moved "${e.title}" to ${new_time ? `${new_date} at ${new_time}` : new_date}.${flag}${past}`, opts), affordance: { kind: "open", label: "Open calendar", href: "/calendar" }, detail: { event_id: e.id } };
   }
 
   // ---- SAFE: delete_event (recoverable; only touches calendar_events) ----

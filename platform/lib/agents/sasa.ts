@@ -34,7 +34,7 @@ import {
 // (eval/unit/intent.test.mjs) imports from the same source — no regex drift.
 import { isReadIntent } from "../intent.mjs";
 // OpenAI verifier removed (owner directive 2026-06-04): no gpt-4o-mini in the reply path.
-import { anthropicViaOpenAI, brainOverrideActive } from "../openai-fallback";
+// OpenAI fallback removed (owner directive 2026-06-18): never silently answer as gpt-4o.
 import { pushIncident } from "../notify";
 
 // Step 7 model unification (2026-06-13): tier-uniform Sonnet 4.6 across the
@@ -792,23 +792,6 @@ const APOLOGY_CAP_REPLACEMENT = "Let me know what you need handled.";
 // caches the whole tools array; one on the system block caches the system text.
 // Cache lives ~5 min, so back-to-back turns share it too. Under the 1024-token
 // minimum the breakpoint is ignored gracefully (no error), so this is no-regret.
-//
-// BACKOFF. A 429 (rate limit) or 529 (overloaded) is transient. We respect the
-// retry-after header (or back off exponentially) and retry, so a momentary spike
-// becomes a short pause, not a visible error.
-//
-// FAILOVER. If Anthropic ultimately fails for ANY reason (429 exhausted past our
-// retries, key dead/401, overloaded 529, network), we re-run the identical turn on
-// OpenAI via the translator and hand back an Anthropic-shaped response, so the
-// agent loop below is unchanged. The bot only admits "tripped me up" if BOTH
-// providers are down. This is the fix for the rate-limit dead-air the operator saw.
-// Thin adapter over brain-core's runClaude. Owns the Nisria-specific policy:
-//   - the model id (Sonnet 4.5)
-//   - the env-read API key
-//   - the gym (DGX brain-swap) eval path
-//   - the failure hook (Nur-loud incident, no OpenAI fallback per 2026-06-04
-//     owner directive — the bot must NEVER silently answer as gpt-4o)
-// All of which are tenant policy and stay HERE, never in brain-core.
 async function callClaude(system: string | Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }>, messages: any[], tools: any[]) {
   return runClaude({
     model: MODEL,
@@ -816,9 +799,8 @@ async function callClaude(system: string | Array<{ type: "text"; text: string; c
     system,
     messages,
     tools,
-    gym: { active: brainOverrideActive, call: anthropicViaOpenAI },
     onFailure: async (err) => {
-      void pushIncident("Sasa brain (Claude)", `Claude unreachable, no fallback: ${err}`).catch(() => {});
+      void pushIncident("Sasa brain (Claude)", `Claude unreachable: ${err}`).catch(() => {});
     },
   });
 }
@@ -1172,11 +1154,6 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
   if (opts.parseTasksFired) {
     toolRuns.push({ name: "create_task", input: { source: "parseTasks" }, result: { ok: true, summary: "Task already written deterministically by parseTasks before runSasa.", detail: { source_kind: "parsed_task" } } });
   }
-  // True if any model call this turn was served by the OpenAI BACKUP (Anthropic
-  // down: rate-limited, overloaded, or out of credits). A weaker model can lose
-  // the thread, so we tell the operator rather than mislead them silently.
-  let viaFallback = false;
-
   // Independent verification before any reply leaves the agent. A second model
   // (OpenAI, via verifyReply) confirms every money amount, name, and claim-of-action
   // is grounded in the user's words or a tool result this turn; ungrounded specifics
@@ -1566,18 +1543,17 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
         reply = "I hit a snag with that. Let me retry.";
       }
-      // HONESTY in degraded mode: if this turn ran on the OpenAI backup (Claude
-      // unavailable), say so. The empty-credits incident showed a silent backup
-      // contradicting itself with full confidence, which is worse than an honest
-      // "I am degraded". So the operator always knows when not to fully trust it.
-      if (viaFallback) reply = `${reply}\n\n(Note: I am on backup AI right now, Claude is unavailable, so please double check anything important.)`;
     }
     return { reply, actions: serialize(actions), toolsRan: toolRuns.map((t) => t.name) };
   }
 
   for (let i = 0; i < 6; i++) {
-    const resp = await callClaude(systemForModel, convo, tools);
-    if (resp?._via === "openai") viaFallback = true;
+    let resp;
+    try {
+      resp = await callClaude(systemForModel, convo, tools);
+    } catch {
+      return await finalize("Sasa's API credits have run out. Please recharge your Anthropic account to keep the bot running.");
+    }
     if (resp.stop_reason !== "tool_use") {
       const modelText = (resp.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
       // group reply gate: if the model chose silence, send nothing (tools still ran)
