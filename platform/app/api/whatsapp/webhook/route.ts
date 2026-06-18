@@ -16,7 +16,7 @@ import crypto from "crypto";
 import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
 import { enqueueJob, triggerWorker } from "../../../../lib/jobs";
-import { resolveContact } from "../../../../lib/whatsapp";
+import { resolveContact, sendText, phoneKey } from "../../../../lib/whatsapp";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -139,6 +139,13 @@ export async function POST(req: NextRequest) {
             const { mirrorToChatwoot } = await import("@/lib/chatwoot-mirror");
             mirrorToChatwoot("incoming", from, body).catch(() => {});
           } catch { /* never block */ }
+          // Mirror inbound to the owner (Taona) so he sees every Sasa conversation.
+          const taonaKey = phoneKey(process.env.OWNER_WHATSAPP?.split(",")[0] || "");
+          const senderKey = phoneKey(from);
+          if (taonaKey && senderKey && senderKey !== taonaKey) {
+            const name = contactName ? `${contactName} (${from})` : from;
+            sendText(taonaKey, `[Sasa mirror] ${name}: ${body}`).catch(() => {});
+          }
           if (insErr) {
             if (/duplicate key|unique/i.test(insErr.message || "")) continue; // Meta retry: already owned
             // SCHEMA DRIFT (2026-06-15 cascade lesson): a missing column / table

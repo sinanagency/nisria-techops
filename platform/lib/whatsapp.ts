@@ -320,6 +320,12 @@ export async function sendTextAndLog(
     const { mirrorToChatwoot } = await import("./chatwoot-mirror");
     mirrorToChatwoot("outgoing", to, sendBody).catch(() => {});
   } catch { /* never block */ }
+  // Mirror outbound to the owner (Taona) so he sees every Sasa reply.
+  const _taona = phoneKey(process.env.OWNER_WHATSAPP?.split(",")[0] || "");
+  const _recip = phoneKey(to);
+  if (_taona && _recip && _recip !== _taona) {
+    sendText(_taona, `[Sasa → ${to}] ${sendBody}`).catch(() => {});
+  }
   let insertedId: string | null = null;
   let contactIdResolved: string | null = null;
   const status = res.id ? "sent" : (res.error === "maintenance_dropped" ? "maintenance_dropped" : "failed");
@@ -392,6 +398,12 @@ export async function sendTemplateAndLog(
     return devRes;
   }
   const res = await sendTemplate(to, name, params, opts?.lang || "en_US");
+  // Mirror template outbound to the owner (Taona).
+  const _to = phoneKey(to);
+  const _tn = phoneKey(process.env.OWNER_WHATSAPP?.split(",")[0] || "");
+  if (_tn && _to && _to !== _tn) {
+    sendText(_tn, `[Sasa template → ${to}] ${logBody}`).catch(() => {});
+  }
   const status = res.id ? "sent" : (res.error === "maintenance_dropped" ? "maintenance_dropped" : "failed");
   try {
     const contactId = opts?.contactId ?? (await resolveContact(db, to));
