@@ -23,7 +23,7 @@
 
 import { admin, money } from "./supabase-admin";
 import { formatPersonName } from "./names";
-import { sendText, sendImage, sendDocument, phoneKey, operatorOf } from "./whatsapp";
+import { sendText, sendImage, sendDocument, phoneKey, toE164, operatorOf } from "./whatsapp";
 import { emit } from "./events";
 import { now, formatClock } from "./now";
 import { randomUUID, createHash } from "node:crypto";
@@ -2203,7 +2203,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const patch: any = {};
     const changed: string[] = [];
     if (input.role) { patch.role = String(input.role).slice(0, 120); changed.push(`role ${patch.role}`); }
-    if (input.phone) { patch.phone = phoneKey(input.phone); changed.push("phone"); }
+    if (input.phone) { patch.phone = toE164(input.phone); changed.push("phone"); }
     if (input.responsibilities) { patch.responsibilities = String(input.responsibilities).slice(0, 600); changed.push("responsibilities"); }
     if (input.location) { patch.location = String(input.location).slice(0, 120); changed.push(`location ${patch.location}`); }
     if (["active", "inactive"].includes(input.status)) { patch.status = input.status; changed.push(`status ${input.status}`); }
@@ -2223,7 +2223,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "add_contact") {
     const cname = String(input.name || "").trim();
     if (!cname) return { ok: false, summary: "I need a name for the contact.", error: "no name" };
-    const phone = input.phone ? phoneKey(input.phone) : null;
+    const phone = input.phone ? toE164(input.phone) : null;
     const email = input.email ? String(input.email).trim().slice(0, 160) : null;
     if (!phone && !email) return { ok: false, summary: humanize("I need at least a phone number or an email to save.", opts) };
     const { data: existing } = await db.from("contacts").select("id,name").ilike("name", cname).limit(2);
@@ -2247,7 +2247,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!list.length) return { ok: false, summary: humanize(`I could not find a contact called ${cname}.`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
     const patch: any = {}; const changed: string[] = [];
-    if (input.phone) { patch.phone = phoneKey(input.phone); changed.push("phone"); }
+    if (input.phone) { patch.phone = toE164(input.phone); changed.push("phone"); }
     if (input.email) { patch.email = String(input.email).trim().slice(0, 160); changed.push("email"); }
     if (!changed.length) return { ok: false, summary: humanize("Tell me the new phone number or email.", opts) };
     await db.from("contacts").update(patch).eq("id", list[0].id);
@@ -2671,7 +2671,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     for (const c of raw.slice(0, 500)) {
       const cname = String(c?.name || "").trim();
       const email = String(c?.email || "").trim().toLowerCase();
-      const phone = c?.phone ? phoneKey(String(c.phone)) : null;
+      const phone = c?.phone ? toE164(String(c.phone)) : null;
       if (!cname && !email) { skipped++; continue; }
       if (email) { const { data: ex } = await db.from("contacts").select("id").eq("email", email).limit(1); if (ex?.[0]) { skipped++; continue; } }
       const { error } = await db.from("contacts").insert({ name: cname || email, email: email || null, phone, channel: email ? "email" : "whatsapp" });

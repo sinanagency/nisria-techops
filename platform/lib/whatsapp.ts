@@ -246,14 +246,27 @@ export async function operatorOf(db: any, waId: string): Promise<{ role: Operato
 // the SAME conversation thread the brain replays. `phone` is computed the exact
 // way the webhook stored it (bare digits) so it matches existing contact rows.
 // (One-brain law: one resolver, one thread.)
+// Canonical phone storage: every real number is stored as +E.164 (+<cc><number>),
+// e.g. +254703119486 / +971501622716. A 14+ digit WhatsApp group id is left as-is
+// (not a dialable phone). phoneKey() strips the + for the Cloud API, so storing
+// the + never breaks delivery. (KT #314: dedup + normalization, 2026-06-20.)
+export function toE164(raw: string): string {
+  const d = String(raw || "").replace(/\D/g, "").replace(/^00/, "");
+  return /^\d{10,13}$/.test(d) ? "+" + d : String(raw || "");
+}
+
 export async function resolveContact(db: any, waId: string, name?: string | null): Promise<string | null> {
-  const phone = (waId || "").replace(/\D/g, "");
-  if (!phone) return null;
-  const { data: found } = await db.from("contacts").select("id").eq("phone", phone).eq("channel", "whatsapp").limit(1);
-  if (found && found.length) return found[0].id;
+  const digits = (waId || "").replace(/\D/g, "").replace(/^00/, "");
+  if (!digits) return null;
+  // Match an existing contact by NORMALIZED digits, so +254.., 254.., 00254.. all
+  // resolve to the ONE record and never spawn a format-variant duplicate.
+  const { data: found } = await db.from("contacts").select("id,phone").eq("channel", "whatsapp").ilike("phone", `%${digits}%`).limit(5);
+  const hit = (found || []).find((c: any) => String(c.phone || "").replace(/\D/g, "").replace(/^00/, "") === digits);
+  if (hit) return hit.id;
+  const stored = toE164(digits);
   const { data: made } = await db
     .from("contacts")
-    .insert({ name: name || phone, phone, channel: "whatsapp" })
+    .insert({ name: name || stored, phone: stored, channel: "whatsapp" })
     .select("id")
     .single();
   return made?.id ?? null;
