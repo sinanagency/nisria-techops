@@ -391,6 +391,30 @@ function claimsSendWithoutSend(reply: string, toolRuns: { name: string; result: 
   return false;
 }
 
+// #8 (KT #313) UNVERIFIED SEND-STATE WALL. The model must never assert what it
+// did or did not send to a person from memory. That produced the 2026-06-19
+// "Nothing went out to Nur" fabrication: it HAD sent (in Nur's thread), which the
+// owner-thread window never saw, and the prompt pressured certainty over a check.
+// A send-state claim is honest ONLY when a real lookup ran this turn. These tools
+// ARE the ground truth (reused, never duplicated): read_contact_thread reads a
+// named person's thread incl. outbound; show_outbound_audit is the send receipt.
+const VERIFY_TOOLS = new Set(["read_contact_thread", "show_outbound_audit", "search_history"]);
+// A definite assertion about what was/wasn't sent (positive or negative). A bare
+// "tell Nur?" question must not match.
+const SEND_STATE_CLAIM = /\b(?:nothing went out|haven'?t sent|have ?n'?t sent|have not sent|did ?n'?t send|did not send|never sent|i sent|i'?ve sent|i have sent|message sent|messages? (?:are|were|have been) sent|has been (?:told|messaged|notified|sent|reminded)|been (?:told|notified|reminded))\b/i;
+// The user ASKING what was sent/told (a recall question). Scopes the guard to the
+// fabrication case, away from a legitimate just-now send confirmation.
+const SEND_STATE_QUESTION = /\b(?:what did (?:you|u|ya) (?:send|tell|say|message|text)|did (?:you|u|ya) (?:send|tell|text|message|notify|reach)|who did (?:you|u|ya) (?:message|text|tell)|did .{1,30}\b(?:get|receive) (?:the|my|your|a|any)?\s*(?:message|text|it|note)|what (?:went out|did you send out))\b/i;
+
+function claimsUnverifiedSendState(reply: string, toolRuns: { name: string; result: any }[], command: string): boolean {
+  if (!SEND_STATE_QUESTION.test(String(command || ""))) return false;
+  if (!SEND_STATE_CLAIM.test(String(reply || ""))) return false;
+  // Honest if a verified lookup ran this turn, or a real send actually happened.
+  const verified = toolRuns.some((t) => VERIFY_TOOLS.has(t.name));
+  const sentNow = toolRuns.some((t) => SEND_TOOLS.has(t.name) && (t.result as any)?.ok === true);
+  return !verified && !sentNow;
+}
+
 // PASSIVE-PLURAL SEND. Mirror of PASSIVE_COMPLETION (KT #274) for the SEND
 // verb family. Today (2026-06-15 10:33 Dubai) Sasa wrote "Done. Both messages
 // are sent. Violet and Cynthia have been reminded" while only Violet was
@@ -898,7 +922,7 @@ CONVERSATION HYGIENE:
 - Do NOT say "Good morning", "Good afternoon", or any time-of-day greeting, you do not reliably know her local time. Skip the greeting entirely.
 - If ${who} corrects you or tells you to stop doing something, STOP immediately and never do that thing again in this thread. Her correction is binding.
 
-MEMORY: You DO remember. The recent messages are in front of you, and for anything older or from a past session, call search_history to look it up. NEVER tell ${who} that you have no memory, that each conversation starts fresh, or that you cannot access past conversations, that is false. If something is not in view, search for it first, then answer from what you find.
+MEMORY: You DO remember. The recent messages are in front of you, and for anything older or from a past session, call search_history to look it up. NEVER tell ${who} that you have no memory, that each conversation starts fresh, or that you cannot access past conversations, that is false. If something is not in view, search for it first, then answer from what you find. SEND-STATE (hard rule): when ${who} asks what you sent, told, messaged, or whether a person got a message, you MUST first call read_contact_thread (that person's thread, including your outbound) or show_outbound_audit (the send receipt) and answer ONLY from what it returns. You message people in their own threads, which are not in this window, so you literally cannot know from memory what went to someone else. NEVER assert "nothing went out" or "I sent it" about another person without that lookup; if the lookup shows nothing, say you don't see it and offer to send now, never a confident "nothing was sent."
 
 How tools work:
 - READ tools run instantly and you have eyes on the whole portal: donations, donors, finance, grants, tasks, inbox, team, beneficiaries (find_beneficiary), a person's contact details (lookup_contact), the team roster with roles/phones/pay (team_detail), filed documents (search_documents), campaigns (list_campaigns), and past conversations (search_history).
@@ -1368,6 +1392,22 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         // Claimed it messaged/told someone (or that they "have" it) but no send tool
         // ran. Logging a task is not telling the person, so say so honestly and offer.
         reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
+      } else if (claimsUnverifiedSendState(reply, toolRuns, opts.command || "")) {
+        // #8 (KT #313): a send-state answer with no verified lookup this turn. The
+        // model answered from its per-contact window (blind to other threads) and
+        // fabricated. Replace with an honest non-claim instead of letting it ship.
+        try {
+          import("../events").then(({ emit }) => emit({
+            type: "sasa.unverified_send_state",
+            source: "agent:sasa",
+            actor: opts.operatorName || "?",
+            subject_type: "contact",
+            subject_id: opts.contactId || null,
+            correlation_id: opts.traceId || null,
+            payload: { command: String(opts.command || "").slice(0, 200), original_reply: String(reply || "").slice(0, 600) },
+          })).catch(() => {});
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
+        reply = humanize("Let me actually check the thread before I answer that, I don't want to guess. One moment while I pull what really went out.", { now: { long: n.long, today: n.today } });
       } else if ((() => {
         // KT #274 (2026-06-15) PASSIVE-PLURAL MISMATCH check, runs BEFORE the
         // generic completion-without-success guard so the honest replacement
