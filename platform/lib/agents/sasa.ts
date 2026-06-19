@@ -1596,7 +1596,15 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
             },
           });
         } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
-        reply = "I hit a snag with that. Let me retry.";
+        // #6 (KT #317): never dead-end with a fake "let me retry" that never
+        // retries. Surface the REAL failing-tool reason (toolAsk's ok=false
+        // summary, e.g. "two newsletter tasks, which one?") if one ran this turn;
+        // otherwise an honest, actionable line with a concrete next step.
+        reply = humanize(
+          (toolAsk?.result as any)?.summary
+            || "That did not go through, so I will not say it did. Tell me the exact one (the title or name) and I will do it now.",
+          { now: { long: n.long, today: n.today } },
+        );
       }
     }
     return { reply, actions: serialize(actions), toolsRan: toolRuns.map((t) => t.name) };
