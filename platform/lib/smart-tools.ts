@@ -1189,14 +1189,21 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
         member = res.member;
       }
     }
+    // CREATOR-DEFAULT (KT #333): you own what you create. If no assignee resolved
+    // and the speaker is a known member, the task is theirs, for ALL tiers (owners
+    // like Nur included, not just team). This fixes "remind me to X" landing
+    // UNASSIGNED (assignee_id null), which orphaned the timed reminder AND blinded
+    // the self-assign alert guard (KT #329 needs an assignee to detect "self", so a
+    // null assignee let the "new task" ping fire on a self-set reminder). Runs
+    // BEFORE assertTaskAccess so the gate sees the resolved self-assignment.
+    if (!member && ctx.senderPhone) {
+      const speaker = await findMemberByPhone(db, ctx.senderPhone);
+      if (speaker) member = speaker;
+    }
     // ACCESS CONTROL (P0): a team-tier caller may only create a task FOR THEMSELVES.
-    // If they named someone else -> refuse. If they named nobody, default the
-    // assignee to the caller (self) rather than leaving it unassigned, so the
-    // task still lands on the board owned by them. Owners bypass (full CRUD).
+    // If they named someone else -> refuse. (No-assignee already defaulted to the
+    // caller above, so the gate sees a self-assignment.) Owners bypass (full CRUD).
     if (ctx.tier === "team") {
-      const me = await findMemberByPhone(db, ctx.senderPhone);
-      // If no assignee was given, default to the caller themselves.
-      if (!member && me) member = me;
       const gate = await assertTaskAccess(ctx, db, { targetMemberId: member?.id || null });
       if (!gate.ok) return { ok: false, summary: humanize(gate.summary, opts), error: gate.error };
     }
