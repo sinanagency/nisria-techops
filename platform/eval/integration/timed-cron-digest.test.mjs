@@ -145,8 +145,8 @@ check("D5 seam: pushTaskDigest body template has the right shape", () => {
   if (!/Heads up, urgent: you have \$\{list\.length\} tasks due now:/.test(block)) {
     return "pushTaskDigest missing \"Heads up, urgent: you have N tasks due now:\" header";
   }
-  // Bullet
-  if (!/`•\s*\$\{String\(t\?\.title/.test(block)) {
+  // Bullet (title is wrapped in humanize() before slicing — allow that wrapper)
+  if (!/`•\s*\$\{(?:humanize\()?String\(t\?\.title/.test(block)) {
     return "pushTaskDigest missing • bullet per title";
   }
   // Footer DONE N

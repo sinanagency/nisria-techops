@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "test": "node eval/integration/seam-10-brain-core-drift.test.mjs",
+    "walls": "node eval/run-walls.mjs",
     "predeploy": "bash predeploy.sh"
   },
   "dependencies": {
