@@ -19,6 +19,7 @@ import { sendText, sendTextAndLog, operatorOf, downloadMedia, sendTypingIndicato
 import { extractMeetingLink, dispatchMeetingBot, isCancelIntent, cancelActiveBot } from "../../../../lib/digital-u";
 import { commitBankImport } from "../../../../lib/bank-import";
 import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
+import { coalesceTurn, finishTurn } from "../../../../lib/whatsapp-coalesce";
 import { autoCapture } from "../../../../lib/memory-extract";
 import { withSandbox, isHarnessMessageId } from "../../../../lib/sandbox";
 import { pushIncident } from "../../../../lib/notify";
@@ -319,6 +320,51 @@ async function processJob(db: any, job: any): Promise<void> {
       if (res.id) await markJobDone(job.id); else await markJobError(job.id, res.error || "send failed");
       return;
     }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // PER-SENDER TURN COALESCING (2026-06-20). DURABLE fix for the double-reply
+  // bug: a contact sent "you're cool" then "thanks" as two separate WhatsApp
+  // messages and got TWO separate replies, because every inbound enqueues its
+  // own whatsapp.reply job -> its own brain run -> its own reply. brain-core's
+  // shouldProcess had a per-sender lock but it was an IN-MEMORY Map that does NOT
+  // survive across Vercel serverless invocations, so it could not coalesce the
+  // separate function calls. coalesceTurn() acquires a DURABLE per-contact claim
+  // (wa_turn_claim, unique on contact_id): the WINNER settles briefly, assembles
+  // ALL unhandled inbound since the last outbound into one turn, and replies
+  // once; the LOSERS no-op without replying. Exactly one reply per burst.
+  //
+  // FAIL-OPEN (honesty law): the whole gate is wrapped. If anything throws (table
+  // missing, query error), we fall straight through to the EXISTING single-
+  // message reply path on the `command` we already resolved. A coalescer bug can
+  // NEVER make the bot go silent. Sits HERE — after media resolution (so the
+  // burst text is final) and BEFORE the deterministic note/payment gates and the
+  // brain — so the whole turn (gates + brain) runs exactly once, on the burst.
+  let coalescedMessageIds: string[] = [];
+  try {
+    const co = await coalesceTurn(contactId, traceId, command);
+    if (!co.proceed) {
+      // LOSER: another job for this sender holds the claim and will coalesce this
+      // message into its turn. No reply here (exactly-once). Mark the job done
+      // cleanly so the queue drains; the winner's reply covers this text.
+      await markJobDone(job.id);
+      return;
+    }
+    if (co.winner && co.command && co.command.trim()) {
+      // WINNER: replace the single-message command with the assembled burst so
+      // the one reply reflects everything the sender said. Track the claimed rows
+      // so finishTurn() can mark them handled + release the claim after sending.
+      command = co.command;
+      coalescedMessageIds = co.claimedMessageIds || [];
+    }
+    // fail-open (co.failOpen) leaves `command` as the single message we already
+    // have and proceeds normally — never silent.
+  } catch (e: any) {
+    // FAIL-OPEN guard around the gate itself. coalesceTurn does not throw by
+    // contract, but a defensive catch guarantees a coalescer fault degrades to
+    // the normal single-message reply instead of crashing the job into silence.
+    try { await emit({ type: "whatsapp.coalesce_fail_open", source: "whatsapp", actor: "system", subject_type: "contact", subject_id: contactId, correlation_id: traceId || undefined, payload: { stage: "worker_gate", error: String(e?.message || e).slice(0, 240) } }); } catch {}
+    // fall through: reply normally on the single message.
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -1321,6 +1367,15 @@ async function processJob(db: any, job: any): Promise<void> {
     await withSandbox(() => autoCapture({ command, reply, rank: opRank, operatorName: opName || name || undefined, sourceMessageId, toolsRan: sasaResult?.toolsRan || [] }));
   } else {
     await autoCapture({ command, reply, rank: opRank, operatorName: opName || name || undefined, sourceMessageId, toolsRan: sasaResult?.toolsRan || [] });
+  }
+
+  // COALESCE RELEASE: the reply for the whole burst is sent, so mark every
+  // inbound we folded into this turn handled (status='coalesced') and release the
+  // durable per-sender claim. Best-effort (never throws): a miss only risks a
+  // later harmless re-coalesce, never a double-reply (the claim TTL also frees
+  // it) and never silence. Skipped when no burst was claimed (fail-open path).
+  if (coalescedMessageIds.length) {
+    await finishTurn(contactId, coalescedMessageIds).catch(() => {});
   }
 
   if (res.id) await markJobDone(job.id);
