@@ -35,36 +35,65 @@ function siteUrl(): string {
   return "https://command.nisria.co";
 }
 
+// Candidate notetaker endpoints, in priority order. MEETING_BOT_URLS is a
+// comma-separated list (put a stable always-on node first, ephemeral tunnels
+// after); MEETING_BOT_URL is the single-value fallback. De-duped, trailing-slash
+// stripped. This is the "auto-find any active node" layer (KT #340): the
+// dispatcher walks the list and uses the FIRST node that actually answers, so one
+// dead tunnel or a node that went down (the operator's VPN dropping) no longer
+// kills the notetaker — it moves to the next live node. A node is only dispatched
+// to once a /api/health probe says it is up, so a 404/000 tunnel is skipped.
+function meetingBotBases(): string[] {
+  const list = (process.env.MEETING_BOT_URLS || process.env.MEETING_BOT_URL || "")
+    .split(",").map((s) => s.trim().replace(/\/$/, "")).filter(Boolean);
+  return Array.from(new Set(list));
+}
+
+async function nodeHealthy(base: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${base}/api/health`, { method: "GET", signal: AbortSignal.timeout(5000) });
+    return r.ok;
+  } catch { return false; }
+}
+
 export async function dispatchMeetingBot(opts: {
   link: string;
   title?: string;
   scheduledAt?: string;
   displayName?: string;
-}): Promise<{ ok: boolean; mode?: string; eventId?: string; botId?: string; error?: string }> {
-  const base = (process.env.MEETING_BOT_URL || "").replace(/\/$/, "");
+}): Promise<{ ok: boolean; mode?: string; eventId?: string; botId?: string; error?: string; node?: string }> {
+  const bases = meetingBotBases();
   const key = process.env.MEETING_BOT_API_KEY;
-  if (!base || !key) return { ok: false, error: "MEETING_BOT_URL or MEETING_BOT_API_KEY not configured" };
+  if (!bases.length || !key) return { ok: false, error: "MEETING_BOT_URL(S) or MEETING_BOT_API_KEY not configured" };
   const ingestKey = process.env.INGEST_KEY;
   const callbackUrl = `${siteUrl()}/api/digital-u/ingest`;
-  try {
-    const r = await fetch(`${base}/api/dispatch`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": key },
-      body: JSON.stringify({
-        link: opts.link,
-        title: opts.title || "",
-        scheduledAt: opts.scheduledAt || undefined,
-        callbackUrl,
-        callbackKey: ingestKey || undefined,
-        displayName: opts.displayName || "Digital Nur",
-      }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) return { ok: false, error: body?.error || `${r.status} ${r.statusText}` };
-    return { ok: true, mode: body?.mode, eventId: body?.eventId, botId: body?.botId };
-  } catch (e: any) {
-    return { ok: false, error: e?.message || String(e) };
+  const payload = JSON.stringify({
+    link: opts.link,
+    title: opts.title || "",
+    scheduledAt: opts.scheduledAt || undefined,
+    callbackUrl,
+    callbackKey: ingestKey || undefined,
+    displayName: opts.displayName || "Digital Nur",
+  });
+  // Walk the nodes; the first HEALTHY one that accepts the dispatch wins. We only
+  // POST to a node that passed its health probe, so a dead/404 tunnel is never
+  // dispatched into, and we never fire two notetakers (we stop at first success).
+  let lastErr = "no notetaker node is reachable right now";
+  for (const base of bases) {
+    if (!(await nodeHealthy(base))) { lastErr = `node ${base.replace(/^https?:\/\//, "").slice(0, 40)} is not responding`; continue; }
+    try {
+      const r = await fetch(`${base}/api/dispatch`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key },
+        body: payload,
+        signal: AbortSignal.timeout(20000),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) { lastErr = body?.error || `${r.status} ${r.statusText}`; continue; }
+      return { ok: true, mode: body?.mode, eventId: body?.eventId, botId: body?.botId, node: base };
+    } catch (e: any) { lastErr = e?.message || String(e); continue; }
   }
+  return { ok: false, error: lastErr };
 }
 
 export async function cancelActiveBot(): Promise<{ ok: boolean; title?: string; botId?: string; error?: string }> {
