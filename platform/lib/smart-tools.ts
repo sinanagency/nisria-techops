@@ -1290,7 +1290,14 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // WhatsApp right now. Everything else waits for the morning daily_brief.
     // Best-effort, never blocks the create.
     const urgent = priorityClass.bucket === "important_urgent" || priority === "high" || (due_on !== null && due_on <= n.today);
-    if (urgent) await pushTaskAlert(db, { id: task.id, title, due_on, priority, assignee_id: member?.id || null }, "new");
+    // SELF-ASSIGNMENT GUARD (2026-06-20, KT #329): the "new task" alert is for when
+    // work lands on SOMEONE ELSE. If the creator assigned it to themselves ("remind
+    // me to ..."), do not template-ping them about a task they just typed. This only
+    // suppresses the new-task alert; the TIMED reminder (/api/cron/timed) is a
+    // separate path, so a self-set 9pm reminder still fires at 9pm.
+    const senderMember = ctx.senderPhone ? await findMemberByPhone(db, ctx.senderPhone) : null;
+    const selfAssigned = !!(senderMember?.id && member?.id && senderMember.id === member.id);
+    if (urgent && !selfAssigned) await pushTaskAlert(db, { id: task.id, title, due_on, priority, assignee_id: member?.id || null }, "new");
     const who = member?.name ? `assigned to ${member.name}` : "unassigned";
     // Holiday guard: if the due date lands on a Kenya public holiday (Eid,
     // Madaraka Day, etc.) the team is off, so flag it in the same breath. The
