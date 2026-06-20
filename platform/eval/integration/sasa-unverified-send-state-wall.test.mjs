@@ -113,9 +113,18 @@ if (reMatch) {
   if (!m) fail("S8 SEND_STATE_PERSON regex declared");
   else {
     ok("S8 SEND_STATE_PERSON declared");
-    // guard must require read_contact_thread specifically for the person case
-    if (!/personSpecific[\s\S]{0,160}read_contact_thread/.test(SASA)) fail("S8 person-specific path must require read_contact_thread only");
-    else ok("S8 person-specific claim requires read_contact_thread");
+    // The person-specific branch must require read_contact_thread (not accept
+    // show_outbound_audit, which excludes Nur). 2026-06-20 BUG-2: it must also
+    // match the read to the RIGHT person, so the requirement now lives in the
+    // readMatchesPerson helper, which restricts to read_contact_thread AND
+    // inspects the read's input.name. Assert both the branch routes person-claims
+    // through it and the helper still pins read_contact_thread.
+    const helper = SASA.match(/function\s+readMatchesPerson\([\s\S]*?\n}/);
+    if (!/if\s*\(\s*personSpecific\s*\)/.test(SASA)) fail("S8 person-specific branch must exist");
+    else if (!helper) fail("S8 readMatchesPerson helper must exist for the person case");
+    else if (!/t\.name\s*!==\s*"read_contact_thread"|t\.name\s*===\s*"read_contact_thread"/.test(helper[0])) fail("S8 person-specific path must require read_contact_thread only");
+    else if (!/readMatchesPerson\(/.test(SASA)) fail("S8 person-specific branch must call readMatchesPerson");
+    else ok("S8 person-specific claim requires read_contact_thread (via person-matched read)");
     // behavioral
     // eslint-disable-next-line no-eval
     const SEND_STATE_PERSON = eval(m[1]);

@@ -12,6 +12,9 @@
 //   S3  impl logs a sasa.clarity_requested event
 //   S4  impl returns the question (ok:true with the question as summary)
 //   S5  prompt instructs: when UNSURE call flag_for_clarity, never guess/silently act
+//   S6  LOOP-BREAK (2026-06-20, BUG 5): impl dedups an identical clarity question to
+//       the same contact within ~2 min — queries events, skips the duplicate emit,
+//       marks detail.deduped, and is best-effort (never crashes on a lookup failure).
 //
 // Pure local.
 
@@ -33,16 +36,26 @@ else ok("S1 flag_for_clarity tool defined");
 if (!/"flag_for_clarity"/.test(SMART.slice(SMART.indexOf("READ_TOOLS"), SMART.indexOf("READ_TOOLS") + 600))) fail("S2 flag_for_clarity in READ_TOOLS allowlist");
 else ok("S2 flag_for_clarity in READ_TOOLS");
 
-// ---- S3 + S4: impl logs event + returns the question ----
+// ---- S3 + S4 + S6: impl logs event + returns the question + loop-breaks ----
 {
   const i = SMART.indexOf('name === "flag_for_clarity"');
-  const block = i >= 0 ? SMART.slice(i, i + 1500) : "";
+  // Window widened to 2600 (was 1500) — the BUG 5 dedup guard added ~20 lines before
+  // the final return, pushing ok:true past the old window.
+  const block = i >= 0 ? SMART.slice(i, i + 2600) : "";
   if (i < 0) fail("S3/S4 flag_for_clarity impl not found");
   else {
     if (!/sasa\.clarity_requested/.test(block)) fail("S3 impl must log sasa.clarity_requested");
     else ok("S3 impl logs sasa.clarity_requested");
     if (!/ok:\s*true/.test(block) || !/summary/.test(block)) fail("S4 impl returns ok:true with the question as summary");
     else ok("S4 impl returns the question");
+    // ---- S6: loop-break dedup ----
+    const queriesEvents = /from\("events"\)/.test(block) && /sasa\.clarity_requested/.test(block);
+    const marksDeduped = /deduped/.test(block);
+    const bestEffort = /catch\s*{[^}]*}/.test(block); // a try/catch around the lookup
+    if (!queriesEvents) fail("S6 impl must query the events table for a recent identical clarity question");
+    else if (!marksDeduped) fail("S6 impl must mark the duplicate (detail.deduped) and skip the second emit");
+    else if (!bestEffort) fail("S6 dedup lookup must be best-effort (try/catch, never crash the tool)");
+    else ok("S6 impl loop-breaks: dedups an identical clarity question within ~2 min, best-effort");
   }
 }
 

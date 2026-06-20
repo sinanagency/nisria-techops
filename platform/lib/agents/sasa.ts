@@ -401,10 +401,18 @@ function claimsSendWithoutSend(reply: string, toolRuns: { name: string; result: 
 const VERIFY_TOOLS = new Set(["read_contact_thread", "show_outbound_audit", "search_history"]);
 // A definite assertion about what was/wasn't sent (positive or negative). A bare
 // "tell Nur?" question must not match.
-const SEND_STATE_CLAIM = /\b(?:nothing went out|haven'?t sent|have ?n'?t sent|have not sent|did ?n'?t send|did not send|never sent|i sent|i'?ve sent|i have sent|message sent|messages? (?:are|were|have been) sent|has been (?:told|messaged|notified|sent|reminded)|been (?:told|notified|reminded))\b/i;
+// 2026-06-20 paraphrase audit: widened (NOT weakened) to cover natural rephrasings
+// that bypassed the guard, all still anchored to send/receive semantics:
+// "no record of (sending)", passive "messages were sent", reversed-subject
+// "she did not receive / she received", "no outbound to", and the affirmative
+// reach-out "reached out to" (a positive send-state assertion). Kept anchored so
+// it does not fire on unrelated done/figure text.
+const SEND_STATE_CLAIM = /\b(?:nothing went out|no outbound|no record of (?:sending|having sent|any (?:send|message|outbound)|that going out)|haven'?t sent|have ?n'?t sent|have not sent|did ?n'?t send|did not send|never sent|i sent|i'?ve sent|i have sent|reached out to|message sent|messages? (?:are|were|have been|went) (?:out\s+)?(?:to\b|sent)|(?:was|were) (?:anything|nothing|something|a message|the message|it) sent|has been (?:told|messaged|notified|sent|reminded)|been (?:told|notified|reminded)|(?:she|he|they) (?:did ?n'?t|did not|never|has ?n'?t|have ?n'?t) (?:receive|get|gotten)(?:\s+(?:it|anything|the|a|my|your))?|(?:she|he|they) (?:received|got|gotten) (?:it|the (?:message|text|note|report)|anything|nothing)(?:\s+from)?|(?:she|he|they) (?:received|got|gotten)[\w\s]{0,20}?\bfrom (?:me|you|us))\b/i;
 // The user ASKING what was sent/told (a recall question). Scopes the guard to the
 // fabrication case, away from a legitimate just-now send confirmation.
-const SEND_STATE_QUESTION = /\b(?:what did (?:you|u|ya) (?:send|tell|say|message|text)|did (?:you|u|ya) (?:send|tell|text|message|notify|reach)|who did (?:you|u|ya) (?:message|text|tell)|did .{1,30}\b(?:get|receive) (?:the|my|your|a|any)?\s*(?:message|text|it|note)|what (?:went out|did you send out))\b/i;
+// 2026-06-20 paraphrase audit: added received/got/gotten recall, "get to <person>",
+// passive "was anything sent to", and "receive anything", all send/receive anchored.
+const SEND_STATE_QUESTION = /\b(?:what did (?:you|u|ya) (?:send|tell|say|message|text)|did (?:you|u|ya) (?:send|tell|text|message|notify|reach)|who did (?:you|u|ya) (?:message|text|tell)|(?:did|does|has|have|was|were) .{1,30}\b(?:get|receive|gotten|got|received) (?:the|my|your|a|any|some)?\s*(?:thing|message|text|it|note)?|(?:did|does|has|have) .{1,30}\bget (?:to|through to)\b|(?:was|were) (?:anything|something|a message|the message|it|the report|the note)?\s*.{0,20}?sent to|what (?:went out|did you send out))\b/i;
 
 // A SPECIFIC person is named as the recipient ("to Nur", "to Mark"). For these,
 // show_outbound_audit is NOT valid verification: it hard-excludes the operator
@@ -413,19 +421,63 @@ const SEND_STATE_QUESTION = /\b(?:what did (?:you|u|ya) (?:send|tell|say|message
 // thread. This is the 2026-06-20 00:16 recurrence: the bot "verified" with
 // show_outbound_audit, got empty (Nur excluded), and still lied "nothing to Nur".
 const SEND_STATE_PERSON = /\bto\s+(?:nur|mark|wahome|violet|cynthia|maryam|charity|serena|haneen|her|him|them|[A-Z][a-z]{2,})\b/;
+// Pull the NAMED person out of a "to <person>" span so the person-specific
+// verification can match the read against the right thread. Pronouns (her/him/
+// them) carry no name to match, so they return null and the guard falls back to
+// "a read for that pronoun is unmatchable -> fail closed".
+const SEND_STATE_PERSON_NAME = /\bto\s+([A-Za-z][a-z]{2,})\b/gi;
+const SEND_STATE_PRONOUN = new Set(["her", "him", "them"]);
+function claimedPersonNames(text: string): string[] {
+  const out: string[] = [];
+  for (const m of String(text || "").matchAll(SEND_STATE_PERSON_NAME)) {
+    const w = m[1].toLowerCase();
+    if (!SEND_STATE_PRONOUN.has(w)) out.push(w);
+  }
+  return out;
+}
+// 2026-06-20 BUG-2 audit: a read_contact_thread targets a single person via its
+// input.name (smart-tools.ts schema: { name: string }). Match the read's target
+// against the claimed person (case-insensitive substring, either direction so
+// "Nur" matches "Nur Mnasria" and vice-versa).
+function readMatchesPerson(toolRuns: { name: string; input?: any; result?: any }[], person: string): boolean {
+  const p = person.toLowerCase().trim();
+  if (!p) return false;
+  return toolRuns.some((t) => {
+    if (t.name !== "read_contact_thread") return false;
+    const target = String((t.input as any)?.name ?? "").toLowerCase().trim();
+    if (!target) return false;
+    return target.includes(p) || p.includes(target);
+  });
+}
 
-function claimsUnverifiedSendState(reply: string, toolRuns: { name: string; result: any }[], command: string): boolean {
+function claimsUnverifiedSendState(reply: string, toolRuns: { name: string; input?: any; result: any }[], command: string): boolean {
   if (!SEND_STATE_QUESTION.test(String(command || ""))) return false;
   if (!SEND_STATE_CLAIM.test(String(reply || ""))) return false;
   // A real send this turn makes the claim honest regardless.
   const sentNow = toolRuns.some((t) => SEND_TOOLS.has(t.name) && (t.result as any)?.ok === true);
   if (sentNow) return false;
-  // Person-specific claim -> only read_contact_thread can verify it. Generic
+  // Person-specific claim -> only read_contact_thread can verify it, and only a
+  // read FOR THAT PERSON counts. A same-turn read of Mark's thread must NOT
+  // satisfy a claim about Nur (2026-06-20 BUG-2: any read was accepted). Generic
   // ("what did I send today") -> any VERIFY_TOOL is fine.
   const personSpecific = SEND_STATE_PERSON.test(String(command || "")) || SEND_STATE_PERSON.test(String(reply || ""));
-  const verified = personSpecific
-    ? toolRuns.some((t) => t.name === "read_contact_thread")
-    : toolRuns.some((t) => VERIFY_TOOLS.has(t.name));
+  if (personSpecific) {
+    // Resolve the claimed person from the command first (the operator's ask is the
+    // authoritative subject), then the reply. Pronoun-only claims yield no name to
+    // match: fail closed (require a name-matched read) rather than accept any read.
+    const names = claimedPersonNames(String(command || ""));
+    const replyNames = claimedPersonNames(String(reply || ""));
+    const targets = names.length ? names : replyNames;
+    if (targets.length === 0) {
+      // Pronoun-only ("to her") with no resolvable name: cannot prove the read was
+      // for the right person, so the guard fires (honest substitution).
+      return true;
+    }
+    // Every named target must have a read_contact_thread that matched it.
+    const verified = targets.every((person) => readMatchesPerson(toolRuns, person));
+    return !verified;
+  }
+  const verified = toolRuns.some((t) => VERIFY_TOOLS.has(t.name));
   return !verified;
 }
 
@@ -1271,6 +1323,12 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       } catch {
         // multi-payment backstop is best-effort; never break the turn.
       }
+      // 2026-06-20 BUG-3: claimsToolResultMismatch (a last-resort backstop) used to
+      // run as a BARE if AFTER this chain, testing rawText (the ORIGINAL model text)
+      // and clobbering a more specific honest line an earlier guard already wrote.
+      // Track whether any earlier guard already substituted reply this turn and gate
+      // the backstop on it, so a specific line is never stomped by the generic one.
+      let alreadySubstituted = false;
       if (claimsStagingWithoutTool(reply, toolRuns) && !isCapabilityQuestion(opts.command || "") && !isAmbiguousReference(opts.command || "")) {
         // v1.3.9: fake-staging. "Ready to log…, reply yes to confirm" text but
         // no record_payment / record_donation / bank_import / etc. tool ran.
@@ -1313,6 +1371,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         if (!stagedByBackstop) {
           reply = humanize(HONEST_NO_STAGING, { now: { long: n.long, today: n.today } });
         }
+        alreadySubstituted = true;
       } else if ((() => {
         // 2026-06-15 (KT #287): PASSIVE-PLURAL SEND mismatch. Bug pattern:
         // Sasa wrote "Done. Both messages are sent. Violet and Cynthia have
@@ -1358,6 +1417,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         return true;
       })()) {
         // already replaced above
+        alreadySubstituted = true;
       } else if ((() => {
         // HONESTY-2 (2026-06-15, KT #287 audit). SEQUENTIAL SEND mismatch.
         // Sequential narration like "Sent to Violet. Sent to Cynthia." bypasses
@@ -1404,10 +1464,12 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         return true;
       })()) {
         // already replaced above
+        alreadySubstituted = true;
       } else if (claimsSendWithoutSend(reply, toolRuns)) {
         // Claimed it messaged/told someone (or that they "have" it) but no send tool
         // ran. Logging a task is not telling the person, so say so honestly and offer.
         reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
       } else if (claimsUnverifiedSendState(reply, toolRuns, opts.command || "")) {
         // #8 (KT #313): a send-state answer with no verified lookup this turn. The
         // model answered from its per-contact window (blind to other threads) and
@@ -1424,6 +1486,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
           })).catch(() => {});
         } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
         reply = humanize("Let me actually check the thread before I answer that, I don't want to guess. One moment while I pull what really went out.", { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
       } else if ((() => {
         // KT #274 (2026-06-15) PASSIVE-PLURAL MISMATCH check, runs BEFORE the
         // generic completion-without-success guard so the honest replacement
@@ -1472,6 +1535,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         return true;
       })()) {
         // already replaced above
+        alreadySubstituted = true;
       } else if (claimsCompletionWithoutSuccess(reply, toolRuns) && !isCapabilityQuestion(opts.command || "")) {
         // The reply claims something is done but no tool succeeded. If a tool ran and
         // returned a specific reason/question, relay THAT; else a short neutral re-ask
@@ -1522,6 +1586,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         } else {
           reply = humanize((toolAsk?.result as any)?.summary || HONEST_NO_ACTION_REASK, { now: { long: n.long, today: n.today } });
         }
+        alreadySubstituted = true;
       } else if (isHedgeLoop(reply, opts.history, guardOutputMark()) && toolRuns.length === 0) {
         // Only a loop if the bot did NOTHING this turn and is re-hedging. A reply
         // BACKED by a tool that ran (even a disambiguation question) is progress, not
@@ -1536,6 +1601,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         // (not READ), and LOOP_BREAK fires instead of LOOP_BREAK_READ.
         const isRead = isReadIntent(opts.command || "", opts.history);
         reply = humanize(isRead ? LOOP_BREAK_READ : LOOP_BREAK, { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
       }
       // OpenAI (gpt-4o-mini) verifier REMOVED — owner directive 2026-06-04. It was
       // "the openai one", and it mangled legitimate replies. The DETERMINISTIC honesty
@@ -1577,7 +1643,10 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       }
       // After all existing honesty checks, run post-tool-use verification.
       // If the model claimed success but the tools did not deliver, override reply.
-      if (claimsToolResultMismatch(rawText, toolRuns)) {
+      // 2026-06-20 BUG-3: gate on !alreadySubstituted so this generic backstop never
+      // clobbers a more specific honest line an earlier guard already produced (it
+      // tests rawText, the ORIGINAL model text, which is stale once reply was rewritten).
+      if (!alreadySubstituted && claimsToolResultMismatch(rawText, toolRuns)) {
         try {
           const { emit } = await import("../events");
           await emit({

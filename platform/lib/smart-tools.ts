@@ -235,6 +235,55 @@ async function resolveAssignee(db: any, senderPhone: string | null | undefined, 
   return await findMember(db, assigneeName);
 }
 
+// ─── TASK ACCESS CONTROL (2026-06-20, P0) ───────────────────────────────────
+// Hard product constraint from the operator: CRUD on tasks is for OWNERS (Nur,
+// Taona) ONLY. A team-tier caller may only create / complete / reopen / update /
+// delete a task that is THEIR OWN (the task's assignee_id === the caller's member
+// id). Before this, create/complete/reopen had NO ownership gate and update/delete
+// were only prompt-excluded, so a team member could assign work to anyone, mark
+// Nur's task done, reopen it, etc. This ONE chokepoint is called at the top of
+// every mutating task tool (wall-at-primitive doctrine, mirrors the discriminator
+// and stop-list rails). Owners (any non-"team" tier: admin / owner / web-console)
+// keep FULL CRUD — the gate is a no-op for them.
+//
+// For CREATE pass { targetMemberId } (the assignee the team caller wants on the
+// NEW task). For COMPLETE/REOPEN/UPDATE/DELETE pass { taskAssigneeId } (the
+// EXISTING task's assignee_id). The helper resolves the caller from ctx.senderPhone.
+type TaskAccessResult =
+  | { ok: true }
+  | { ok: false; summary: string; error: string };
+
+async function assertTaskAccess(
+  ctx: { tier?: "admin" | "team"; senderPhone?: string },
+  db: any,
+  opts: { targetMemberId?: string | null; taskAssigneeId?: string | null },
+): Promise<TaskAccessResult> {
+  // Owners / admin / web-console: full CRUD, gate is a no-op.
+  if (ctx.tier !== "team") return { ok: true };
+  // Team tier: we MUST know who is speaking. No phone, or no member row for it,
+  // means we cannot prove ownership — refuse rather than silently allowing.
+  if (!ctx.senderPhone) {
+    return { ok: false, summary: "I could not verify who you are, so I can't change tasks.", error: "unrecognised_caller" };
+  }
+  const me = await findMemberByPhone(db, ctx.senderPhone);
+  if (!me || !me.id) {
+    return { ok: false, summary: "I could not verify who you are, so I can't change tasks.", error: "unrecognised_caller" };
+  }
+  // CREATE path: the new task's assignee must be the caller themselves.
+  if (Object.prototype.hasOwnProperty.call(opts, "targetMemberId")) {
+    if (opts.targetMemberId && String(opts.targetMemberId) !== String(me.id)) {
+      return { ok: false, summary: "You can only create tasks for yourself. Ask Nur or Taona to assign work to others.", error: "access_denied" };
+    }
+    return { ok: true };
+  }
+  // MUTATE path (complete / reopen / update / delete): the EXISTING task's
+  // assignee must be the caller themselves.
+  if (String(opts.taskAssigneeId || "") !== String(me.id)) {
+    return { ok: false, summary: "That task isn't assigned to you, so I can't change it. Nur or Taona can.", error: "access_denied" };
+  }
+  return { ok: true };
+}
+
 // Stop-list of high-frequency generic words a title fragment can land on. When
 // the LLM passes a verb-prefix fragment like "meeting" / "task" / "today" the
 // substring match is NOT authoritative: it lands on whatever ELSE happens to
@@ -441,7 +490,7 @@ export const isReadTool = (name: string) => READ_TOOLS.has(name);
 // the group, or any non-owner), tools that read the raw message log exclude the
 // owner's (Taona's) 727 line. Defaults to true so the web console + unknown
 // callers keep full visibility; the WhatsApp path passes the real rank.
-async function runRead(db: any, name: string, input: any, tier: "admin" | "team" = "admin", viewerIsOwner: boolean = true): Promise<any> {
+async function runRead(db: any, name: string, input: any, tier: "admin" | "team" = "admin", viewerIsOwner: boolean = true, contactId: string | null = null): Promise<any> {
   if (name === "query_donations") {
     let q = db.from("donations").select("amount,currency,donated_at,status,is_recurring,donor:donors(full_name),campaign:campaigns(name)").order("donated_at", { ascending: false });
     q = q.eq("status", input.status || "succeeded");
@@ -882,12 +931,36 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (!question) return { ok: false, summary: "I need the question to ask." };
     const options: string[] = Array.isArray(input.options) ? input.options.map((o: any) => String(o)).filter(Boolean).slice(0, 8) : [];
     const about = String(input.about || "").slice(0, 80);
-    try {
-      const { emit } = await import("./events");
-      await emit({ type: "sasa.clarity_requested", source: "agent:sasa", actor: "system", subject_type: "clarity", subject_id: null, payload: { question: question.slice(0, 400), options, about } });
-    } catch { /* logging best-effort, never block the ask */ }
+    const qStamp = question.slice(0, 400);
+    const contactKey = contactId || null;
+    // BUG 5 (loop-break, 2026-06-20): flag_for_clarity had no anti-loop guard, so the
+    // bot could re-ask the SAME question to the SAME contact every turn. Before logging
+    // a fresh clarity event, look for an identical clarity question to this contact in
+    // the last ~2 minutes; if one exists, do not emit a duplicate event (we still RETURN
+    // the question so the user sees it, but mark it deduped). Best-effort: if the events
+    // lookup throws, just proceed and log normally — never crash the tool over dedup.
+    let deduped = false;
+    if (contactKey) {
+      try {
+        const since = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+        const { data: recent } = await db
+          .from("events")
+          .select("payload,subject_id,created_at")
+          .eq("type", "sasa.clarity_requested")
+          .eq("subject_id", contactKey)
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+          .limit(20);
+        deduped = ((recent || []) as any[]).some((r) => String(r?.payload?.question || "") === qStamp);
+      } catch { /* events lookup best-effort; on failure fall through and log normally */ }
+    }
+    if (!deduped) {
+      try {
+        await emit({ type: "sasa.clarity_requested", source: "agent:sasa", actor: "system", subject_type: "clarity", subject_id: contactKey, payload: { question: qStamp, options, about, contact_id: contactKey } });
+      } catch { /* logging best-effort, never block the ask */ }
+    }
     const body = options.length ? `${question}\n` + options.map((o, i) => `${i + 1}. ${o}`).join("\n") : question;
-    return { ok: true, summary: body, detail: { clarity_requested: true, about } };
+    return { ok: true, summary: body, detail: { clarity_requested: true, about, deduped } };
   }
   // SHOW_OUTBOUND_AUDIT (2026-06-15, KT #287 companion). Read-only audit of
   // Sasa's actual outbound to team members.
@@ -1116,6 +1189,17 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
         member = res.member;
       }
     }
+    // ACCESS CONTROL (P0): a team-tier caller may only create a task FOR THEMSELVES.
+    // If they named someone else -> refuse. If they named nobody, default the
+    // assignee to the caller (self) rather than leaving it unassigned, so the
+    // task still lands on the board owned by them. Owners bypass (full CRUD).
+    if (ctx.tier === "team") {
+      const me = await findMemberByPhone(db, ctx.senderPhone);
+      // If no assignee was given, default to the caller themselves.
+      if (!member && me) member = me;
+      const gate = await assertTaskAccess(ctx, db, { targetMemberId: member?.id || null });
+      if (!gate.ok) return { ok: false, summary: humanize(gate.summary, opts), error: gate.error };
+    }
     const priority = ["low", "medium", "high"].includes(input.priority) ? input.priority : "medium";
     const due_on = /^\d{4}-\d{2}-\d{2}$/.test(String(input.due_on || "")) ? input.due_on : null;
     // source_group: when the task is born in a team group, remember which one so
@@ -1232,7 +1316,26 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // so resolve them EXACTLY by phone before falling back to a name guess. This is
     // what makes a bare "done" tick the right person's task.
     // KT #261: speaker-pronoun "Me"/"myself"/"I" routes via senderPhone, not findMember.
-    const member = (await resolveAssignee(db, ctx.senderPhone, input.assignee_name)) || (input.assignee_name ? null : await findMemberByPhone(db, ctx.senderPhone));
+    // BUG 3 (2026-06-20): a NAMED tiebreak person goes through findMemberUnion, not
+    // findMember (which silently first-picks "Lucy" when two Lucys are active). On
+    // ambiguity we ASK rather than scoping the board to the wrong person.
+    let member: any = null;
+    {
+      const rawWho = String(input.assignee_name || "").trim();
+      if (rawWho) {
+        if (isSelfPronoun(rawWho)) {
+          member = await findMemberByPhone(db, ctx.senderPhone);
+        } else {
+          const res = await findMemberUnion(db, rawWho);
+          if (res.kind === "ambiguous") {
+            return { ok: false, summary: humanize(memberAmbiguityQuestion(rawWho, res.candidates), opts), detail: { needs_disambiguation: true, query: rawWho } };
+          }
+          member = res.kind === "unique" ? res.member : null;
+        }
+      } else {
+        member = await findMemberByPhone(db, ctx.senderPhone);
+      }
+    }
     // The lookup must see what the user sees. The UI lists EVERY open task (any
     // assignee); so does our list_tasks. So when the user names a task by its
     // title, we resolve it against ALL open tasks, exactly the set on the board,
@@ -1243,9 +1346,12 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // on the board. Match what the user sees, then disambiguate.
     const frag = String(input.title || "").trim().slice(0, 60);
     // Pull the full open board once (same query shape as list_tasks / the UI).
+    // BUG 2 (expire doctrine): exclude BOTH done AND expired. .neq("status","done")
+    // still matched expired rows, so a "done" could flip an EXPIRED task to done.
+    // Expired tasks are never completion candidates. Law: expired stays expired.
     const { data: openRows } = await db
       .from("tasks").select("id,title,assignee_id,source_group,recurrence,due_on,priority")
-      .neq("status", "done").order("created_at", { ascending: false }).limit(60);
+      .not("status", "in", "(done,expired)").order("created_at", { ascending: false }).limit(60);
     const open = (openRows || []) as any[];
     if (!open.length) return { ok: false, summary: humanize("There are no open tasks right now.", opts) };
 
@@ -1347,6 +1453,13 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       }
     }
     const task = list[0];
+    // ACCESS CONTROL (P0): a team-tier caller may only complete THEIR OWN task.
+    // The existing task's assignee_id must equal the caller's member id. Owners
+    // bypass (full CRUD). Gate runs after the task is matched, before the update.
+    {
+      const gate = await assertTaskAccess(ctx, db, { taskAssigneeId: task.assignee_id ?? null });
+      if (!gate.ok) return { ok: false, summary: humanize(gate.summary, opts), error: gate.error };
+    }
     // Wall 2: discriminator-name mismatch guard. Refuse if the resolved title
     // names a team member the operator did not name in their last message.
     const disc = await discriminatorMismatch(db, ctx, String(task.title || ""));
@@ -1391,7 +1504,25 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // "reopen the canva one" or a bare "that is not actually done" can scope to the
     // right person's work. Mirrors complete_task, but over the DONE column.
     // KT #261: speaker-pronoun "Me"/"myself"/"I" routes via senderPhone, not findMember.
-    const member = (await resolveAssignee(db, ctx.senderPhone, input.assignee_name)) || (input.assignee_name ? null : await findMemberByPhone(db, ctx.senderPhone));
+    // BUG 3 (2026-06-20): a NAMED tiebreak person goes through findMemberUnion (ask
+    // on ambiguity) rather than findMember's silent first-pick.
+    let member: any = null;
+    {
+      const rawWho = String(input.assignee_name || "").trim();
+      if (rawWho) {
+        if (isSelfPronoun(rawWho)) {
+          member = await findMemberByPhone(db, ctx.senderPhone);
+        } else {
+          const res = await findMemberUnion(db, rawWho);
+          if (res.kind === "ambiguous") {
+            return { ok: false, summary: humanize(memberAmbiguityQuestion(rawWho, res.candidates), opts), detail: { needs_disambiguation: true, query: rawWho } };
+          }
+          member = res.kind === "unique" ? res.member : null;
+        }
+      } else {
+        member = await findMemberByPhone(db, ctx.senderPhone);
+      }
+    }
     const frag = String(input.title || "").trim().slice(0, 60);
     // Look at DONE tasks only (the board's done column), most recently completed first.
     const { data: doneRows } = await db
@@ -1437,6 +1568,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       else return { ok: false, summary: humanize(`More than one completed task could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) };
     }
     const task = list[0];
+    // ACCESS CONTROL (P0): a team-tier caller may only reopen THEIR OWN task.
+    {
+      const gate = await assertTaskAccess(ctx, db, { taskAssigneeId: task.assignee_id ?? null });
+      if (!gate.ok) return { ok: false, summary: humanize(gate.summary, opts), error: gate.error };
+    }
     // Wall 2: discriminator-name mismatch guard (mirror of complete_task).
     const disc = await discriminatorMismatch(db, ctx, String(task.title || ""));
     if (!disc.ok) {
@@ -1445,7 +1581,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     }
     const reopenUpdate: Record<string, any> = { status: "todo", updated_at: new Date().toISOString() };
     if (reason) reopenUpdate.reason = reason;
-    await db.from("tasks").update(reopenUpdate).eq("id", task.id);
+    // BUG 4: check the mutation error. Previously we returned ok:true unconditionally,
+    // so "Reopened X" was reported even when RLS / a network error blocked the write.
+    const { error: reopenErr } = await db.from("tasks").update(reopenUpdate).eq("id", task.id);
+    if (reopenErr) return { ok: false, summary: humanize(`I could not reopen "${task.title}" just now. ${(reopenErr as any).message || ""}`.trim(), opts), error: (reopenErr as any).message || "reopen_failed" };
     await emit({ type: "task.reopened", source: "agent:sasa", actor: member?.name || "team", subject_type: "task", subject_id: task.id, payload: { title: task.title, group: task.source_group, reason: reason || null } });
     return { ok: true, summary: humanize(`Reopened "${task.title}", it is back on the board as to-do.`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: task.id, reason: reason || null } };
   }
@@ -2120,11 +2259,16 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       const titles = (openSample || []).map((t: any) => `"${t.title}"`).join(", ");
       return { ok: false, summary: humanize(`"${frag}" is too generic for me to pick the right task. Which one of these: ${titles}?`, opts) };
     }
-    const { data: matches } = await db.from("tasks").select("id,title").neq("status", "done").ilike("title", `%${frag}%`).order("created_at", { ascending: false }).limit(5);
+    const { data: matches } = await db.from("tasks").select("id,title,assignee_id").neq("status", "done").ilike("title", `%${frag}%`).order("created_at", { ascending: false }).limit(5);
     const list = (matches || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find an open task matching "${frag}".`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few tasks match: ${list.map((t) => `"${t.title}"`).join(", ")}. Which one?`, opts) };
     const t = list[0];
+    // ACCESS CONTROL (P0): a team-tier caller may only update THEIR OWN task.
+    {
+      const gate = await assertTaskAccess(ctx, db, { taskAssigneeId: t.assignee_id ?? null });
+      if (!gate.ok) return { ok: false, summary: humanize(gate.summary, opts), error: gate.error };
+    }
     // Wall 2: discriminator-name mismatch guard (mirror of complete_task).
     const discU = await discriminatorMismatch(db, ctx, String(t.title || ""));
     if (!discU.ok) {
@@ -2137,12 +2281,24 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       // KT #261: speaker-pronoun "Me"/"myself"/"I" routes via senderPhone, not findMember.
       // The 2026-06-14 Ashraf×2 silent-fail ("now assigned to you" but assignee_id=NULL)
       // happened because findMember("Me") returned null and the LLM narrated success anyway.
-      const m = await resolveAssignee(db, ctx.senderPhone, input.assignee_name);
-      if (!m) {
-        const detail = isSelfPronoun(input.assignee_name)
-          ? `I don't recognise this WhatsApp number as a team member yet, so I can't assign to "you" automatically. Tell me your name and I'll wire it.`
-          : `I could not find a team member called ${input.assignee_name}.`;
-        return { ok: false, summary: humanize(detail, opts) };
+      // BUG 3 (2026-06-20): a NAMED new-assignee routes through findMemberUnion, NOT the
+      // loose resolveAssignee->findMember which silently first-matches on ambiguity (the
+      // exact bug create_task was fixed for in KT #318, never propagated here). Ask on
+      // ambiguity; honest "could not find" on a miss. Self-pronoun still via senderPhone.
+      const rawNew = String(input.assignee_name).trim();
+      let m: any = null;
+      if (isSelfPronoun(rawNew)) {
+        m = await findMemberByPhone(db, ctx.senderPhone);
+        if (!m) return { ok: false, summary: humanize(`I don't recognise this WhatsApp number as a team member yet, so I can't assign to "you" automatically. Tell me your name and I'll wire it.`, opts) };
+      } else {
+        const res = await findMemberUnion(db, rawNew);
+        if (res.kind === "ambiguous") {
+          return { ok: false, summary: humanize(memberAmbiguityQuestion(rawNew, res.candidates), opts), detail: { needs_disambiguation: true, query: rawNew } };
+        }
+        if (res.kind === "none") {
+          return { ok: false, summary: humanize(`I could not find a team member called ${rawNew}.`, opts), detail: { assignee_not_found: rawNew } };
+        }
+        m = res.member;
       }
       patch.assignee_id = m.id; changed.push(`assigned to ${m.name}`);
     }
@@ -2153,7 +2309,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (typeof input.important === "boolean") { patch.important = input.important; changed.push(input.important ? "marked important" : "cleared importance"); }
     if (["general", "specific"].includes(input.task_type)) { patch.task_type = input.task_type; changed.push(`type ${input.task_type}`); }
     if (!changed.length) return { ok: false, summary: humanize("Tell me what to change (assignee, due date, priority, importance, type, or title).", opts) };
-    await db.from("tasks").update(patch).eq("id", t.id);
+    // BUG 4: check the mutation error. Previously ok:true was returned unconditionally,
+    // so "Updated X" was reported even when RLS / a network error blocked the write.
+    const { error: updErr } = await db.from("tasks").update(patch).eq("id", t.id);
+    if (updErr) return { ok: false, summary: humanize(`I could not update "${t.title}" just now. ${(updErr as any).message || ""}`.trim(), opts), error: (updErr as any).message || "update_failed" };
     await emit({ type: "task.updated", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: t.id, payload: { title: patch.title || t.title, changed, via: "smart" } });
     return { ok: true, summary: humanize(`Updated "${patch.title || t.title}": ${changed.join(", ")}.`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: t.id, changed } };
   }
@@ -2933,7 +3092,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     return { ok: true, summary: humanize(`Updated: now ${cur} ${Number(amt).toLocaleString()} to ${pay}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { updated_id: p.id } };
   }
   if (name === "delete_task") {
-    let q = db.from("tasks").select("id,title,status").order("created_at", { ascending: false }).limit(12);
+    let q = db.from("tasks").select("id,title,status,assignee_id").order("created_at", { ascending: false }).limit(12);
     const frag = String(input.title || "").trim().slice(0, 40);
     // KT #274 (2026-06-15): stop-list refusal mirrored from complete_task. Delete
     // is IRREVERSIBLE so the wall has to be tighter here: stop-list refusal AND
@@ -2951,6 +3110,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!cands.length) return { ok: false, summary: humanize("I could not find that task to remove.", opts) };
     if (cands.length > 1) return { ok: false, summary: humanize(`Which task: ${cands.slice(0, 5).map((t) => `"${t.title}"`).join(", ")}?`, opts), detail: { ambiguous: true } };
     const t = cands[0];
+    // ACCESS CONTROL (P0): a team-tier caller may only delete THEIR OWN task.
+    {
+      const gate = await assertTaskAccess(ctx, db, { taskAssigneeId: t.assignee_id ?? null });
+      if (!gate.ok) return { ok: false, summary: humanize(gate.summary, opts), error: gate.error };
+    }
     // Wall 2: discriminator-name mismatch guard. Delete is irreversible so this
     // wall is doubly important here.
     const discD = await discriminatorMismatch(db, ctx, String(t.title || ""));
@@ -2958,7 +3122,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       await emit({ type: "sasa.discriminator_mismatch_refused", source: "agent:sasa", actor: ctx.operatorName || "operator", subject_type: "task", subject_id: t.id, payload: { tool: "delete_task", expected: discD.expected, got: discD.got, title: t.title, frag } }).catch(() => null);
       return { ok: false, summary: humanize(`I will not delete "${t.title}" from your message about ${discD.got}. Those name different people. Tell me which task you meant.`, opts) };
     }
-    await db.from("tasks").delete().eq("id", t.id);
+    // BUG 4: check the mutation error. Previously ok:true was returned unconditionally,
+    // so "Removed the task" was reported even when RLS / a network error blocked the delete.
+    const { error: delErr } = await db.from("tasks").delete().eq("id", t.id);
+    if (delErr) return { ok: false, summary: humanize(`I could not remove "${t.title}" just now. ${(delErr as any).message || ""}`.trim(), opts), error: (delErr as any).message || "delete_failed" };
     await emit({ type: "task.deleted", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: t.id, payload: t });
     return { ok: true, summary: humanize(`Removed the task "${t.title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { deleted_id: t.id } };
   }
@@ -3269,7 +3436,7 @@ export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup
   // (web console / legacy callers), preserving full visibility there.
   const viewerIsOwner = ctx?.tier === "team" ? false : (ctx?.rank ? ctx.rank === "owner" : true);
   try {
-    if (isReadTool(name)) return await runRead(db, name, input || {}, ctx?.tier || "admin", viewerIsOwner);
+    if (isReadTool(name)) return await runRead(db, name, input || {}, ctx?.tier || "admin", viewerIsOwner, ctx?.contactId || null);
     return await runAction(db, name, input || {}, ctx || {});
   } catch (e: any) {
     return { ok: false, summary: "", error: e?.message || "tool failed" };

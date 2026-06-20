@@ -78,18 +78,33 @@ async function send(payload: Record<string, any>): Promise<{ id: string | null; 
     // The wall must never break delivery. A guards failure means the body
     // ships unfiltered this once; the import error will surface in logs.
   }
-  // OWNER MIRROR (KT #315). Every free-form TEXT reply to a non-owner is mirrored
-  // to the owner (Taona) so he sees both sides. It lives HERE in the primitive,
-  // not in sendTextAndLog, because ~14 paths (reminders, fast-path task ops,
-  // reassurance lines) call sendText directly and bypassed the wrapper — exactly
-  // why the wall above also moved here. Fire-and-forget; never blocks or throws.
-  // Recursion-safe: the mirror's own send has recipient === owner, so it skips.
+  const r = await fetch(`${GRAPH}/${PHONE_ID()}/messages`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", ...payload }),
+    cache: "no-store",
+  });
+  const j = await r.json().catch(() => ({}));
+  const primaryId: string | null = r.ok ? (j?.messages?.[0]?.id ?? null) : null;
+
+  // OWNER MIRROR (KT #315, gated on primary success #321). Every free-form TEXT
+  // reply to a non-owner is mirrored to the owner (Taona) so he sees both sides.
+  // It lives HERE in the primitive, not in sendTextAndLog, because ~14 paths
+  // (reminders, fast-path task ops, reassurance lines) call sendText directly and
+  // bypassed the wrapper — exactly why the wall above also moved here.
+  // BUG-A FIX (2026-06-20): the mirror used to be dispatched fire-and-forget
+  // BEFORE the fetch, so Taona got "[Sasa → Nur] ..." for a message Nur never
+  // received — a false delivery confirmation. The mirror is now dispatched only
+  // AFTER the fetch resolves with a real message id. A failed primary is NOT
+  // mirrored; the owner_mirror event records primary_ok so the drop is observable.
+  // Fire-and-forget once dispatched; never blocks or throws. Recursion-safe: the
+  // mirror's own send has recipient === owner, so the _rec !== _own guard skips it.
   try {
     const _body = (payload as any)?.text?.body;
     const _to = String((payload as any)?.to || "");
     const _own = phoneKey(process.env.OWNER_WHATSAPP?.split(",")[0] || "");
     const _rec = phoneKey(_to);
-    if (_body && _own && _rec && _rec !== _own) {
+    if (primaryId && _body && _own && _rec && _rec !== _own) {
       void (async () => {
         let label = _rec;
         try {
@@ -101,20 +116,53 @@ async function send(payload: Record<string, any>): Promise<{ id: string | null; 
         if (!mr?.id) { try { await sendTemplate(_own, "system_alert", [`Sasa to ${label}`.slice(0, 60), String(_body).slice(0, 300)]); } catch { /* window-closed fallback */ } }
         try {
           const { emit } = await import("./events");
-          await emit({ type: "sasa.owner_mirror", source: "lib:whatsapp.send", actor: "system", subject_type: "contact", subject_id: null, payload: { label, to_last4: _rec.slice(-4), free_ok: !!mr?.id } });
+          await emit({ type: "sasa.owner_mirror", source: "lib:whatsapp.send", actor: "system", subject_type: "contact", subject_id: null, payload: { label, to_last4: _rec.slice(-4), primary_ok: true, free_ok: !!mr?.id } });
         } catch { /* never block */ }
       })();
     }
   } catch { /* mirror never breaks the send */ }
-  const r = await fetch(`${GRAPH}/${PHONE_ID()}/messages`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${TOKEN()}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", ...payload }),
-    cache: "no-store",
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) return { id: null, error: j?.error?.message || `WhatsApp send failed (${r.status})` };
-  return { id: j?.messages?.[0]?.id ?? null };
+
+  if (!r.ok) {
+    const errMsg = j?.error?.message || `WhatsApp send failed (${r.status})`;
+    const errCode = j?.error?.code;
+    // BUG-B FIX (2026-06-20): a free-form TEXT send that fails the Meta
+    // re-engagement / outside-the-24h-window class used to return {id:null,error}
+    // with NO event — a proactive task-assignment push to a teammate who hadn't
+    // messaged in 24h vanished silently. We now (a) emit sasa.send_dropped_outside_window
+    // so the drop is observable, and (b) fall back to WHATSAPP_REENGAGE_TEMPLATE
+    // IF one is configured (a raw bodyless template is worse than a logged failure,
+    // so we never invent one). The error is always surfaced to the caller.
+    const isFreeFormText = !!(payload as any)?.text?.body;
+    const outsideWindow = errCode === 131026 || errCode === 470 ||
+      /re-?engagement|outside the 24|24 hour|re-?engage/i.test(String(errMsg));
+    if (isFreeFormText && outsideWindow) {
+      const reTpl = process.env.WHATSAPP_REENGAGE_TEMPLATE;
+      void (async () => {
+        try {
+          const { emit } = await import("./events");
+          await emit({
+            type: "sasa.send_dropped_outside_window",
+            source: "lib:whatsapp.send",
+            actor: "system",
+            subject_type: "contact",
+            subject_id: null,
+            payload: { to_last4: phoneKey(String((payload as any)?.to || "")).slice(-4), error_code: errCode ?? null, error: String(errMsg).slice(0, 300), reengage_template: reTpl || null },
+          });
+        } catch { /* never block */ }
+      })();
+      if (reTpl) {
+        // A configured re-engagement template exists: use it as the primary
+        // fallback so the proactive push still lands (template works outside the
+        // window). The body is carried as the first param.
+        const body = String((payload as any)?.text?.body || "").slice(0, 1000);
+        const fb = await sendTemplate(String((payload as any)?.to || ""), reTpl, body ? [body] : []).catch(() => null);
+        if (fb?.id) return { id: fb.id };
+      }
+      return { id: null, error: errMsg };
+    }
+    return { id: null, error: errMsg };
+  }
+  return { id: primaryId };
 }
 
 // Free-form text reply (24h window). `to` is the recipient's wa_id (digits, no +).
@@ -280,7 +328,12 @@ export async function operatorOf(db: any, waId: string): Promise<{ role: Operato
 // the + never breaks delivery. (KT #314: dedup + normalization, 2026-06-20.)
 export function toE164(raw: string): string {
   const d = String(raw || "").replace(/\D/g, "").replace(/^00/, "");
-  return /^\d{10,13}$/.test(d) ? "+" + d : String(raw || "");
+  // BUG-C FIX (2026-06-20): a leading-zero local number ("0703119486") used to
+  // pass /^\d{10,13}$/ and become "+0703119486" — not a valid E.164 (no country
+  // code starts with 0) and it false-dedups against the real "+254703119486".
+  // Require the first digit to be 1-9; a leading-zero string is left RAW (not
+  // prefixed with +) so it is obviously non-canonical and never collides.
+  return /^[1-9]\d{9,12}$/.test(d) ? "+" + d : String(raw || "");
 }
 
 export async function resolveContact(db: any, waId: string, name?: string | null): Promise<string | null> {
@@ -435,10 +488,12 @@ export async function sendTemplateAndLog(
     return devRes;
   }
   const res = await sendTemplate(to, name, params, opts?.lang || "en_US");
-  // Mirror template outbound to the owner (Taona).
+  // Mirror template outbound to the owner (Taona). BUG-A FIX (2026-06-20): gated
+  // on res.id — only mirror a template that actually returned a message id, so
+  // Taona never gets "[Sasa template → ...]" for a template that failed to send.
   const _to = phoneKey(to);
   const _tn = phoneKey(process.env.OWNER_WHATSAPP?.split(",")[0] || "");
-  if (_tn && _to && _to !== _tn) {
+  if (res.id && _tn && _to && _to !== _tn) {
     sendText(_tn, `[Sasa template → ${to}] ${logBody}`).catch(() => {});
   }
   const status = res.id ? "sent" : (res.error === "maintenance_dropped" ? "maintenance_dropped" : "failed");
