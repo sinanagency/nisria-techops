@@ -56,7 +56,7 @@ CREATE TABLE assets (
 -- ---------------------------------------------------------------------------
 CREATE TABLE inventory (
   id              TEXT PRIMARY KEY,
-  item_type       TEXT NOT NULL,                 -- supply | textile | end_product
+  item_type       TEXT,                          -- NULL until classified; supply | textile | end_product
   sku             TEXT,
   tracking_no     TEXT UNIQUE,                   -- end-product unique key
   name            TEXT NOT NULL,
@@ -83,8 +83,11 @@ CREATE TABLE inventory (
   source_message_external_id TEXT,                     -- provenance
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- nullable until classified (no more 'fake end_product' pre-typing)
   CONSTRAINT inventory_item_type_check
-    CHECK (item_type IN ('supply','textile','end_product')),
+    CHECK (item_type IS NULL OR item_type IN ('supply','textile','end_product')),
+  -- stock can never go negative (consumeMaterials floor)
+  CONSTRAINT inventory_quantity_nonneg CHECK (quantity >= 0),
   -- TRAP 1: live values + 'draft'. Lifecycle words are NOT allowed here.
   CONSTRAINT inventory_status_check
     CHECK (status IN ('in_stock','low','out','archived','draft')),
@@ -152,7 +155,9 @@ CREATE TABLE inventory_sales (
   tracking_no     TEXT,
   channel         TEXT NOT NULL,                 -- online|folklore|jensen_shopify|other
   customer        TEXT,
-  customer_token  TEXT,                          -- scoped status-check token
+  customer_phone  TEXT,                          -- token is BOUND to this phone
+  customer_token  TEXT,                          -- scoped status-check token (CSPRNG)
+  token_expires_at TIMESTAMPTZ,                  -- tokens expire
   price           NUMERIC(12,2) NOT NULL,
   currency        TEXT NOT NULL,
   channel_fee     NUMERIC(12,2) NOT NULL DEFAULT 0,

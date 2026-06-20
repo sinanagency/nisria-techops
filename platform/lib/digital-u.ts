@@ -50,10 +50,18 @@ function meetingBotBases(): string[] {
 }
 
 async function nodeHealthy(base: string): Promise<boolean> {
-  try {
-    const r = await fetch(`${base}/api/health`, { method: "GET", signal: AbortSignal.timeout(5000) });
-    return r.ok;
-  } catch { return false; }
+  // KT #346: the zanii-meetingbot engine serves GET /health (server.js), NOT
+  // /api/health, and the digitalu.zanii.agency Vercel rewrite only forwards /health.
+  // The first cut probed /api/health → 404 → every node read as dead → the failover
+  // refused to dispatch at all. Probe /health (the real contract); fall back to
+  // /api/health for any engine variant that uses the namespaced path.
+  for (const p of ["/health", "/api/health"]) {
+    try {
+      const r = await fetch(`${base}${p}`, { method: "GET", signal: AbortSignal.timeout(5000) });
+      if (r.ok) return true;
+    } catch { /* try next path */ }
+  }
+  return false;
 }
 
 export async function dispatchMeetingBot(opts: {
