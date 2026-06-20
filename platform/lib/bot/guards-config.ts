@@ -30,9 +30,14 @@ export const SASA_BOT_GUARDS_CONFIG = defineBotConfig({
     },
   ],
 
+  // PERSON-NAME bans removed 2026-06-21 (KT #335): "Jensen" and "Stephen" were
+  // banned as cross-bot-leak words, but they are now REAL Nisria people — Nur signs
+  // a contract from "Jensen" (Upaya website) and "Stephen Koitaat" is a real donor
+  // (KES 156,000). The ban rewrote every legitimate reply mentioning them to the
+  // "Tell me a bit more" reask, so Sasa created the tasks correctly but told Nur it
+  // did nothing. The config's own rule: "if a real one appears, the entry comes out."
+  // Kept: genuine cross-PRODUCT brand names; the real 4Q leak is still caught below.
   forbiddenBrands: [
-    "Jensen",
-    "Stephen",
     "4Q",
     "four quadrant",
     "four quadrants",
