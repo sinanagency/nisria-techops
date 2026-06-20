@@ -22,7 +22,8 @@ import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
 import { autoCapture } from "../../../../lib/memory-extract";
 import { withSandbox, isHarnessMessageId } from "../../../../lib/sandbox";
 import { pushIncident } from "../../../../lib/notify";
-import { commitPaymentRow } from "../../../../lib/smart-tools";
+import { commitPaymentRow, runSmartTool } from "../../../../lib/smart-tools";
+import { humanize } from "../../../../lib/humanize";
 import { readMedia } from "../../../../lib/anthropic";
 import { transcribeAudio } from "../../../../lib/transcribe";
 import { createBatch } from "../../../../lib/ingest";
@@ -317,6 +318,70 @@ async function processJob(db: any, job: any): Promise<void> {
       await emit({ type: res.id ? "whatsapp.message_out" : "whatsapp.send_failed", source: "agent:sasa", actor: "P-bot", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { to: from, kind: msgType, unsupported: true, error: res.error } });
       if (res.id) await markJobDone(job.id); else await markJobError(job.id, res.error || "send failed");
       return;
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // COMPLETE-TASK NOTE SLOT (2026-06-20, KT #324). When a team-tier member is
+  // mid-completion (complete_task resolved exactly one task, then asked "what was
+  // the outcome?"), it staged a pending_actions slot kind='complete_task_awaiting_note'
+  // status='awaiting_note'. Their NEXT message IS that outcome note. We catch it
+  // HERE, before the payment confirm gate AND before the parseTaskOps block, and
+  // feed it back into complete_task as its `reason` via runSmartTool so the access
+  // gate + expired-exclusion + honesty all still apply. Without this slot the note
+  // re-parsed cold and "...before any changes" hit the dependency parser (live bug).
+  // Deterministic, no brain in the loop, exactly like the payment confirm path.
+  // NEW status 'awaiting_note' is distinct from 'awaiting_confirm' so this NEVER
+  // collides with the money path below.
+  // ──────────────────────────────────────────────────────────────────────
+  if (contactId && command) {
+    const noteCut = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    // a stale slot must not swallow a much-later message: supersede old ones first.
+    await db.from("pending_actions").update({ status: "superseded", resolved_at: new Date().toISOString() })
+      .eq("contact_id", contactId).eq("status", "awaiting_note").lt("created_at", noteCut);
+    const { data: slots } = await db.from("pending_actions")
+      .select("*").eq("contact_id", contactId).eq("status", "awaiting_note").eq("kind", "complete_task_awaiting_note")
+      .gte("created_at", noteCut).order("created_at", { ascending: false }).limit(1);
+    const slot = slots?.[0] || null;
+    if (slot) {
+      const raw = command.trim();
+      // ESCAPE: a clear cancel / negation / obviously-new-command must NOT be
+      // stamped as a completion note. Supersede the slot and fall through to the
+      // brain (the member changed their mind or started a new instruction).
+      const isEscape = /^(?:no|not done|never ?mind|cancel|actually|wait|hold on|stop|scrap)\b/i.test(raw)
+        || /^(?:create|add task|add a task|new task|assign)\b/i.test(raw);
+      if (isEscape) {
+        await db.from("pending_actions").update({ status: "superseded", resolved_at: new Date().toISOString() }).eq("id", slot.id);
+        await emit({ type: "sasa.task_slot_escaped", source: "agent:sasa", actor: opName || name || "team", subject_type: "task", subject_id: slot.payload?.task_id || null, correlation_id: traceId, payload: { reason: "cancel_or_new_command" } }).catch(() => null);
+        // fall through to the brain (do NOT return)
+      } else {
+        const title = String(slot.payload?.title || "");
+        // Route the note through complete_task so the access gate runs. tier=role
+        // ('team' here), senderPhone + contactId so assertTaskAccess can resolve
+        // the caller and confirm they own the task.
+        // NOTE: sourceMessageId is resolved later in the turn (after the payment
+        // confirm gate) and is only used by create_task dedup; complete_task does
+        // not read it, so we intentionally omit it here to keep this handler ahead
+        // of that resolution.
+        const res = await runSmartTool("complete_task", { title, reason: raw }, {
+          senderPhone: from, contactId: contactId || undefined, tier: role as "admin" | "team",
+          rank: opRank, operatorName: opName || name || undefined, traceId: traceId || undefined,
+        });
+        if (res?.ok) {
+          await db.from("pending_actions").update({ status: "committed", resolved_at: new Date().toISOString() }).eq("id", slot.id);
+          const shortNote = raw.length > 140 ? raw.slice(0, 137) + "..." : raw;
+          await sendTextAndLog(db, from, humanize(`Done. Marked "${title}" complete. Noted: ${shortNote}.`), { contactId, trace_id: traceId });
+          await emit({ type: "sasa.task_slot_filled", source: "agent:sasa", actor: opName || name || "team", subject_type: "task", subject_id: slot.payload?.task_id || null, correlation_id: traceId, payload: { title, note_len: raw.length } }).catch(() => null);
+          await markJobDone(job.id); return;
+        }
+        // Gate refusal or honest failure: relay the tool's own honest summary and
+        // close the slot so a retry starts clean. NEVER fall back to a raw write.
+        await db.from("pending_actions").update({ status: "superseded", resolved_at: new Date().toISOString() }).eq("id", slot.id);
+        const msg = res?.summary || `I could not close "${title}". Tell me which task you meant.`;
+        await sendTextAndLog(db, from, humanize(msg), { contactId, trace_id: traceId });
+        await emit({ type: "sasa.task_slot_refused", source: "agent:sasa", actor: opName || name || "team", subject_type: "task", subject_id: slot.payload?.task_id || null, correlation_id: traceId, payload: { error: res?.error || "complete_failed" } }).catch(() => null);
+        await markJobDone(job.id); return;
+      }
     }
   }
 
@@ -752,7 +817,12 @@ async function processJob(db: any, job: any): Promise<void> {
         const blockerHits = fuzzyMatchTasks(dt.blocker_fragment, openRows);
         const blockedHits = fuzzyMatchTasks(dt.blocked_fragment, openRows);
         if (!blockerHits.length || !blockedHits.length) {
-          await sendTextAndLog(db, from, `I could not match both tasks for the dependency ("${dt.blocker_fragment}" blocks "${dt.blocked_fragment}"). Try again with more of each title.`, { contactId, trace_id: traceId });
+          // CLARITY ASK (2026-06-20, KT #324): never leak the internal frag
+          // machinery. The "X before Y" dependency parser is greedy (it fired on
+          // a completion note "communication must be made before any changes" in
+          // the live bug), so a no-match here is usually NOT a real dependency.
+          // Ask a clean human question naming what we need, via humanize().
+          await sendTextAndLog(db, from, humanize(`I'm not sure which two tasks you mean to link. Tell me the two task names and which one blocks which.`), { contactId, trace_id: traceId });
           return;
         }
         const blocker = pickMostRecent(blockerHits) as any;

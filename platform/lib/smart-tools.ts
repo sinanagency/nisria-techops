@@ -1309,9 +1309,13 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // close without one (their role IS the reason). Best-effort guard, the
     // reason is then stored on the tasks.reason column.
     const reason = typeof input.reason === "string" ? input.reason.trim().slice(0, 600) : "";
-    if (ctx.tier === "team" && !reason) {
-      return { ok: false, summary: humanize("I need a short reason on a team-tier completion. Tell me what is done so I can stamp it on the task.", { now: { long: (await now()).long, today: (await now()).today } }), error: "reason_required" };
-    }
+    // NOTE (2026-06-20, KT #324): the team-tier reason-ask used to fire HERE,
+    // before the task was resolved, so the bot had no task_id to anchor on and
+    // the team member's free-text outcome note re-entered the worker COLD (it
+    // hit parseTaskDependency's "X before Y" pattern and mis-routed). The
+    // reason-ask now fires AFTER the single task is resolved + access-gated
+    // (below, just before the update), where we STAGE a pending_actions slot so
+    // the next message flows back into this same complete_task as its reason.
     // "who did it" defaults to the person speaking. In a group we know their phone,
     // so resolve them EXACTLY by phone before falling back to a name guess. This is
     // what makes a bare "done" tick the right person's task.
@@ -1466,6 +1470,39 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!disc.ok) {
       await emit({ type: "sasa.discriminator_mismatch_refused", source: "agent:sasa", actor: ctx.operatorName || "operator", subject_type: "task", subject_id: task.id, payload: { tool: "complete_task", expected: disc.expected, got: disc.got, title: task.title, frag } }).catch(() => null);
       return { ok: false, summary: humanize(`I cannot close "${task.title}" from your message about ${disc.got}. Those name different people. Tell me which task you meant.`, opts) };
+    }
+    // ─── TEAM-TIER REASON SLOT (2026-06-20, KT #324) ──────────────────────────
+    // A team-tier completion needs a one-line reason so the audit shows WHO ticked
+    // and WHY (owner/founder's role IS the reason, so they skip this). The task is
+    // now fully resolved AND access-gated, so we know task.id + task.title. STAGE
+    // a pending_actions slot keyed to this contact so the team member's NEXT
+    // message flows straight back into complete_task as its `reason`, instead of
+    // being re-parsed cold (the live bug: the note "...before any changes" hit the
+    // dependency parser). NEW status 'awaiting_note' (never 'awaiting_confirm') so
+    // the payment confirm block does not grab it. Best-effort: a stage failure
+    // falls back to a plain re-ask and never breaks the completion path.
+    if (ctx.tier === "team" && !reason) {
+      const nowParts = { now: { long: (await now()).long, today: (await now()).today } };
+      if (ctx.contactId) {
+        try {
+          // One open slot at a time: supersede any prior awaiting_note for this contact.
+          await db.from("pending_actions")
+            .update({ status: "superseded", resolved_at: new Date().toISOString() })
+            .eq("contact_id", ctx.contactId).eq("status", "awaiting_note");
+          await db.from("pending_actions").insert({
+            contact_id: ctx.contactId,
+            kind: "complete_task_awaiting_note",
+            status: "awaiting_note",
+            payload: { task_id: task.id, title: task.title },
+            summary: `complete "${task.title}"`,
+          });
+          await emit({ type: "sasa.task_slot_staged", source: "agent:sasa", actor: ctx.operatorName || "team", subject_type: "task", subject_id: task.id, payload: { title: task.title } }).catch(() => null);
+        } catch (e: any) {
+          // Best-effort: never block the ask on a stage failure.
+          await emit({ type: "sasa.task_slot_stage_failed", source: "smart-tools", actor: ctx.operatorName || "team", payload: { task_id: task.id, error: String(e?.message || e).slice(0, 200) } }).catch(() => null);
+        }
+      }
+      return { ok: false, summary: humanize(`I need a short reason to close "${task.title}". Tell me what is done and I will stamp it on the task.`, nowParts), error: "reason_required", detail: { task_id: task.id, title: task.title, awaiting_note: true } };
     }
     const completeUpdate: Record<string, any> = { status: "done", updated_at: new Date().toISOString() };
     if (reason) completeUpdate.reason = reason;
