@@ -207,6 +207,33 @@ async function findMemberByPhone(db: any, phone?: string | null): Promise<any | 
   return (data || []).find((t: any) => phoneKey(t.phone) === p) || null;
 }
 
+// Operator phone keyset — the numbers the system DEFINITIVELY knows (Nur the
+// founder + Taona the owner), drawn from env (WHATSAPP_OPERATORS + OWNER_WHATSAPP).
+// KT #341 (2026-06-21): a recipient name like "Nur" must NEVER resolve to "more
+// than one match, which one?" — Nur is the operator. The live incident: Nur had
+// THREE rows (contacts +971…2716, contacts 10627… a malformed dup, team_members
+// 00971…2716). phoneKey() collapses the two real ones, but the garbage 10627 row
+// stayed a distinct key, so the bot refused to relay Taona's reply to her ("which
+// one is real?") three times. Fix: when multiple name matches survive de-dup and
+// EXACTLY ONE of them is a known operator number, use it — the bot always knows
+// how to reach its own operators; a stray duplicate row must never block that.
+function operatorKeySet(): Set<string> {
+  const keys = `${process.env.WHATSAPP_OPERATORS || ""},${process.env.OWNER_WHATSAPP || ""}`
+    .split(",").map((x) => phoneKey(x)).filter((k) => k.length >= 9);
+  return new Set(keys);
+}
+
+// Given the de-duped name matches (each { name, phone }), if more than one match
+// survives but exactly one is a known operator, return that single operator match
+// so the caller resolves cleanly instead of asking "which one?". Returns null when
+// the ambiguity is genuine (no operator among them, or several operators match).
+function preferOperatorMatch(uniq: Array<{ name: string; phone: string }>): { name: string; phone: string } | null {
+  if (uniq.length <= 1) return null;
+  const ops = operatorKeySet();
+  const opMatches = uniq.filter((m) => ops.has(phoneKey(m.phone)));
+  return opMatches.length === 1 ? opMatches[0] : null;
+}
+
 // Speaker pronoun set — "Me", "myself", "I", etc. (KT #261). When an LLM passes
 // any of these as assignee_name, the right answer is the speaker's phone-resolved
 // team_member row, NEVER a fuzzy name guess. findMember("Me") would otherwise
@@ -1814,8 +1841,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       const seen = new Set<string>();
       const uniq = matches.filter((m) => { const k = phoneKey(m.phone); if (seen.has(k)) return false; seen.add(k); return true; });
       if (!uniq.length) return { ok: false, summary: humanize(`I do not have a WhatsApp number for ${toRaw}. What is the number?`, opts), detail: { unresolved: true } };
-      if (uniq.length > 1) return { ok: false, summary: humanize(`More than one match: ${uniq.slice(0, 4).map((m) => m.name).join(", ")}. Which one?`, opts), detail: { ambiguous: true } };
-      number = phoneKey(uniq[0].phone); toName = uniq[0].name;
+      // KT #341: prefer a known operator match so a stray duplicate never blocks.
+      const opPick = preferOperatorMatch(uniq);
+      if (uniq.length > 1 && !opPick) return { ok: false, summary: humanize(`More than one match: ${uniq.slice(0, 4).map((m) => m.name).join(", ")}. Which one?`, opts), detail: { ambiguous: true } };
+      const chosen = opPick || uniq[0];
+      number = phoneKey(chosen.phone); toName = chosen.name;
     }
     // find the filed document/photo
     const likeD = `%${query.replace(/[,()*%]/g, "")}%`;
@@ -1920,9 +1950,12 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       const seen = new Set<string>();
       const uniq = matches.filter((m) => { const k = phoneKey(m.phone); if (seen.has(k)) return false; seen.add(k); return true; });
       if (uniq.length === 0) return { ok: false, summary: humanize(`I do not have a WhatsApp number for ${toRaw}. What is the number?`, opts), detail: { unresolved: true } };
-      if (uniq.length > 1) return { ok: false, summary: humanize(`I found more than one match: ${uniq.slice(0, 4).map((m) => m.name).join(", ")}. Which one?`, opts), detail: { ambiguous: true } };
-      number = phoneKey(uniq[0].phone);
-      toName = uniq[0].name;
+      // KT #341: a stray duplicate row must never block reaching an operator (Nur).
+      const opPick = preferOperatorMatch(uniq);
+      if (uniq.length > 1 && !opPick) return { ok: false, summary: humanize(`I found more than one match: ${uniq.slice(0, 4).map((m) => m.name).join(", ")}. Which one?`, opts), detail: { ambiguous: true } };
+      const chosen = opPick || uniq[0];
+      number = phoneKey(chosen.phone);
+      toName = chosen.name;
     }
 
     // Idempotency: do not fire a second time when the same (or essentially
