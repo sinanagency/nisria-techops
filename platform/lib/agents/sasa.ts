@@ -216,6 +216,32 @@ function _SASA_COMPLETION_GUARD(reply: string, toolRuns: { name: string; result:
   return _SASA_COMPLETION_GUARD_CACHED(reply, toolRuns);
 }
 
+// SINGULAR PASSIVE EDIT CLAIM (2026-06-21, KT #342). The live SANARA lie:
+// "Done. The SANARA graduation task is now correctly set to July 10." is a
+// SINGULAR, PASSIVE edit claim — "the <record> is now set/moved/changed to <X>".
+// It escaped every guard: AGENT_COMPLETION needs first-person ("I/we set"),
+// DONE_SIMPLE needs done/complete, PASSIVE_COMPLETION is plural-only (KT #274).
+// So a fabricated date change shipped with NO update_task / move_event run. Catch
+// it: the reply claims a single record was just CHANGED to a value, and no task or
+// event mutation tool succeeded this turn → it is a fabrication, substitute.
+//
+// Precision (no regression on the happy path): the CHANGE requirement is baked
+// INTO the phrase, so a pure status report never trips it. The claim matches only
+// when, right after the record noun + "is/has been/'s", it sees EITHER
+//   (a) "now [correctly] set|marked|scheduled|<change verb> … to/for/on <value>", OR
+//   (b) a hard change verb "moved|changed|updated|rescheduled|pushed|shifted|reset|bumped … to <value>".
+// A bare "the graduation is set for July 3" (no "now", no change verb) is a status
+// report and is NOT matched. And even when matched, it only substitutes if NO task
+// or event mutation tool returned ok this turn — a real update_task/move_event
+// confirmation passes untouched.
+const SINGULAR_EDIT_CLAIM = /\b(?:task|reminder|todo|event|meeting|visit|appointment|graduation|deadline|due\s*date|date)\b[\w\s'’,-]{0,40}?\b(?:is|are|has\s+been|have\s+been|'?s)\s+(?:now\s+(?:(?:correctly|already|successfully)\s+)?(?:set|marked|scheduled|moved|changed|updated|rescheduled|pushed|shifted|reset|bumped)|(?:(?:correctly|already|successfully)\s+)?(?:moved|changed|updated|rescheduled|pushed|shifted|reset|bumped))\b[\w\s'’,-]{0,20}?\b(?:to|for|as|on)\b\s*\S/i;
+const TASK_OR_EVENT_TOOLS = new Set<string>([...TASK_TOOLS, ...EVENT_TOOLS]);
+function claimsSingularEditWithoutSuccess(reply: string, toolRuns: { name: string; result: any }[]): boolean {
+  if (!SINGULAR_EDIT_CLAIM.test(reply)) return false;
+  const succeeded = toolRuns.some((t) => TASK_OR_EVENT_TOOLS.has(t.name) && (t.result as any)?.ok === true);
+  return !succeeded;
+}
+
 // PASSIVE_COMPLETION (2026-06-15, KT #274). AGENT_COMPLETION + DONE_SIMPLE both
 // require a first-person agent prefix (i/i've/we/it's/that's). The 2026-06-14
 // 17:05 ghost-match incident slipped past them because Sasa narrated PASSIVELY:
@@ -1537,6 +1563,23 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         return true;
       })()) {
         // already replaced above
+        alreadySubstituted = true;
+      } else if (claimsSingularEditWithoutSuccess(reply, toolRuns) && !isCapabilityQuestion(opts.command || "") && !isAmbiguousReference(opts.command || "")) {
+        // KT #342: a singular passive edit claim ("the SANARA graduation task is now
+        // set to July 10") with no task/event mutation tool succeeding this turn —
+        // the live fabricated date-change. Substitute a specific honest reask.
+        try {
+          import("../events").then(({ emit }) => emit({
+            type: "sasa.singular_edit_unverified",
+            source: "agent:sasa",
+            actor: opts.operatorName || "?",
+            subject_type: "contact",
+            subject_id: opts.contactId || null,
+            correlation_id: opts.traceId || null,
+            payload: { command: String(opts.command || "").slice(0, 200), original_reply: String(reply || "").slice(0, 600) },
+          })).catch(() => {});
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
+        reply = humanize("I have not actually changed that yet, so it still stands as it was. Tell me the exact task or event and the new date or time and I will set it now.", { now: { long: n.long, today: n.today } });
         alreadySubstituted = true;
       } else if (claimsCompletionWithoutSuccess(reply, toolRuns) && !isCapabilityQuestion(opts.command || "")) {
         // The reply claims something is done but no tool succeeded. If a tool ran and
