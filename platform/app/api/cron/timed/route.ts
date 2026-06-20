@@ -117,7 +117,7 @@ async function run(req: NextRequest) {
   }
   let tasksFired = 0;
   for (const [, bucket] of byAssignee) {
-    const items = bucket.map((t) => ({ id: t.id, title: t.title, due_on: t.due_on, priority: t.priority, assignee_id: t.assignee_id }));
+    const items = bucket.map((t) => ({ id: t.id, title: t.title, due_on: t.due_on, due_time: t.due_time, priority: t.priority, assignee_id: t.assignee_id }));
     // The cron path passes dev:false implicitly. To smoke-test on the dev phone,
     // invoke the route with ?dev=1 (still authed) and pass it through here.
     const r = await pushTaskDigest(db, items);
