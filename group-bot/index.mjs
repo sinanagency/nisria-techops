@@ -330,6 +330,11 @@ async function start() {
         // and an assignment lands on the right person.
         const mctx = contextOf(m);
         const quoted_text = quotedTextOf(mctx);
+        // S9: the EXACT id of the message this reply quotes (Baileys puts it on
+        // contextInfo.stanzaId). Forwarded so the platform can anchor a swipe-"done"
+        // to the real logged message by external_id, not a fuzzy text copy. Mirrors
+        // the reaction_target_id plumbing already shipped above.
+        const quoted_id = mctx?.stanzaId ? String(mctx.stanzaId) : "";
         const mentioned_phones = (mctx?.mentionedJid || []).map((j) => String(j).split("@")[0]).filter(Boolean);
 
         // SHARED LINK: a URL posted in the group. WhatsApp already resolved a
@@ -390,6 +395,7 @@ async function start() {
           media_mime,
           media_name,
           quoted_text,
+          quoted_id,
           mentioned_phones,
           link,
           message_id: m.key?.id || "",

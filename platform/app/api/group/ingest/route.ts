@@ -133,6 +133,7 @@ export async function POST(req: NextRequest) {
   const reactionEmoji = String(body.reaction_emoji || "");
   const reactionTargetId = String(body.reaction_target_id || "");
   const quotedText = String(body.quoted_text || "").trim();
+  const quotedId = String(body.quoted_id || "").trim(); // S9: exact reply anchor (the quoted message's wa id)
   const mentionedPhones: string[] = Array.isArray(body.mentioned_phones) ? body.mentioned_phones.map((p: any) => digits(String(p))).filter(Boolean) : [];
   const link = body.link && typeof body.link === "object" && body.link.url ? {
     url: String(body.link.url).slice(0, 1000),
@@ -457,18 +458,44 @@ export async function POST(req: NextRequest) {
   // who is speaking (for the prompt + so the brain knows the team member)
   const { name: opName } = await operatorOf(db, senderPhone).catch(() => ({ name: null as any }));
 
-  // recent group context for threading
+  // recent group context for threading — SPEAKER-TAGGED (S13). An anonymous 8-line
+  // window left the brain unable to tell who said which line (the "stay sane" blind
+  // spot: it could not attribute work or route parallel threads). Resolve each
+  // INBOUND line's sender via the contacts FK and prefix it "Name: "; outbound
+  // (assistant) lines stay unprefixed. Additive: same window + limit, names added.
   const { data: hist } = await db
-    .from("messages").select("body,direction,created_at")
+    .from("messages").select("body,direction,created_at,contact_id")
     .eq("account", group).eq("channel", "whatsapp")
     .order("created_at", { ascending: false }).limit(8);
-  const history = (hist || []).reverse().map((m: any) => ({ role: m.direction === "out" ? "assistant" : "user", content: String(m.body || "") } as const));
+  const histRows = ((hist || []) as any[]).reverse();
+  const histContactIds = [...new Set(histRows.filter((m) => m.direction !== "out" && m.contact_id).map((m) => m.contact_id as string))];
+  const nameById = new Map<string, string>();
+  if (histContactIds.length) {
+    const { data: hc } = await db.from("contacts").select("id,name").in("id", histContactIds);
+    for (const c of ((hc || []) as any[])) if (c?.name) nameById.set(c.id, String(c.name));
+  }
+  const history = histRows.map((m) => {
+    const isOut = m.direction === "out";
+    const speaker = !isOut && m.contact_id ? nameById.get(m.contact_id) : null;
+    const content = String(m.body || "");
+    return { role: isOut ? "assistant" : "user", content: speaker ? `${speaker}: ${content}` : content } as const;
+  });
 
   // enrich the command with precise context: what a reply is quoting (so "done"
   // hits the right task) and who was @mentioned, resolved to real member names (so
   // an assignment lands on the right person). Both reuse the existing brain.
   let command = text;
-  if (quotedText) command = `[replying to: "${quotedText.slice(0, 240)}"]\n${command}`;
+  // S9 (read side): prefer an EXACT, server-resolved quote anchor (by the quoted
+  // message's wa id) over the client-supplied fuzzy fragment, so a swipe-"done"
+  // anchors to the REAL logged message (the reaction path already resolves by
+  // external_id the same way). Falls back to quotedText when the id doesn't resolve
+  // (older userbot, or the quoted message isn't in our log).
+  let quoteAnchor = quotedText ? `[replying to: "${quotedText.slice(0, 240)}"]` : "";
+  if (quotedId) {
+    const { data: qmsg } = await db.from("messages").select("body").eq("external_id", quotedId).limit(1);
+    if (qmsg?.[0]?.body) quoteAnchor = `[replying to message ${quotedId}: "${String(qmsg[0].body).slice(0, 400)}"]`;
+  }
+  if (quoteAnchor) command = `${quoteAnchor}\n${command}`;
   if (mentionedPhones.length) {
     const { data: mem } = await db.from("team_members").select("name,phone").in("phone", mentionedPhones);
     const names = ((mem || []) as any[]).map((x) => x.name).filter(Boolean);
@@ -486,6 +513,14 @@ export async function POST(req: NextRequest) {
     history: isCaseGroup(group) ? [] : history,
     command,
     casesIntake: isCaseGroup(group), // Rescue & Rehab etc.: intakes become cases, not beneficiaries
+    // S4 NOTE (group-bot Phase 0, skeptic-corrected): parseTasksFired is deliberately
+    // NOT wired here. With group parseTasks OFF by default the brain is already the
+    // SOLE task writer (no live duplicate to fix). And the DM flag means "a task ROW
+    // was already written" — but the group parseTasks block only STAGES a proposal
+    // for Nur's approval, it never writes a tasks row. So passing the flag would make
+    // the brain falsely claim "Done, logged X" for a task that was only proposed (a
+    // Law-11 honesty break). The honest parse-on dedup (propose + Nur confirm, with a
+    // staged-not-written narration) is Phase 1 consent-flow work, not Phase 0.
     traceId,
   });
   const reply = sasaRes.reply;
