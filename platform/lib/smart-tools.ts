@@ -41,7 +41,7 @@ import { draftThankYou } from "./agents/steward";
 import { enqueueJob, triggerWorker } from "./jobs";
 import { pushTaskAlert, pushOperatorUpdate, pushCalendarAlert } from "./notify";
 import { getCalendar, holidayOn, type CalEvent } from "./calendar";
-import { searchInbox } from "./gmail";
+import { searchInbox, readEmail } from "./gmail";
 import { createEvent as gcalCreate, patchEvent as gcalPatch, deleteEvent as gcalDelete, gcalConfigured } from "./gcal";
 import { dispatchMeetingBot } from "./digital-u";
 
@@ -398,6 +398,7 @@ export const SMART_TOOLS = [
   { name: "flag_for_clarity", description: "Ask the operator a clarifying question WHEN YOU ARE UNSURE and would otherwise guess or silently act: possible duplicate records, an ambiguous reference you cannot resolve even after a lookup, a task/item with no clear owner, or a merge/delete/reassign you are not certain about. Pass one clear question and the candidate options. Use this INSTEAD of guessing, silently picking, merging, deleting, or reassigning. The operator's answer then tells you what to do.", input_schema: { type: "object", properties: { question: { type: "string", description: "the one clear question to ask the operator" }, options: { type: "array", items: { type: "string" }, description: "the candidate choices, e.g. the two duplicate task titles" }, about: { type: "string", description: "short tag, e.g. 'possible duplicate tasks' or 'missing owner'" } }, required: ["question"] } },
   { name: "show_outbound_audit", description: "Show what YOU (Sasa) have actually sent to TEAM MEMBERS on WhatsApp in a recent window. This is the audit/receipt view, the ground truth of what really went out, independent of any earlier narration. Use whenever Nur asks 'what did you send today', 'who did you message', 'did you actually text X', 'show me what you sent', 'show your outbound', 'audit your sends', 'what messages went out from you today', 'did Cynthia get the message'. Returns a per-recipient summary with timestamps and the bodies of each message. Excludes messages back to Nur herself. Always also point her to /admin/transcripts for the full filterable view. Admin only.", input_schema: { type: "object", properties: { window_hours: { type: "number", description: "Lookback window in hours, default 24" }, contact: { type: "string", description: "Optional name filter (e.g. 'Mark', 'Violet'); omit for all recipients" } } } },
   { name: "search_inbox", description: "Search the sasa@nisria.co email INBOX (read-only) to check what actually arrived. Use for 'did the SANARA statements come into the sasa email', 'did we get the I&M statement', 'any email from <sender> about <thing>', 'check the inbox for invoices'. Returns sender, subject, date, snippet and attachment filenames. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "What to look for in plain words (e.g. 'SANARA bank statement', 'invoice from Java'). Optionally a sender name/email." }, max: { type: "number", description: "max results, default 10" } }, required: ["query"] } },
+  { name: "read_email", description: "READ the FULL text of ONE email from the sasa@nisria.co inbox out loud to the operator. Use when she wants to actually READ an email, not just check it arrived: 'read me the email from Mwangi', 'what does the latest email from the bank say', 'show me the full email about the grant', 'open that email'. Finds the best match and returns its full body (sender, subject, date, and the complete message). For just checking whether something arrived, use search_inbox. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "a sender name/email and/or a few words from the subject or body, e.g. 'Mwangi grant', 'latest from the bank'" } }, required: ["query"] } },
   { name: "list_content", description: "Recent social/content posts with their channels, status (draft/scheduled/posted), and schedule. Use for 'what content is scheduled', 'what posts are in draft', 'what did we post'.", input_schema: { type: "object", properties: {} } },
   { name: "list_beneficiaries", description: "List beneficiaries (children/families in the programs) with optional filters. CONFIDENTIAL: admin only, never in a group/team context. Use for 'who is in the rescue program', 'list our graduated children', 'who has no photo'. Filters: program, status, cohort.", input_schema: { type: "object", properties: { program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, status: { type: "string" }, has_photo: { type: "boolean" } } } },
   { name: "find_studio_doc", description: "Find a generated Studio document (cover letters, budgets, branded docs/PDFs) by title or type. Use for 'pull up the budget cover letter', 'find the grant narrative doc'.", input_schema: { type: "object", properties: { query: { type: "string" } } } },
@@ -1065,6 +1066,33 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
       };
     } catch (e: any) {
       return { error: `Could not read the inbox: ${e?.message || e}` };
+    }
+  }
+  // READ FULL EMAIL (KT #350): search_inbox returns snippets only; this returns the
+  // COMPLETE body so the bot can read an email to Nur in WhatsApp ("view emails
+  // properly"). Finds the best match, then fetches the full message.
+  if (name === "read_email") {
+    if (tier === "team") return { error: "not available here" };
+    const q = String(input.query || "").trim();
+    if (!q) return { error: "Which email? Give me a sender or a few words from it." };
+    try {
+      const hits = await searchInbox(q, 4);
+      if (!hits.length) return { matched: 0, note: `I could not find an email matching "${q}" in the inbox. It may not have arrived, or try the sender's name or different words.` };
+      const top = hits[0];
+      const full = await readEmail(top.id);
+      const body = String(full?.body || top.snippet || "").trim().slice(0, 3500);
+      return {
+        matched: hits.length,
+        from: top.from,
+        subject: top.subject,
+        date: top.date,
+        attachments: top.attachments || [],
+        body: body || "(this email has no readable text body)",
+        more: hits.length > 1 ? `${hits.length} emails matched; this is the most recent. Name the sender or subject for a different one.` : undefined,
+        instruction: "Read this email to the operator: show From, Subject, Date, then the full body verbatim. Do not summarise unless asked.",
+      };
+    } catch (e: any) {
+      return { error: `Could not read that email: ${e?.message || e}` };
     }
   }
   if (name === "list_bank_transactions") {
@@ -3302,9 +3330,23 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       await emit({ type: "agent.decided", source: "agent:sasa", actor: "agent:sasa", subject_type: "approval", subject_id: ap.id, payload: { kind: "email_reply", lane, from: recipientName, via: "smart" } });
       await emit({ type: "approval.created", source: "agent:sasa", actor: "agent:sasa", subject_type: "approval", subject_id: ap.id, payload: { kind: "email_reply", title: `Email to ${recipientName || "contact"}`, lane } });
     }
-    const where = hasRealRecipient ? `to ${recipientName}` : `(no verified email yet, so review the recipient too)`;
-    const msg = created ? `Drafted an email ${where} and queued it in Needs You. I never send anything until you approve it.` : `That email is already drafted and waiting in Needs You.`;
-    return { ok: true, summary: humanize(msg, opts), affordance: { kind: "queued", label: "Review in Needs You", href: "/" }, detail: { gated: true, sent: false, created } };
+    const subjectFinal = humanize(subject, { now: { long: n.long, today: n.today } });
+    const where = hasRealRecipient ? `to ${recipientName}` : `(no verified email address yet, so check the recipient too)`;
+    // DRAFT-AS-NEXT-BUBBLE (KT #350, the Dorje/jensen-pa mail-sweep pattern): show the
+    // FULL draft inline in WhatsApp so Nur reads exactly what will go out, instead of
+    // only "it's in Needs You". She still approves in Needs You; nothing sends until
+    // she does, so this is a read-only preview, not a send affordance.
+    const draftBubble = [
+      `Here's the draft ${where}:`,
+      ``,
+      `*Subject:* ${subjectFinal}`,
+      ``,
+      body,
+      ``,
+      `I've queued it in Needs You for your approval. Tell me what to change, or approve it there. I never send until you say so.`,
+    ].join("\n");
+    const msg = created ? draftBubble : `That email is already drafted and waiting in Needs You${hasRealRecipient ? ` (to ${recipientName})` : ""}.\n\n*Subject:* ${subjectFinal}\n\n${body}`;
+    return { ok: true, summary: humanize(msg, opts), affordance: { kind: "queued", label: "Review in Needs You", href: "/" }, detail: { gated: true, sent: false, created, preview: true } };
   }
 
   // ---- CONTROL: undo + correct (#6). Only ever touch bot-logged payments
