@@ -546,6 +546,25 @@ async function processJob(db: any, job: any): Promise<void> {
     }
   }
 
+  // BARE-PRAISE / ACK NO-OP (KT #349). We only reach here when the confirm gate
+  // above did NOT commit or cancel a staged action (nothing was pending, or the
+  // message was neither yes nor no). A bare acknowledgement / praise ("Great!",
+  // "Perfect", "Thanks", "👍") with nothing staged is NOT a request, so it must NOT
+  // wake the brain: on Nur's "Great!" right after an email was queued, the brain
+  // re-ran draft_email -> a DUPLICATE Needs-You card + a fabricated "Done" reply that
+  // the honesty guard then replaced with the canned reask (live 2026-06-21 11:27).
+  // The $-anchor means ONLY a bare token matches: "Perfect, send it" / "Great, do it"
+  // keep their verb and fall through normally (and a genuinely staged action already
+  // committed in the confirm gate above, where "great"/"perfect" are yes-words). This
+  // never touches that yes-regex, so real confirmations are unaffected.
+  const ACK_ONLY = /^\s*(?:great|perfect|awesome|amazing|wonderful|excellent|brilliant|lovely|nice|cool|fab|fabulous|love\s*it|thank\s*you|thanks|thanx|thx|ty)[\s!.,]*$|^[\s👍✅💯🙏🙌🎉❤️🔥👏]+$/i;
+  if (contactId && ACK_ONLY.test(String(text || ""))) {
+    const ackMsg = "Glad that works. I'm here whenever you need the next thing.";
+    await sendTextAndLog(db, from, ackMsg, { contactId, handledBy: "sasa", trace_id: traceId });
+    await emit({ type: "sasa.ack_noop", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { text: String(text || "").slice(0, 60) } }).catch(() => {});
+    await markJobDone(job.id); return;
+  }
+
   const history = await historyFor(db, contactId);
   // Source link (#4): resolve the UUID of THIS inbound message so any payment it
   // produces traces back to the exact instruction that caused it.
