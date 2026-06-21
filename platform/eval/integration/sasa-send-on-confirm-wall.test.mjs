@@ -96,7 +96,7 @@ const ok = (m) => console.log("PASS:", m);
 // ---- S3: confirm gate commits the send for real ----
 {
   const i = W.indexOf('p.kind === "send_message"');
-  const region = i >= 0 ? W.slice(i - 40, i + 1500) : "";
+  const region = i >= 0 ? W.slice(i - 40, i + 2400) : "";
   if (!region) fail("S3 the confirm gate must handle kind==='send_message'");
   else if (!/runSmartTool\("message_person"/.test(region)) fail("S3 send commit must reuse message_person (single send path, idempotency), not a forked sender");
   else if (!/detail\?\.unresolved/.test(region) || !/detail\?\.ambiguous/.test(region)) fail("S3 the send result must be VERIFIED (a non-resolved/ambiguous result is NOT a send)");
@@ -106,6 +106,50 @@ const ok = (m) => console.log("PASS:", m);
   // the summary must say "Sent" for a real send (not "Logged", which means queued)
   if (i >= 0 && !/Sent to \$\{/.test(W)) fail("S3 the confirmation must say 'Sent to <name>' for a completed send (not 'Logged')");
   else if (i >= 0) ok("S3 a completed send confirms as 'Sent to <name>'");
+}
+
+// ---- S4: HONEST-OFFER staging (skeptic #1) — an honest offer must also stage ----
+{
+  if (!/const SEND_OFFER =/.test(SASA)) fail("S4 SEND_OFFER regex must exist (detect the bot's honest offer to message someone)");
+  else if (!/HONEST-OFFER staging/.test(SASA)) fail("S4 the honest-offer staging hook must exist");
+  else {
+    // the hook must be gated: not-already-staged + owner/founder + SEND_OFFER + a derivable target
+    const i = SASA.indexOf("HONEST-OFFER staging");
+    const region = i >= 0 ? SASA.slice(i, i + 1400) : "";
+    if (!/!sendAlreadyStaged/.test(region)) fail("S4 the offer hook must NOT double-stage when the lie-path already staged");
+    else if (!/operatorRank === "owner" \|\| opts\.operatorRank === "founder"/.test(region)) fail("S4 the offer hook must be owner/founder only");
+    else if (!/extractSendTarget\(/.test(region)) fail("S4 the offer hook must require a derivable target (over-fire guard)");
+    else if (!/kind:\s*"send_message"/.test(region)) fail("S4 the offer hook must stage a send_message");
+    else {
+      // behavioural: SEND_OFFER fires on honest offers, NOT on unrelated text
+      const SEND_OFFER = /\b(?:want me to|shall i|should i|do you want me to|would you like me to|want me to go ahead and|i can|let me)\b[^.?!]{0,45}?\b(?:message|text|tell|notify|remind|ping|let\s+(?:him|her|them|\w+)\s+know|reach\s+out\s+to|drop\s+(?:him|her|them)\s+a|send\s+(?:it|them|him|her|a\s+(?:message|text|note|reminder|heads.?up))\s+to)\b/i;
+      if (!SEND_OFFER.test("I logged it. Want me to message Wahome now?")) fail("S4 'Want me to message Wahome now?' must match SEND_OFFER");
+      else if (!SEND_OFFER.test("Logged for Mark. Shall I tell him?")) fail("S4 'Shall I tell him?' must match");
+      else if (!SEND_OFFER.test("Done. I can let her know if you want.")) fail("S4 'I can let her know' must match");
+      else if (SEND_OFFER.test("I have logged the task on Mark's board.")) fail("S4 a plain log confirmation (no offer) must NOT match");
+      else if (SEND_OFFER.test("What would you like me to do next?")) fail("S4 an unrelated question must NOT match");
+      else ok("S4 honest-offer hook stages too (owner/founder, target-guarded); SEND_OFFER fires on offers, not on plain confirmations");
+    }
+  }
+}
+
+// ---- S5: deduped is NOT a fresh 'Sent' (skeptic #2 honesty) ----
+{
+  const i = W.indexOf('p.kind === "send_message"');
+  const region = i >= 0 ? W.slice(i - 40, i + 2400) : "";
+  if (!/detail\?\.deduped/.test(region)) fail("S5 the gate must special-case a deduped result (it means nothing NEW went out)");
+  else if (!/already sent to \$\{to\}/.test(region)) fail("S5 a deduped send must be reported honestly as already-sent, never a fresh 'Sent to X'");
+  else ok("S5 a deduped (nothing-new-sent) result is reported honestly, not as a fresh send");
+}
+
+// ---- S6: the gate re-checks the LIVE operator rank (skeptic #3 authz) ----
+{
+  const i = W.indexOf('p.kind === "send_message"');
+  const region = i >= 0 ? W.slice(i - 40, i + 2400) : "";
+  if (!/opRank === "owner" \|\| opRank === "founder"/.test(region)) fail("S6 the send branch must re-derive authority from the LIVE operator (opRank), not trust payload.rank");
+  else if (!/Only Nur or Taona can send/.test(region)) fail("S6 a non-owner/founder confirming must be refused honestly, not silently sent");
+  else if (!/rank:\s*\(opRank as any\)/.test(region)) fail("S6 the message_person call must pass the LIVE opRank, not the staged payload.rank");
+  else ok("S6 the privileged send re-checks the live operator's rank (no trust in the staged payload)");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");

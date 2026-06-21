@@ -421,6 +421,13 @@ function extractSendTarget(
   return null;
 }
 
+// KT #357 (skeptic #1). The bot's HONEST offer to message someone, e.g. "Want me to
+// message Wahome now?", "Shall I tell Grace?", "I can let him know". When the reply
+// offers a send AND a concrete recipient is derivable this turn (extractSendTarget),
+// we stage the send so the operator's "yes" completes it. The target requirement is
+// the over-fire guard: an offer with no derivable recipient stages nothing.
+const SEND_OFFER = /\b(?:want me to|shall i|should i|do you want me to|would you like me to|want me to go ahead and|i can|let me)\b[^.?!]{0,45}?\b(?:message|text|tell|notify|remind|ping|let\s+(?:him|her|them|\w+)\s+know|reach\s+out\s+to|drop\s+(?:him|her|them)\s+a|send\s+(?:it|them|him|her|a\s+(?:message|text|note|reminder|heads.?up))\s+to)\b/i;
+
 // Capitalized narration tokens that look like proper nouns but are verbs,
 // articles, system names, or greetings. Filter them out of recipient extraction
 // so "Done, sent to Violet" doesn't think "Done" is a recipient.
@@ -1440,6 +1447,9 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       // Track whether any earlier guard already substituted reply this turn and gate
       // the backstop on it, so a specific line is never stomped by the generic one.
       let alreadySubstituted = false;
+      // KT #357 (skeptic #1): track whether the lie-path already staged a send this
+      // turn, so the honest-offer hook below does not double-stage the same send.
+      let sendAlreadyStaged = false;
       if (claimsStagingWithoutTool(reply, toolRuns) && !isCapabilityQuestion(opts.command || "") && !isAmbiguousReference(opts.command || "")) {
         // v1.3.9: fake-staging. "Ready to log…, reply yes to confirm" text but
         // no record_payment / record_donation / bank_import / etc. tool ran.
@@ -1595,6 +1605,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
               summary: `message ${tgt.to}`,
               payload: { to_name: tgt.to, text: tgt.text, rank: opts.operatorRank || "owner" },
             });
+            sendAlreadyStaged = true;
             reply = humanize(`I logged that, but I have not messaged ${tgt.to} yet. Want me to send this to ${tgt.to} now: "${tgt.text}"? Reply yes and it goes out.`, { now: { long: n.long, today: n.today } });
           } catch (e: any) {
             console.error("[sasa:runSasa] send-stage", e?.message || e);
@@ -1753,6 +1764,32 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         const isRead = isReadIntent(opts.command || "", opts.history);
         reply = humanize(isRead ? LOOP_BREAK_READ : LOOP_BREAK, { now: { long: n.long, today: n.today } });
         alreadySubstituted = true;
+      }
+      // KT #357 (skeptic #1) — HONEST-OFFER staging. The lie-path above only stages a
+      // send when the model FALSELY claimed it already sent. But the model also offers
+      // honestly ("I logged it. Want me to message Wahome now?") with NO false claim,
+      // so nothing was staged and the operator's "yes" used to dead-end. Here, when the
+      // (final) reply OFFERS to send and a concrete recipient+text is derivable from
+      // this turn, stage it too so "yes" completes for real. Owner/founder only; the
+      // extractSendTarget requirement is the over-fire guard (an offer with no derivable
+      // recipient stages nothing). Does NOT rewrite the reply: the model keeps its own
+      // language, we only make the "yes" actionable.
+      if (!sendAlreadyStaged && opts.contactId
+        && (opts.operatorRank === "owner" || opts.operatorRank === "founder")
+        && SEND_OFFER.test(reply)) {
+        const tgt = extractSendTarget(toolRuns, opts.command || "");
+        if (tgt) {
+          try {
+            await db.from("pending_actions").insert({
+              contact_id: opts.contactId,
+              kind: "send_message",
+              status: "awaiting_confirm",
+              summary: `message ${tgt.to}`,
+              payload: { to_name: tgt.to, text: tgt.text, rank: opts.operatorRank || "owner" },
+            });
+            sendAlreadyStaged = true;
+          } catch (e: any) { console.error("[sasa:runSasa] offer-stage", e?.message || e); }
+        }
       }
       // OpenAI (gpt-4o-mini) verifier REMOVED — owner directive 2026-06-04. It was
       // "the openai one", and it mangled legitimate replies. The DETERMINISTIC honesty

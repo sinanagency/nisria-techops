@@ -530,11 +530,23 @@ async function processJob(db: any, job: any): Promise<void> {
             // staged + reported honestly, never a fabricated "Sent!".
             const to = String(p.payload?.to_name || "").trim();
             const text = String(p.payload?.text || "").trim();
-            if (to && text) {
-              const r: any = await runSmartTool("message_person", { to, text }, { contactId, tier: "admin", rank: (p.payload?.rank as any) || "owner", operatorName: "Nur", traceId: traceId || undefined });
-              const reallySent = r?.ok === true && !r?.detail?.unresolved && !r?.detail?.ambiguous;
-              if (reallySent) sent.push(to);
-              else { okItem = false; failed.push(`message to ${to}`); if (r?.summary) notes.push(String(r.summary)); }
+            // KT #357 hardening (skeptic #3): re-derive authority from the LIVE
+            // operator replying "yes", never trust the staged payload.rank. A
+            // send is a privileged act and message_person has no authz of its own.
+            const liveAdmin = opRank === "owner" || opRank === "founder";
+            if (!liveAdmin) {
+              okItem = false; notes.push("Only Nur or Taona can send messages from this line, so I did not send it.");
+            } else if (to && text) {
+              const r: any = await runSmartTool("message_person", { to, text }, { contactId, tier: "admin", rank: (opRank as any) || "owner", operatorName: "Nur", traceId: traceId || undefined });
+              // KT #357 honesty (skeptic #2): a deduped result means NOTHING new went
+              // out this turn, so it must NOT be reported as a fresh "Sent". Report it
+              // honestly as already-sent (and commit so it does not linger).
+              if (r?.ok === true && r?.detail?.deduped) { notes.push(`That was already sent to ${to}, so I did not send a duplicate.`); }
+              else {
+                const reallySent = r?.ok === true && !r?.detail?.unresolved && !r?.detail?.ambiguous;
+                if (reallySent) sent.push(to);
+                else { okItem = false; failed.push(`message to ${to}`); if (r?.summary) notes.push(String(r.summary)); }
+              }
             } else { okItem = false; failed.push("message"); }
           }
           else { done.push(p.summary || "item"); }
