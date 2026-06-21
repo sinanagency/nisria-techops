@@ -1367,6 +1367,42 @@ async function processJob(db: any, job: any): Promise<void> {
     }
   }
 
+  // READ-EMAIL RECALL (KT #356). The model mishandled read_email and replied "the
+  // email reader isn't available" even though Gmail works (token + list + format=full
+  // all verified 200). So reading an inbox email is now DETERMINISTIC, like the draft
+  // recall. Admin-only (the sasa@nisria.co inbox is confidential). Conservative intent:
+  // an explicit read/open verb on email/inbox, never "email address", "send", "draft",
+  // or "email <name>" (compose).
+  {
+    const readEmailIntent =
+      (/\b(?:read|open|pull\s+up|read\s+me|bring\s+up)\b[\s\S]{0,25}\b(?:e-?mails?|inbox)\b/i.test(command || "")
+        || /\b(?:show|read|open)\s+me\s+(?:the\s+|my\s+)?(?:latest|most\s+recent|recent|last|newest|new)\s+(?:e-?mail|message|inbox)/i.test(command || "")
+        || /\bwhat(?:'?s| is| does)\b[\s\S]{0,20}\b(?:latest|recent|last)\s+(?:e-?mail|message)\b/i.test(command || ""))
+      && !/\bemail\s+(?:address|to)\b/i.test(command || "")
+      && !/\b(?:send|draft|compose|write)\b/i.test(command || "");
+    if (contactId && (opRank === "owner" || opRank === "founder") && readEmailIntent) {
+      try {
+        const { searchInbox, readEmail } = await import("../../../../lib/gmail");
+        // specific ("from X" / "about X") vs generic latest
+        const mFrom = (command || "").match(/\bfrom\s+([a-z0-9@.][a-z0-9@.\s]{1,40})/i);
+        const mAbout = (command || "").match(/\babout\s+([a-z0-9@.][a-z0-9@.\s]{1,40})/i);
+        let q = "in:inbox";
+        if (mFrom || mAbout) q = `${mFrom ? `from:${mFrom[1].trim().split(/\s+/)[0]} ` : ""}${mAbout ? mAbout[1].trim() : ""}`.trim() || "in:inbox";
+        const hits = await searchInbox(q, 1);
+        if (hits.length) {
+          const full = await readEmail(hits[0].id);
+          const body = String(full?.body || hits[0].snippet || "").trim().slice(0, 3500);
+          const attach = hits[0].attachments?.length ? `\n📎 ${hits[0].attachments.join(", ")}` : "";
+          const msg = `*From:* ${hits[0].from || "?"}\n*Subject:* ${hits[0].subject || "(no subject)"}\n*Date:* ${hits[0].date || "?"}${attach}\n\n${body || "(this email has no readable text body)"}`;
+          await sendTextAndLog(db, from, msg, { contactId, handledBy: "sasa", trace_id: traceId });
+          await emit({ type: "sasa.email_read", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { from: hits[0].from, subject: hits[0].subject, q } }).catch(() => {});
+          await markJobDone(job.id); return;
+        }
+        // no match -> fall through to the brain (it can search by other terms)
+      } catch (e: any) { console.error("[worker:read_email_recall]", e?.message || e); }
+    }
+  }
+
   let reply: string | undefined;
   try {
     // Inject the parseTasks context note (if any) so the model narrates the

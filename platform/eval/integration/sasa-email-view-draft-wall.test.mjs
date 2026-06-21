@@ -109,5 +109,33 @@ const ok = (m) => console.log("PASS:", m);
   }
 }
 
+// ---- S8: deterministic READ-EMAIL recall (KT #356, model was unreliable) ----
+{
+  const W = R("app/api/whatsapp/worker/route.ts");
+  const i = W.indexOf("READ-EMAIL RECALL (KT #356)");
+  const region = i >= 0 ? W.slice(i, i + 2600) : "";
+  if (!region) fail("S8 the deterministic read-email recall route must exist");
+  else if (!/searchInbox|readEmail/.test(region) || !/await sendTextAndLog\(db, from, msg/.test(region)) fail("S8 read-email recall must fetch via Gmail + send directly");
+  else if (!/opRank === "owner" \|\| opRank === "founder"/.test(region)) fail("S8 read-email recall must be admin-only (the inbox is confidential)");
+  else if (!/markJobDone\(job\.id\);\s*return;/.test(region)) fail("S8 read-email recall must markJobDone + return (deterministic)");
+  else {
+    // behavioural: mirror readEmailIntent
+    const fires = (command) => (
+      (/\b(?:read|open|pull\s+up|read\s+me|bring\s+up)\b[\s\S]{0,25}\b(?:e-?mails?|inbox)\b/i.test(command || "")
+        || /\b(?:show|read|open)\s+me\s+(?:the\s+|my\s+)?(?:latest|most\s+recent|recent|last|newest|new)\s+(?:e-?mail|message|inbox)/i.test(command || "")
+        || /\bwhat(?:'?s| is| does)\b[\s\S]{0,20}\b(?:latest|recent|last)\s+(?:e-?mail|message)\b/i.test(command || ""))
+      && !/\bemail\s+(?:address|to)\b/i.test(command || "")
+      && !/\b(?:send|draft|compose|write)\b/i.test(command || ""));
+    if (!fires("read me the latest email")) fail("S8 'read me the latest email' must fire");
+    else if (!fires("open my inbox")) fail("S8 'open my inbox' must fire");
+    else if (!fires("read the email from mchanga")) fail("S8 'read the email from mchanga' must fire");
+    else if (fires("what's John's email address")) fail("S8 'email address' must NOT fire");
+    else if (fires("send an email to John")) fail("S8 'send an email' must NOT fire");
+    else if (fires("draft an email to the bank")) fail("S8 'draft an email' must NOT fire");
+    else if (fires("email John about the call")) fail("S8 'email John' (compose) must NOT fire");
+    else ok("S8 deterministic read-email recall: admin-only, fires on read intent, yields compose/address/send");
+  }
+}
+
 if (process.exitCode) console.error("\nWALL RED.");
 else console.log("\nWALL GREEN.");
