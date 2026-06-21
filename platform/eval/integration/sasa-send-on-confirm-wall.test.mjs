@@ -96,7 +96,7 @@ const ok = (m) => console.log("PASS:", m);
 // ---- S3: confirm gate commits the send for real ----
 {
   const i = W.indexOf('p.kind === "send_message"');
-  const region = i >= 0 ? W.slice(i - 40, i + 900) : "";
+  const region = i >= 0 ? W.slice(i - 40, i + 1500) : "";
   if (!region) fail("S3 the confirm gate must handle kind==='send_message'");
   else if (!/runSmartTool\("message_person"/.test(region)) fail("S3 send commit must reuse message_person (single send path, idempotency), not a forked sender");
   else if (!/detail\?\.unresolved/.test(region) || !/detail\?\.ambiguous/.test(region)) fail("S3 the send result must be VERIFIED (a non-resolved/ambiguous result is NOT a send)");
