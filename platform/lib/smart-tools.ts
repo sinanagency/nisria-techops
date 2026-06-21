@@ -1102,8 +1102,14 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     const q = String(input.query || "").trim();
     if (!q) return { error: "Which email? Give me a sender or a few words from it." };
     try {
-      const hits = await searchInbox(q, 4);
-      if (!hits.length) return { matched: 0, note: `I could not find an email matching "${q}" in the inbox. It may not have arrived, or try the sender's name or different words.` };
+      // KT #356: "read me the LATEST / most recent email" has no searchable text —
+      // searchInbox does a Gmail text search, so "most recent email" matched nothing
+      // (live test 2026-06-21). When the request is generic (latest/recent/last/
+      // newest/inbox), list the newest inbox emails instead of text-searching.
+      const generic = /^(?:the\s+|my\s+)?(?:latest|most\s+recent|recent(?:ly)?|last|newest|new(?:est)?|first|top|next)?\s*(?:email|e-?mail|message|mail|msg|one|inbox|thing)?s?\s*(?:in\s+(?:the\s+)?inbox)?$/i.test(q) || q.length < 4;
+      const searchQuery = generic ? "in:inbox" : q;
+      const hits = await searchInbox(searchQuery, generic ? 1 : 4);
+      if (!hits.length) return { matched: 0, note: generic ? `The inbox looks empty right now, or I could not reach it.` : `I could not find an email matching "${q}" in the inbox. It may not have arrived, or try the sender's name or different words.` };
       const top = hits[0];
       const full = await readEmail(top.id);
       const body = String(full?.body || top.snippet || "").trim().slice(0, 3500);

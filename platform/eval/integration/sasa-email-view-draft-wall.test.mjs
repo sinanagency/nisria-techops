@@ -40,12 +40,13 @@ const ok = (m) => console.log("PASS:", m);
   if (!/\{ name: "read_email"/.test(SMART)) fail("S2 read_email tool def must exist");
   else {
     const i = SMART.indexOf('name === "read_email"');
-    const region = i >= 0 ? SMART.slice(i, i + 1500) : "";
+    const region = i >= 0 ? SMART.slice(i, i + 2400) : "";
     if (!region) fail("S2 read_email handler missing");
     else if (!/await readEmail\(/.test(region)) fail("S2 read_email must call readEmail() for the full body");
     else if (!/tier === "team"/.test(region)) fail("S2 read_email must be admin-only (refuse team tier)");
     else if (!/body:\s*body/.test(region) || !/subject:\s*top\.subject/.test(region)) fail("S2 read_email must return the full body + subject");
-    else ok("S2 read_email returns the full email body, admin-only");
+    else if (!/const generic =/.test(region) || !/in:inbox/.test(region)) fail("S2 read_email must handle a generic 'latest/most recent email' request via in:inbox (KT #356), not a literal text search");
+    else ok("S2 read_email returns the full body, admin-only, handles 'latest email' via in:inbox");
   }
 }
 
