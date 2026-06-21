@@ -487,6 +487,7 @@ async function processJob(db: any, job: any): Promise<void> {
         // back a Nur draft for the owner to review. Keep the two streams apart
         // so a bank confirmation never gets miscounted as "N payments logged".
         const done: string[] = [];
+        const sent: string[] = [];
         const notes: string[] = [];
         const failed: string[] = [];
         for (const p of pend) {
@@ -522,10 +523,25 @@ async function processJob(db: any, job: any): Promise<void> {
               if (!cErr) done.push(p.summary || "case approved"); else { okItem = false; failed.push(p.summary || "case"); }
             } else { done.push(p.summary || "case"); }
           }
+          else if (p.kind === "send_message") {
+            // KT #357: complete the relay Nur confirmed. Reuse message_person so the
+            // resolution + idempotency + logging are the SAME single send path (no
+            // forked sender). A non-resolved / ambiguous result is NOT a send: it stays
+            // staged + reported honestly, never a fabricated "Sent!".
+            const to = String(p.payload?.to_name || "").trim();
+            const text = String(p.payload?.text || "").trim();
+            if (to && text) {
+              const r: any = await runSmartTool("message_person", { to, text }, { contactId, tier: "admin", rank: (p.payload?.rank as any) || "owner", operatorName: "Nur", traceId: traceId || undefined });
+              const reallySent = r?.ok === true && !r?.detail?.unresolved && !r?.detail?.ambiguous;
+              if (reallySent) sent.push(to);
+              else { okItem = false; failed.push(`message to ${to}`); if (r?.summary) notes.push(String(r.summary)); }
+            } else { okItem = false; failed.push("message"); }
+          }
           else { done.push(p.summary || "item"); }
           if (okItem) await db.from("pending_actions").update({ status: "committed", resolved_at: new Date().toISOString() }).eq("id", p.id);
         }
         const parts: string[] = [];
+        if (sent.length) parts.push(sent.length === 1 ? `Sent to ${sent[0]}.` : `Sent to ${sent.join(", ")}.`);
         if (done.length) parts.push(done.length === 1 ? `Done. Logged ${done[0]}.` : `Done. Logged ${done.length} payments: ${done.join("; ")}.`);
         if (notes.length) parts.push(notes.join("\n\n"));
         if (failed.length) parts.push(`I could not commit ${failed.length === 1 ? failed[0] : `${failed.length}: ${failed.join("; ")}`}, so I have not, and I left ${failed.length === 1 ? "it" : "them"} staged. Want me to retry?`);

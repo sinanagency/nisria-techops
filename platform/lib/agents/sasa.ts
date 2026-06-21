@@ -384,6 +384,43 @@ const SEND_HAS = /\b(?:he|she|they)\s+(?:now\s+)?(?:has|have)\s+(?:it|them)\b|\b
 const HONEST_NO_SEND =
   "I logged that, but I have not actually messaged them. It is on their board and will show in their daily brief. Want me to message them directly now so they see it?";
 
+// KT #357. When the honesty wall catches a "told them" claim with no real send, pull
+// the ACTUAL intended recipient + text from THIS turn's tool runs so the confirm gate
+// can complete the send for real (instead of the old dead-end where "yes" looped back
+// to the same offer with nothing staged). Priority:
+//   1. a message_person the model TRIED but could not resolve/deliver — its {to,text}
+//      is the model's own composed message (the best, truest signal).
+//   2. a create_task assigned to someone OTHER than the operator — notify them with the
+//      task title (a task assigned to the operator themselves notifies no one).
+// Returns null when nothing concrete is derivable, so we fall back to the plain honest
+// re-offer with no staging (no over-fire, no regression).
+function extractSendTarget(
+  toolRuns: { name: string; input?: any; result?: any }[],
+  _command: string,
+): { to: string; text: string } | null {
+  if (!Array.isArray(toolRuns)) return null;
+  for (let i = toolRuns.length - 1; i >= 0; i--) {
+    const r = toolRuns[i];
+    if (r?.name !== "message_person") continue;
+    const okSend = r?.result?.ok === true
+      && !r?.result?.detail?.unresolved && !r?.result?.detail?.ambiguous && !r?.result?.detail?.deduped;
+    if (okSend) return null; // it actually sent this turn; nothing to re-send
+    const to = String(r?.input?.to || "").trim();
+    const text = String(r?.input?.text || "").trim();
+    if (to && text) return { to, text };
+  }
+  const ops = new Set(["nur", "taona"]);
+  for (let i = toolRuns.length - 1; i >= 0; i--) {
+    const r = toolRuns[i];
+    if (r?.name !== "create_task" || r?.result?.ok !== true) continue;
+    const who = String(r?.input?.assignee || r?.input?.assignee_name || "").trim();
+    const title = String(r?.input?.title || "").trim();
+    if (!who || !title || ops.has(who.toLowerCase())) continue;
+    return { to: who, text: title };
+  }
+  return null;
+}
+
 // Capitalized narration tokens that look like proper nouns but are verbs,
 // articles, system names, or greetings. Filter them out of recipient extraction
 // so "Done, sent to Violet" doesn't think "Done" is a recipient.
@@ -1541,8 +1578,31 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         alreadySubstituted = true;
       } else if (claimsSendWithoutSend(reply, toolRuns)) {
         // Claimed it messaged/told someone (or that they "have" it) but no send tool
-        // ran. Logging a task is not telling the person, so say so honestly and offer.
-        reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
+        // ran. Logging a task is not telling the person. KT #357: do not merely deny
+        // and re-offer (that dead-ended Nur's "yes" into a loop on 2026-06-21). When a
+        // concrete recipient + text is derivable, STAGE the send so her "yes" fires
+        // message_person for real through the confirm gate, and PREVIEW the exact text
+        // so she confirms knowingly. Owner/founder only: a team member's stray "I told
+        // Mark" claim must never auto-stage a send they did not authorize.
+        const isAdmin = opts.operatorRank === "owner" || opts.operatorRank === "founder";
+        const tgt = isAdmin ? extractSendTarget(toolRuns, opts.command || "") : null;
+        if (tgt && opts.contactId) {
+          try {
+            await db.from("pending_actions").insert({
+              contact_id: opts.contactId,
+              kind: "send_message",
+              status: "awaiting_confirm",
+              summary: `message ${tgt.to}`,
+              payload: { to_name: tgt.to, text: tgt.text, rank: opts.operatorRank || "owner" },
+            });
+            reply = humanize(`I logged that, but I have not messaged ${tgt.to} yet. Want me to send this to ${tgt.to} now: "${tgt.text}"? Reply yes and it goes out.`, { now: { long: n.long, today: n.today } });
+          } catch (e: any) {
+            console.error("[sasa:runSasa] send-stage", e?.message || e);
+            reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
+          }
+        } else {
+          reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
+        }
         alreadySubstituted = true;
       } else if (claimsUnverifiedSendState(reply, toolRuns, opts.command || "")) {
         // #8 (KT #313): a send-state answer with no verified lookup this turn. The
