@@ -571,6 +571,27 @@ async function processJob(db: any, job: any): Promise<void> {
       }
       // neither yes nor no: leave recent stages pending (supports multi-message
       // dictation) and let the conversation continue.
+    } else {
+      // KT #357 (skeptic #5): NON-SILENT EXPIRY. A send_message older than 20 min was
+      // just superseded above, so nothing is pending. If the operator now confirms,
+      // do not go silent (the old dead-end): tell them it timed out and offer to redo
+      // it. Only on an affirmative, only when a send_message lapsed in the last 2h, and
+      // it NEVER sends anything (it just offers) so an expired send can't auto-fire.
+      const t = command.trim().toLowerCase();
+      const affirm = /^(?:👍|✅|💯)|^(?:please\s+|ok(?:ay)?\s+|yes\s+|yeah\s+|sure\s+)?(?:y|yes|yep+|yeah|yup|send(?:\s+it)?|go ahead|do it|please do|confirm(?:ed)?)\b/.test(t);
+      if (affirm) {
+        const since2h = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        const { data: lapsed } = await db.from("pending_actions")
+          .select("payload").eq("contact_id", contactId).eq("kind", "send_message").eq("status", "superseded")
+          .gte("resolved_at", since2h).order("resolved_at", { ascending: false }).limit(1);
+        if (lapsed && lapsed.length) {
+          const who = String(lapsed[0]?.payload?.to_name || "them");
+          const msg = `That message to ${who} timed out before you confirmed, so I did not send it. Want me to set it up again?`;
+          await sendTextAndLog(db, from, msg, { contactId, trace_id: traceId });
+          await emit({ type: "sasa.send_confirm_expired", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { to: who } });
+          await markJobDone(job.id); return;
+        }
+      }
     }
   }
 

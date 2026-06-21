@@ -399,24 +399,26 @@ function extractSendTarget(
   _command: string,
 ): { to: string; text: string } | null {
   if (!Array.isArray(toolRuns)) return null;
-  for (let i = toolRuns.length - 1; i >= 0; i--) {
-    const r = toolRuns[i];
-    if (r?.name !== "message_person") continue;
-    const okSend = r?.result?.ok === true
-      && !r?.result?.detail?.unresolved && !r?.result?.detail?.ambiguous && !r?.result?.detail?.deduped;
-    if (okSend) return null; // it actually sent this turn; nothing to re-send
-    const to = String(r?.input?.to || "").trim();
-    const text = String(r?.input?.text || "").trim();
-    if (to && text) return { to, text };
-  }
   const ops = new Set(["nur", "taona"]);
+  // KT #357 (skeptic #4): a SINGLE newest-first pass so the MOST RECENT relevant
+  // action wins. The old two-loop version always preferred any message_person over a
+  // create_task, so a later create_task to Violet could be shadowed by an earlier
+  // failed message_person to Mark, staging the wrong recipient. Recency matches what
+  // the bot was actually talking about in its reply this turn.
   for (let i = toolRuns.length - 1; i >= 0; i--) {
     const r = toolRuns[i];
-    if (r?.name !== "create_task" || r?.result?.ok !== true) continue;
-    const who = String(r?.input?.assignee || r?.input?.assignee_name || "").trim();
-    const title = String(r?.input?.title || "").trim();
-    if (!who || !title || ops.has(who.toLowerCase())) continue;
-    return { to: who, text: title };
+    if (r?.name === "message_person") {
+      const okSend = r?.result?.ok === true
+        && !r?.result?.detail?.unresolved && !r?.result?.detail?.ambiguous && !r?.result?.detail?.deduped;
+      if (okSend) return null; // it actually sent this turn; nothing to re-send
+      const to = String(r?.input?.to || "").trim();
+      const text = String(r?.input?.text || "").trim();
+      if (to && text) return { to, text };
+    } else if (r?.name === "create_task" && r?.result?.ok === true) {
+      const who = String(r?.input?.assignee || r?.input?.assignee_name || "").trim();
+      const title = String(r?.input?.title || "").trim();
+      if (who && title && !ops.has(who.toLowerCase())) return { to: who, text: title };
+    }
   }
   return null;
 }

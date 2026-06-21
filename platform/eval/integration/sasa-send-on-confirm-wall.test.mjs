@@ -53,26 +53,23 @@ const ok = (m) => console.log("PASS:", m);
 {
   if (!/function extractSendTarget\(/.test(SASA)) fail("S2 extractSendTarget helper must exist");
   else {
-    // mirror the helper's contract
+    // mirror the helper's contract — SINGLE newest-first pass (KT #357 skeptic #4)
     const pick = (toolRuns) => {
       if (!Array.isArray(toolRuns)) return null;
-      for (let i = toolRuns.length - 1; i >= 0; i--) {
-        const r = toolRuns[i];
-        if (r?.name !== "message_person") continue;
-        const okSend = r?.result?.ok === true && !r?.result?.detail?.unresolved && !r?.result?.detail?.ambiguous && !r?.result?.detail?.deduped;
-        if (okSend) return null;
-        const to = String(r?.input?.to || "").trim();
-        const text = String(r?.input?.text || "").trim();
-        if (to && text) return { to, text };
-      }
       const ops = new Set(["nur", "taona"]);
       for (let i = toolRuns.length - 1; i >= 0; i--) {
         const r = toolRuns[i];
-        if (r?.name !== "create_task" || r?.result?.ok !== true) continue;
-        const who = String(r?.input?.assignee || r?.input?.assignee_name || "").trim();
-        const title = String(r?.input?.title || "").trim();
-        if (!who || !title || ops.has(who.toLowerCase())) continue;
-        return { to: who, text: title };
+        if (r?.name === "message_person") {
+          const okSend = r?.result?.ok === true && !r?.result?.detail?.unresolved && !r?.result?.detail?.ambiguous && !r?.result?.detail?.deduped;
+          if (okSend) return null;
+          const to = String(r?.input?.to || "").trim();
+          const text = String(r?.input?.text || "").trim();
+          if (to && text) return { to, text };
+        } else if (r?.name === "create_task" && r?.result?.ok === true) {
+          const who = String(r?.input?.assignee || r?.input?.assignee_name || "").trim();
+          const title = String(r?.input?.title || "").trim();
+          if (who && title && !ops.has(who.toLowerCase())) return { to: who, text: title };
+        }
       }
       return null;
     };
@@ -89,7 +86,13 @@ const ok = (m) => console.log("PASS:", m);
     else if (pick([{ name: "message_person", input: { to: "Mark", text: "hi" }, result: { ok: true } }])) fail("S2 a message_person that truly sent must yield null (nothing to re-send)");
     // nothing relevant -> null (no staging, no regression)
     else if (pick([{ name: "list_tasks", input: {}, result: { ok: true } }])) fail("S2 an unrelated turn must yield null");
-    else ok("S2 extractSendTarget: prefers the model's own composed message, else the task assignee, never the operator, never a real send");
+    // KT #357 skeptic #4: the MOST RECENT action wins. A failed message_person to Mark
+    // FOLLOWED BY a create_task to Violet must stage Violet (recency), not Mark.
+    else if ((() => { const r = pick([
+      { name: "message_person", input: { to: "Mark", text: "old intent" }, result: { ok: false, detail: { unresolved: true } } },
+      { name: "create_task", input: { assignee: "Violet", title: "the newer thing" }, result: { ok: true } },
+    ]); return !r || r.to !== "Violet"; })()) fail("S2 the MOST RECENT action must win (later create_task Violet over earlier failed message_person Mark)");
+    else ok("S2 extractSendTarget: single newest-first pass (recency wins), never the operator, never a real send");
   }
 }
 
@@ -150,6 +153,29 @@ const ok = (m) => console.log("PASS:", m);
   else if (!/Only Nur or Taona can send/.test(region)) fail("S6 a non-owner/founder confirming must be refused honestly, not silently sent");
   else if (!/rank:\s*\(opRank as any\)/.test(region)) fail("S6 the message_person call must pass the LIVE opRank, not the staged payload.rank");
   else ok("S6 the privileged send re-checks the live operator's rank (no trust in the staged payload)");
+}
+
+// ---- S7: extractSendTarget is a SINGLE recency pass, not type-priority (skeptic #4) ----
+{
+  const i = SASA.indexOf("function extractSendTarget(");
+  const body = i >= 0 ? SASA.slice(i, i + 1100) : "";
+  // there must be exactly ONE backward loop now (the old version had two)
+  const loops = (body.match(/for \(let i = toolRuns\.length - 1/g) || []).length;
+  if (loops !== 1) fail(`S7 extractSendTarget must be a single newest-first pass (found ${loops} loops; the two-loop version mis-prioritised message_person over a more recent create_task)`);
+  else ok("S7 extractSendTarget is a single recency pass (most-recent action wins)");
+}
+
+// ---- S8: non-silent expiry (skeptic #5) — a late 'yes' is told, not ignored ----
+{
+  const i = W.indexOf("NON-SILENT EXPIRY");
+  const region = i >= 0 ? W.slice(i - 80, i + 1700) : "";
+  if (!region) fail("S8 the non-silent-expiry branch must exist");
+  else if (!/status",\s*"superseded"/.test(region)) fail("S8 it must look for a recently SUPERSEDED send_message (the expired one)");
+  else if (!/timed out before you confirmed/.test(region)) fail("S8 a late confirm must get an honest timeout notice, not silence");
+  else if (/runSmartTool\("message_person"/.test(region)) fail("S8 the expiry branch must NOT send anything (an expired send can never auto-fire)");
+  else if (!/markJobDone\(job\.id\);\s*return;/.test(region)) fail("S8 the expiry notice must markJobDone + return");
+  else if (!/affirm\b/.test(region)) fail("S8 it must only fire on an affirmative reply");
+  else ok("S8 a late confirm of an expired send gets an honest 'timed out, want me to set it up again?' (never silent, never auto-sends)");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");
