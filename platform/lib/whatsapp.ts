@@ -185,7 +185,23 @@ export async function sendText(to: string, body: string): Promise<{ id: string |
   for (let i = 0; i < chunks.length; i++) {
     const r = await send({ to, type: "text", text: { body: chunks[i].slice(0, 4096), preview_url: false } });
     if (i === 0) first = r;
-    if (!r.id) return first && first.id ? first : r;
+    if (!r.id) {
+      // A chunk failed mid-sequence. Do NOT report chunk-1 success here: the user
+      // received only a fragment and the brain's log must not record the whole
+      // reply as delivered (that would be the silent-loss bug this seam exists to
+      // kill, just one layer up). Surface the drop honestly so sendTextAndLog logs
+      // status="failed", and emit an event for the soak watch.
+      const delivered = i; // chunks 0..i-1 actually went out
+      void import("./events").then(({ emit }) => emit({
+        type: "sasa.partial_chunk_send",
+        source: "lib:whatsapp.sendText",
+        actor: "system",
+        subject_type: "contact",
+        subject_id: null,
+        payload: { to_last4: phoneKey(to).slice(-4), delivered, total: chunks.length, error: String(r.error || "").slice(0, 200) },
+      })).catch(() => {});
+      return { id: null, error: `partial_send: ${delivered}/${chunks.length} delivered then failed: ${r.error || "unknown"}` };
+    }
   }
   return first ?? { id: null, error: "no body" };
 }

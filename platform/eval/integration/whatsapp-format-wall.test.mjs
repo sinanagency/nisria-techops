@@ -103,7 +103,7 @@ eq("F3 short text gets no marker", splitForWhatsApp("hi")[0], "hi");
   const flood = Array.from({ length: 4000 }, (_, i) => `Sentence ${i} with several words here to force many chunks.`).join("\n\n");
   const chunks = splitForWhatsApp(flood);
   if (chunks.length > 12) fail("F4 the safety cap must bound the bubble count");
-  else if (chunks.length === 12 && !/ask me to continue/i.test(chunks[chunks.length - 1])) fail("F4 a capped flood must say so honestly, not drop silently");
+  else if (chunks.length === 12 && !/too long to send in full/i.test(chunks[chunks.length - 1])) fail("F4 a capped flood must say so honestly, not drop silently");
   else ok(`F4 flood bounded to ${chunks.length} bubbles with an honest tail (no silent drop)`);
 }
 
@@ -111,13 +111,14 @@ eq("F3 short text gets no marker", splitForWhatsApp("hi")[0], "hi");
 {
   if (!/import \{ formatWhatsApp, splitForWhatsApp \} from "\.\/whatsapp-format\.mjs"/.test(W)) fail("F5 whatsapp.ts must import the formatter");
   const i = W.indexOf("export async function sendText");
-  const region = i >= 0 ? W.slice(i, i + 1200) : "";
+  const region = i >= 0 ? W.slice(i, i + 2200) : "";
   if (!region) fail("F5 sendText must exist");
   else if (!/splitForWhatsApp\(formatWhatsApp\(String\(body\)\)\)/.test(region)) fail("F5 sendText must format THEN split the body before send()");
   else if (!/chunks\.length <= 1/.test(region)) fail("F5 sendText must single-send when one chunk, loop when many");
-  else if (!/if \(!r\.id\) return/.test(region)) fail("F5 a failed chunk must stop the spill and surface the error");
+  else if (!/partial_send:/.test(region)) fail("F5 a mid-sequence chunk failure must return an honest partial_send error, never report chunk-1 as full success");
+  else if (!/sasa\.partial_chunk_send/.test(region)) fail("F5 a partial send must emit an observable event for the soak watch");
   else if (!/\.slice\(0, 4096\)/.test(region)) fail("F5 each sent body must keep the 4096 hard floor as belt-and-suspenders");
-  else ok("F5 send seam: sendText formats + splits, single-or-loop, fails safe, 4096 floor");
+  else ok("F5 send seam: sendText formats + splits, single-or-loop, partial-send is honest, 4096 floor");
 }
 
 // sanity: formatAndSplit is the composed transform
