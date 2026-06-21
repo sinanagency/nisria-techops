@@ -2,6 +2,10 @@
 # predeploy.sh — run before any production deploy.
 set -euo pipefail
 
+# Run from this script's own directory (platform/) so the relative eval/ paths
+# resolve no matter the caller's cwd (the deploy-gate invokes us from repo root).
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
 echo "→ predeploy.sh: starting"
 
 # 1. FULL regression wall suite (includes the seam-10 brain-core drift canary +
