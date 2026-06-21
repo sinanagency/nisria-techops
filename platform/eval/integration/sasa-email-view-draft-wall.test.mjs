@@ -66,5 +66,27 @@ const ok = (m) => console.log("PASS:", m);
   else ok("S4 draft preview is read-only; approval still required in Needs You");
 }
 
+// ---- S5: show_draft tool ("show me the draft you made") ----
+{
+  if (!/\{ name: "show_draft"/.test(SMART)) fail("S5 show_draft tool def must exist");
+  else {
+    const i = SMART.indexOf('name === "show_draft"');
+    const region = i >= 0 ? SMART.slice(i, i + 1400) : "";
+    if (!region) fail("S5 show_draft handler missing");
+    else if (!/from\("approvals"\)[\s\S]*email_reply[\s\S]*status[\s\S]*pending|\.eq\("kind", "email_reply"\)\.eq\("status", "pending"\)/.test(region)) fail("S5 show_draft must read the pending email draft from approvals");
+    else if (!/body:\s*String\(p\.body/.test(region)) fail("S5 show_draft must return the full draft body");
+    else if (!/tier === "team"/.test(region)) fail("S5 show_draft must be admin-only");
+    else ok("S5 show_draft returns the pending draft (to/subject/full body) from the source of truth");
+  }
+}
+
+// ---- S6: swipe-reply to a draft bubble surfaces the quoted draft to the model ----
+{
+  const W = R("app/api/whatsapp/worker/route.ts");
+  if (!/const quotedExcerpt = String\(quotedRow\.body/.test(W)) fail("S6 the swipe anchor must read the quoted message body");
+  else if (!/Nur is replying to your prior message: "\$\{quotedExcerpt\}"/.test(W)) fail("S6 a swipe-reply must surface the quoted draft text so the model knows what she means");
+  else ok("S6 swipe-reply to a draft bubble surfaces the quoted draft to the model");
+}
+
 if (process.exitCode) console.error("\nWALL RED.");
 else console.log("\nWALL GREEN.");

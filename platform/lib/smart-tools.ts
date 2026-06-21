@@ -398,6 +398,7 @@ export const SMART_TOOLS = [
   { name: "flag_for_clarity", description: "Ask the operator a clarifying question WHEN YOU ARE UNSURE and would otherwise guess or silently act: possible duplicate records, an ambiguous reference you cannot resolve even after a lookup, a task/item with no clear owner, or a merge/delete/reassign you are not certain about. Pass one clear question and the candidate options. Use this INSTEAD of guessing, silently picking, merging, deleting, or reassigning. The operator's answer then tells you what to do.", input_schema: { type: "object", properties: { question: { type: "string", description: "the one clear question to ask the operator" }, options: { type: "array", items: { type: "string" }, description: "the candidate choices, e.g. the two duplicate task titles" }, about: { type: "string", description: "short tag, e.g. 'possible duplicate tasks' or 'missing owner'" } }, required: ["question"] } },
   { name: "show_outbound_audit", description: "Show what YOU (Sasa) have actually sent to TEAM MEMBERS on WhatsApp in a recent window. This is the audit/receipt view, the ground truth of what really went out, independent of any earlier narration. Use whenever Nur asks 'what did you send today', 'who did you message', 'did you actually text X', 'show me what you sent', 'show your outbound', 'audit your sends', 'what messages went out from you today', 'did Cynthia get the message'. Returns a per-recipient summary with timestamps and the bodies of each message. Excludes messages back to Nur herself. Always also point her to /admin/transcripts for the full filterable view. Admin only.", input_schema: { type: "object", properties: { window_hours: { type: "number", description: "Lookback window in hours, default 24" }, contact: { type: "string", description: "Optional name filter (e.g. 'Mark', 'Violet'); omit for all recipients" } } } },
   { name: "search_inbox", description: "Search the sasa@nisria.co email INBOX (read-only) to check what actually arrived. Use for 'did the SANARA statements come into the sasa email', 'did we get the I&M statement', 'any email from <sender> about <thing>', 'check the inbox for invoices'. Returns sender, subject, date, snippet and attachment filenames. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "What to look for in plain words (e.g. 'SANARA bank statement', 'invoice from Java'). Optionally a sender name/email." }, max: { type: "number", description: "max results, default 10" } }, required: ["query"] } },
+  { name: "show_draft", description: "Show the operator an email DRAFT you already made that is waiting in Needs You for her approval. Use whenever she asks to SEE a draft you composed: 'show me the draft', 'show me the draft you made', 'what was the draft', 'read me the draft again', 'pull up that email draft', OR when she swipe-replies to a draft message asking to see or check it. Returns the recipient, subject and FULL body of the pending draft(s). It is still unsent. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional: a recipient name or a few words to pick which draft if there are several" } } } },
   { name: "read_email", description: "READ the FULL text of ONE email from the sasa@nisria.co inbox out loud to the operator. Use when she wants to actually READ an email, not just check it arrived: 'read me the email from Mwangi', 'what does the latest email from the bank say', 'show me the full email about the grant', 'open that email'. Finds the best match and returns its full body (sender, subject, date, and the complete message). For just checking whether something arrived, use search_inbox. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "a sender name/email and/or a few words from the subject or body, e.g. 'Mwangi grant', 'latest from the bank'" } }, required: ["query"] } },
   { name: "list_content", description: "Recent social/content posts with their channels, status (draft/scheduled/posted), and schedule. Use for 'what content is scheduled', 'what posts are in draft', 'what did we post'.", input_schema: { type: "object", properties: {} } },
   { name: "list_beneficiaries", description: "List beneficiaries (children/families in the programs) with optional filters. CONFIDENTIAL: admin only, never in a group/team context. Use for 'who is in the rescue program', 'list our graduated children', 'who has no photo'. Filters: program, status, cohort.", input_schema: { type: "object", properties: { program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, status: { type: "string" }, has_photo: { type: "boolean" } } } },
@@ -1067,6 +1068,31 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     } catch (e: any) {
       return { error: `Could not read the inbox: ${e?.message || e}` };
     }
+  }
+  // SHOW A PENDING DRAFT (KT #351): "show me the draft you made" / a swipe-reply to a
+  // draft bubble. The draft lives in `approvals` (kind email_reply, status pending) as
+  // proposed{to,subject,body} — the source of truth, so this works even after the
+  // draft scrolls out of the short chat-history window.
+  if (name === "show_draft") {
+    if (tier === "team") return { error: "not available here" };
+    const qn = String(input.query || "").trim().toLowerCase();
+    const { data } = await db.from("approvals").select("id,title,proposed,created_at").eq("kind", "email_reply").eq("status", "pending").order("created_at", { ascending: false }).limit(10);
+    let list = (data || []) as any[];
+    if (!list.length) return { matched: 0, note: "You have no email drafts waiting for approval right now. Want me to draft one?" };
+    if (qn) {
+      const f = list.filter((a) => JSON.stringify(a.proposed || {}).toLowerCase().includes(qn) || String(a.title || "").toLowerCase().includes(qn));
+      if (f.length) list = f;
+    }
+    const top = list[0];
+    const p = (top.proposed || {}) as any;
+    return {
+      matched: list.length,
+      to: p.to || p.from || null,
+      subject: p.subject || null,
+      body: String(p.body || "").slice(0, 3500),
+      others: list.length > 1 ? list.slice(1, 5).map((a) => ({ to: a.proposed?.to || a.proposed?.from || null, subject: a.proposed?.subject || null })) : undefined,
+      instruction: "Show this draft to the operator verbatim: To, Subject, then the full body. It is still in Needs You awaiting her approval; nothing has been sent. If there are others, mention she can name the recipient to see a specific one.",
+    };
   }
   // READ FULL EMAIL (KT #350): search_inbox returns snippets only; this returns the
   // COMPLETE body so the bot can read an email to Nur in WhatsApp ("view emails
