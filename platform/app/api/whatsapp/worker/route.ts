@@ -1321,11 +1321,20 @@ async function processJob(db: any, job: any): Promise<void> {
   {
     const sendEmailVerb = /\b(?:send it|send the email|send that|send this|fire it|email it|go ahead and send)\b/i.test(command || "");
     const editVerb = /\b(?:change|edit|reword|rewrite|shorten|lengthen|add|remove|update|make it|fix|correct|adjust|tweak|rephrase|delete|cancel)\b/i.test(command || "");
-    const showDraftIntent = /\b(?:show|share|see|pull|read|view|open|send\s+me|resend|what(?:'?s| is| was)?|where(?:'?s| is)?)\b[\s\S]{0,40}\bdrafts?\b|\bthe\s+drafts?\b/i.test(command || "")
+    // KT #354 (adversarial sweep): the SHOW intent must have an explicit show-verb
+    // tied to "draft". A bare "the draft" match wrongly intercepted "the draft is
+    // wrong", "did you send the draft", "approve the draft", "the draft policy
+    // document" etc. — the brain never saw them. So only fire on an explicit show.
+    const showDraftIntent = /\b(?:show|share|see|pull|read|view|open|bring\s+up|send\s+me|resend|what(?:'?s| is| was)?|where(?:'?s| is)?)\b[\s\S]{0,40}\bdrafts?\b/i.test(command || "")
       && !/\bdrafts?\s+(?:an?|me\s+an?|a\s+new|up\s+an?|out)\b/i.test(command || "");
     const bareRef = /^\s*(?:this(?:\s+one)?|that(?:\s+one)?|it|the\s+draft|yes|yeah|show(?:\s+me)?(?:\s+it|\s+this|\s+that)?|see(?:\s+it|\s+this|\s+that)?|read(?:\s+it|\s+this|\s+that)?|share(?:\s+it|\s+this|\s+that)?|pull(?:\s+it|\s+this|\s+that)?(?:\s+up)?)\s*[.!?]*\s*$/i.test(command || "");
-    const swipedDraft = !!swipeAnchorNote && /\bdraft\b|\bsubject:/i.test(swipeAnchorNote);
-    if (contactId && !sendEmailVerb && !editVerb && (showDraftIntent || (swipedDraft && bareRef))) {
+    // Only a REAL draft bubble (our exact "Here's the draft" prefix), NOT any quoted
+    // text that merely contains the word "draft"/"subject:" (KT #354 — that mis-fired
+    // on a swipe-reply "yes" to any draft-mentioning or forwarded-email message).
+    const swipedDraft = !!swipeAnchorNote && /here'?s the draft/i.test(swipeAnchorNote);
+    // ADMIN ONLY (KT #354): pending email drafts are NGO-wide (donor PII, recipient,
+    // full body). A team-tier member must NEVER pull them. Gate to owner/founder.
+    if (contactId && (opRank === "owner" || opRank === "founder") && !sendEmailVerb && !editVerb && (showDraftIntent || (swipedDraft && bareRef))) {
       try {
         const { data: dr } = await db.from("approvals").select("proposed,created_at").eq("kind", "email_reply").eq("status", "pending").order("created_at", { ascending: false }).limit(5);
         const drafts = (dr || []) as any[];
