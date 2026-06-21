@@ -39,12 +39,27 @@ function hhmmIn(tz: string, d: Date): string {
   return `${h}:${m}`;
 }
 
+// Minutes-since-midnight for an "HH:MM" string (robust integer compare, avoids the
+// string-comparison hour/day-boundary bugs). Non-parseable → -1 (never matches).
+function minutesOf(hhmm: string): number {
+  const m = /^(\d{2}):(\d{2})/.exec(String(hhmm || ""));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : -1;
+}
+
+// Lead time: remind LEAD_MIN minutes BEFORE the due time (operator asked for a
+// 5-minute heads-up, 2026-06-20). A task/event is "due" the moment it falls inside
+// the next LEAD_MIN window, so a 21:00 task fires at the 20:55 tick. Past times
+// still fire once (catch-up) because dueMinutes <= nowMinutes < nowMinutes+LEAD.
+const LEAD_MIN = 5;
+
 async function run(req: NextRequest) {
   if (!authed(req)) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const db = admin();
   const n = await now();
   const today = n.today;
   const nowHHMM = hhmmIn(n.tz, n.date);
+  // Fire anything due within the next LEAD_MIN minutes (the 5-min heads-up).
+  const fireThreshold = minutesOf(nowHHMM) + LEAD_MIN;
 
   // 1) Tasks with a due_time, due today, time has arrived, not yet pinged.
   const { data: taskRows } = await db
@@ -65,7 +80,7 @@ async function run(req: NextRequest) {
   // Meta-approved template path is preserved exactly.
   const dueNow: any[] = [];
   for (const t of (taskRows || []) as any[]) {
-    if (String(t.due_time).slice(0, 5) > nowHHMM) continue; // not yet time today
+    if (minutesOf(String(t.due_time)) > fireThreshold) continue; // not yet within the 5-min lead window
     dueNow.push(t);
   }
   // RACE-2 atomic claim (Field-nervous-system + Real-action laws, 2026-06-15).
@@ -102,7 +117,7 @@ async function run(req: NextRequest) {
   }
   let tasksFired = 0;
   for (const [, bucket] of byAssignee) {
-    const items = bucket.map((t) => ({ id: t.id, title: t.title, due_on: t.due_on, priority: t.priority, assignee_id: t.assignee_id }));
+    const items = bucket.map((t) => ({ id: t.id, title: t.title, due_on: t.due_on, due_time: t.due_time, priority: t.priority, assignee_id: t.assignee_id }));
     // The cron path passes dev:false implicitly. To smoke-test on the dev phone,
     // invoke the route with ?dev=1 (still authed) and pass it through here.
     const r = await pushTaskDigest(db, items);
@@ -124,7 +139,7 @@ async function run(req: NextRequest) {
     .limit(100);
   let eventsFired = 0;
   for (const e of (evRows || []) as any[]) {
-    if (String(e.start_time).slice(0, 5) > nowHHMM) continue;
+    if (minutesOf(String(e.start_time)) > fireThreshold) continue; // 5-min lead, same as tasks
     // Atomic claim: UPDATE reminded_at FIRST, only send if we won the race.
     // Mirrors the task pattern above (lines 83-91) to prevent double-sends
     // when two cron ticks overlap.

@@ -74,7 +74,16 @@ export async function POST(req: NextRequest) {
         const v = change.value || {};
         const contacts: any[] = v.contacts || [];
         for (const m of v.messages || []) {
-          const from = digits(m.from);
+          // Meta puts the REAL E.164 phone in contacts[].wa_id; m.from CAN be a
+          // ~15-digit WhatsApp "lid" (linked-device / privacy identifier) that is
+          // not a dialable number and false-spawns a DUPLICATE contact (the live
+          // Nur lid 106274704363640, 2026-06-20, which blocked relays — KT #345).
+          // In a 1:1 inbound there is exactly one contacts entry, so prefer its
+          // wa_id; fall back to m.from only when there is no single contacts entry
+          // (status-only payloads, or any non-1:1 fan-in). Group ingest is a
+          // separate route, so this never touches group-JID handling.
+          const waIdFromContacts = (v.contacts || []).length === 1 ? digits(v.contacts[0]?.wa_id) : "";
+          const from = waIdFromContacts || digits(m.from);
           const waMsgId = m.id || null;
 
           // DEDUPE, ATOMIC (2026-06-12). Meta retries webhooks, and retries can

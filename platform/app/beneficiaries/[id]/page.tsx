@@ -6,6 +6,7 @@ import { Money } from "../../../components/Money";
 import { admin, date } from "../../../lib/supabase-admin";
 import { activityLabel, activityTone } from "../../../lib/activity";
 import { toggleConsent, setStatus } from "../actions";
+import BeneficiaryManage from "../../../components/BeneficiaryManage";
 import { Lock, MapPin, Calendar, Users, Tag, Globe, ShieldOff, ImageIcon, HeartHandshake, FileText, Activity } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +47,14 @@ export default async function Beneficiary360({ params }: { params: { id: string 
 
   const { data: row } = await db.from("beneficiaries").select("*").eq("id", id).single();
   const b: any = row || {};
+
+  // Other ACCEPTED beneficiaries, for the merge-duplicate picker in Manage.
+  const { data: othersRows } = await db
+    .from("beneficiaries").select("id,full_name,ref_code")
+    .is("intake_stage", null).neq("id", id)
+    .order("full_name", { ascending: true }).limit(300);
+  const others = (othersRows || []).map((o: any) => ({ id: o.id, name: o.full_name || o.ref_code || "Beneficiary" }));
+  const isCase = b.intake_stage != null;
 
   // The real activity feed for THIS record. The events table is the single source
   // of "what happened" (intake, status changes, consent grants/withdrawals).
@@ -131,6 +140,7 @@ export default async function Beneficiary360({ params }: { params: { id: string 
         <span className="flex" style={{ gap: 6 }}>
           <Badge tone="gray"><Lock size={10} /> Private</Badge>
           {b.status && <Badge tone={statusTone(b.status)}>{b.status}</Badge>}
+          {b.id && !isCase && <BeneficiaryManage b={b} others={others} />}
         </span>
       }
     >

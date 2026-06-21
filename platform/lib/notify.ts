@@ -13,7 +13,7 @@
 // for a recent matching event so a burst never spams. Every send is best-effort
 // and NEVER throws into its caller — a failed ping must not break task creation.
 import { admin } from "./supabase-admin";
-import { sendTemplate, sendTemplateAndLog, phoneKey } from "./whatsapp";
+import { sendTemplate, sendTemplateAndLog, sendTextAndLog, phoneKey } from "./whatsapp";
 import { emit } from "./events";
 import { sendEmail } from "./email";
 import { humanize } from "./humanize";
@@ -71,7 +71,7 @@ async function incidentSentRecently(db: any, key: string, mins: number): Promise
   return Boolean(data?.[0]);
 }
 
-type AlertKind = "new" | "escalation";
+type AlertKind = "new" | "escalation" | "reminder";
 
 // Send the task_alert template to a task's assignee AND Nur. Used by the urgent
 // gate on create_task (kind "new") and by the overdue escalation in the daily
@@ -79,7 +79,7 @@ type AlertKind = "new" | "escalation";
 // only pass the task. Returns the list of wa_ids actually pinged.
 export async function pushTaskAlert(
   db: any,
-  task: { id: string | null; title: string; due_on?: string | null; priority?: string | null; assignee_id?: string | null },
+  task: { id: string | null; title: string; due_on?: string | null; due_time?: string | null; priority?: string | null; assignee_id?: string | null },
   kind: AlertKind = "new",
 ): Promise<{ pinged: string[]; deduped?: boolean; deferredQuietHours?: boolean }> {
   try {
@@ -124,15 +124,37 @@ export async function pushTaskAlert(
       : (Array.from(new Set([assigneeWa, nurWa].filter(Boolean))) as string[]);
     if (!recipients.length) return { pinged: [] };
 
-    const adj = kind === "escalation" ? "an overdue" : task.priority === "high" ? "an urgent" : "a new";
+    const adj = kind === "escalation" ? "an overdue" : task.priority === "high" ? "an urgent" : kind === "reminder" ? "a reminder for your" : "a new";
     const due = task.due_on || "ASAP";
     const title = humanize(String(task.title || "a task")).slice(0, 200);
+    const pinged: string[] = [];
+
+    // REMINDER WORDING (KT #331): a timed reminder is NOT a new task assignment, so
+    // it must not read "Heads up, a new task for you ... Reply DONE". Word it as a
+    // reminder and send it FREE-FORM first — correct wording, and it delivers
+    // whenever the recipient is inside WhatsApp's 24h window (a same-day timed
+    // reminder usually is). Fall back to the task_alert template ONLY if free-form
+    // fails (out-of-window) so the reminder still lands, just in the stiffer wording.
+    if (kind === "reminder") {
+      const timeStr = task.due_time ? ` at ${String(task.due_time).slice(0, 5)} today` : "";
+      const reminderBody = `Reminder: ${title}${timeStr}. Reply DONE when it is handled, or open the Nisria portal.`;
+      for (const to of recipients) {
+        const free = await sendTextAndLog(db, to, reminderBody, {});
+        if (free.id) { pinged.push(to); continue; }
+        const r = await sendTemplateAndLog(db, to, "task_alert", [adj, title, due], reminderBody);
+        if (r.id) pinged.push(to);
+      }
+      await emit({
+        type: "task.alert_sent", source: "notify", actor: "system", subject_type: "task", subject_id: task.id,
+        payload: { kind, title, priority: task.priority || null, due_on: task.due_on || null, to: pinged.map((p) => p.slice(-4)) },
+      });
+      return { pinged };
+    }
 
     // Log line mirrors what the recipient actually sees, so the proactive ping
     // lands in the bot's own memory (the agent can answer "what did you just
     // tell me?"). Chokepoint logging is best-effort and never blocks the send.
     const logBody = `Heads up, ${adj} task for you: ${title}. Due ${due}. Reply DONE when it is handled, or open the Nisria portal.`;
-    const pinged: string[] = [];
     for (const to of recipients) {
       const r = await sendTemplateAndLog(db, to, "task_alert", [adj, title, due], logBody);
       if (r.id) pinged.push(to);
@@ -163,7 +185,7 @@ export async function pushTaskAlert(
 // returns so the next 5-min tick does not re-fire any of them.
 export async function pushTaskDigest(
   db: any,
-  tasks: Array<{ id: string | null; title: string; due_on?: string | null; priority?: string | null; assignee_id?: string | null }>,
+  tasks: Array<{ id: string | null; title: string; due_on?: string | null; due_time?: string | null; priority?: string | null; assignee_id?: string | null }>,
   opts?: { dev?: boolean },
 ): Promise<{ pinged: string[] }> {
   try {
@@ -184,7 +206,8 @@ export async function pushTaskDigest(
     // recipients. Guarantees no "you have 1 tasks" plural slip and no break of
     // anything that already works for the one-task case.
     if (list.length === 1) {
-      const r = await pushTaskAlert(db, list[0], "new");
+      // A single due task from the TIMED cron is a reminder, not a new task (KT #331).
+      const r = await pushTaskAlert(db, list[0], "reminder");
       return { pinged: r.pinged };
     }
 
@@ -273,7 +296,10 @@ export async function pushIncident(component: string, detail: string): Promise<{
     const db = admin();
     const key = component.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
     if (await incidentSentRecently(db, key, 30)) return { sent: 0, deduped: true };
-    const ops = operatorKeys();
+    // #14: system/technical alerts go to the DEVELOPER (owner) only, never to Nur.
+    // Was operatorKeys() (WHATSAPP_OPERATORS, which includes Nur). Operational
+    // items reach Nur through approvals/briefs, not raw incident alerts.
+    const ops = ownerKeys();
     let sent = 0;
     for (const to of ops) {
       const r = await sendTemplate(to, "system_alert", [component.slice(0, 200), detail.slice(0, 400)]);

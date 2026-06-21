@@ -78,7 +78,7 @@ async function run(force: boolean) {
   // All OPEN tasks due today or earlier, with assignee. One query.
   const { data: rows } = await db
     .from("tasks").select("title,due_on,status,assignee_id,priority")
-    .neq("status", "done").not("due_on", "is", null).lte("due_on", today)
+    .not("status", "in", "(done,expired)").not("due_on", "is", null).lte("due_on", today)
     .order("due_on", { ascending: true });
   const tasks = (rows || []) as any[];
 
@@ -116,7 +116,14 @@ async function run(force: boolean) {
 
   // 1) Operators: rich sendText brief of THEIR tasks. Nur (an operator on the
   // roster) also gets the unassigned ops tasks, the team-overdue roll-up, Needs You.
-  const nur = roster.find((m) => isOp(m));
+  // Identify Nur SPECIFICALLY via NUR_WHATSAPP (same env expire-tasks uses),
+  // normalized through phoneKey to match the roster. If a second operator (a
+  // builder/Taona) is also in WHATSAPP_OPERATORS, "the first operator" would
+  // mis-route Nur's escalation roll-up to them and she could miss it. Fall back
+  // to the first-operator heuristic ONLY when NUR_WHATSAPP is unset, so nothing
+  // breaks if the env var is missing.
+  const nurKey = phoneKey(process.env.NUR_WHATSAPP || "");
+  const nur = (nurKey && roster.find((m) => isOp(m) && phoneKey(m.phone) === nurKey)) || roster.find((m) => isOp(m));
   for (const m of roster.filter(isOp)) {
     const mine = byAssignee.get(m.id) || [];
     const isNur = !!nur && m.id === nur.id;

@@ -4,6 +4,7 @@ import { admin, money, date } from "../../lib/supabase-admin";
 import { Money } from "../../components/Money";
 import BeneficiaryPeek from "../../components/BeneficiaryPeek";
 import BeneficiaryIntake from "../../components/BeneficiaryIntake";
+import BeneficiaryAdd from "../../components/BeneficiaryAdd";
 import FilterBar, { FilterField, Segment } from "../../components/FilterBar";
 import { Lock } from "lucide-react";
 
@@ -173,7 +174,7 @@ export default async function Beneficiaries({
   const filterValues: Record<string, string> = { q, program, status, consent, cat, photo };
 
   return (
-    <Shell title="Beneficiaries" sub={sub} action={<Badge tone="gold">{publicCount} public profiles live</Badge>}>
+    <Shell title="Beneficiaries" sub={sub} action={<span className="flex" style={{ gap: 8, alignItems: "center" }}><Badge tone="gold">{publicCount} public profiles live</Badge><BeneficiaryAdd /></span>}>
       {/* HEADLINE: the one number this surface exists to show: lives on the
           platform, with the live-now count beneath it. Both real counts. */}
       <div className="metric-hero">

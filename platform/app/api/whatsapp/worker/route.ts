@@ -19,11 +19,13 @@ import { sendText, sendTextAndLog, operatorOf, downloadMedia, sendTypingIndicato
 import { extractMeetingLink, dispatchMeetingBot, isCancelIntent, cancelActiveBot } from "../../../../lib/digital-u";
 import { commitBankImport } from "../../../../lib/bank-import";
 import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
+import { coalesceTurn, finishTurn } from "../../../../lib/whatsapp-coalesce";
 import { autoCapture } from "../../../../lib/memory-extract";
 import { withSandbox, isHarnessMessageId } from "../../../../lib/sandbox";
 import { pushIncident } from "../../../../lib/notify";
-import { commitPaymentRow } from "../../../../lib/smart-tools";
-import { readMedia } from "../../../../lib/anthropic";
+import { commitPaymentRow, runSmartTool } from "../../../../lib/smart-tools";
+import { humanize } from "../../../../lib/humanize";
+import { readMedia, claudeJSON, HAIKU } from "../../../../lib/anthropic";
 import { transcribeAudio } from "../../../../lib/transcribe";
 import { createBatch } from "../../../../lib/ingest";
 import { storeMedia } from "../../../../lib/media-store";
@@ -117,12 +119,28 @@ async function processJob(db: any, job: any): Promise<void> {
         : r.error === "no active bot to cancel"
           ? `There is no notetaker in a meeting right now, so nothing to stop. If you meant something else, send it again with more context.`
           : `I tried to stop the notetaker but the service returned: ${r.error}. Try again or check the dashboard.`;
-      await sendTextAndLog(db, from, reply, { contactId, handledBy: "sasa", dev: opRank === "owner" ? true : undefined, trace_id: traceId });
+      // KT #345: dev:true must come from a genuine harness/test message id, NOT from
+      // owner RANK. Coupling dev-mode to opRank meant every REAL owner notetaker/cancel
+      // reply was treated as Law-12 test traffic — rerouted + the messages insert
+      // SKIPPED — so Taona's side of those turns never persisted and vanished from
+      // historyFor (the "I never got a message" / bot-can't-recall-its-own-side gap).
+      // The main reply path already gates on isHarnessMessageId; match it here.
+      await sendTextAndLog(db, from, reply, { contactId, handledBy: "sasa", dev: isHarnessMessageId(waMsgId) ? true : undefined, trace_id: traceId });
       await markJobDone(job.id);
       return;
     }
     const meetingLink = extractMeetingLink(text || "");
-    if (meetingLink) {
+    // INTENT GATE (KT #338): a message containing a meeting link is NOT automatically
+    // a request to send a notetaker. "Change the meeting to 1PM and here's the zoom
+    // link" is a SCHEDULING intent — save the link / move the meeting — NOT "dispatch
+    // a bot to sit in the call" (which is what mis-fired on Nur 2026-06-21, with a 500
+    // and a contradictory double-reply). Only auto-dispatch when notes are clearly
+    // wanted OR the message is essentially just the link. If scheduling words are
+    // present and there's no notetake intent, fall through to the brain, which can
+    // reschedule and save the link properly.
+    const wantsNotes = /\b(take\s+notes|notetak|note-?taker|note\s+taker|join\s+(the|this|that)\s+(call|meeting)|send\s+(the\s+)?(notetaker|bot|note\s*taker)|record\s+(the|this|that)|cover\s+(the|this|that)\s+(call|meeting)|sit\s+in|minute|transcrib)\b/i.test(text || "");
+    const schedulingMeeting = /\b(change|chang|move|moved|reschedul|push|shift|set\s?up|schedul|book|cancel|update)\b[\s\S]{0,30}\b(meeting|call|zoom|event)\b|\b(meeting|call|zoom)\b[\s\S]{0,20}\b(to|at|for|is)\b\s*\d|here'?s\s+the\s+(zoom|meeting|link)|this\s+is\s+the\s+(zoom|meeting|link)/i.test(text || "");
+    if (meetingLink && (wantsNotes || !schedulingMeeting)) {
       const titleFromText = (text || "").replace(meetingLink, "").trim().slice(0, 120) || "Meeting";
       const displayName = opRank === "owner" ? "Digital Taona" : "Digital Nur";
       // Extract scheduled time from text like "at 8:15 PM today" or "tomorrow at 3pm"
@@ -147,12 +165,30 @@ async function processJob(db: any, job: any): Promise<void> {
         }
       }
       const dispatch = await dispatchMeetingBot({ link: meetingLink, title: titleFromText, scheduledAt, displayName });
+      // KT #358 (#6): the notetaker service has been failing (Zoom creds, missing
+      // ANTHROPIC_API_KEY, Playwright). The RAW infra error used to be piped straight
+      // to Nur ("ANTHROPIC_API_KEY not set", "localhost:8000", "Attendee dispatch 500")
+      // — confusing and unprofessional for a non-technical operator. Capture the real
+      // error internally for the team to fix the server, and give Nur a clean, honest,
+      // actionable line that never leaks infrastructure detail.
+      if (!dispatch.ok) {
+        try {
+          await emit({ type: "sasa.notetaker_dispatch_failed", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { error: String(dispatch.error || "").slice(0, 400), link_host: (meetingLink.match(/https?:\/\/([^/]+)/) || [])[1] || null, scheduled: !!scheduledAt } });
+          await pushIncident("notetaker", `Dispatch failed: ${String(dispatch.error || "unknown").slice(0, 300)}`);
+        } catch (e: any) { console.error("[worker:notetaker_fail]", e?.message || e); }
+      }
       const reply = dispatch.ok
         ? scheduledAt
           ? `On it. Digital Nur will join that meeting when it starts and send you the notes here.`
           : `On it. I'm sending the notetaker to that meeting now as ${displayName}. I will message you here with the summary and your action items when the room closes.`
-        : `I tried to dispatch the notetaker but the service returned: ${dispatch.error}. I will save the link, you can ask me to retry.`;
-      await sendTextAndLog(db, from, reply, { contactId, handledBy: "sasa", dev: opRank === "owner" ? true : undefined, trace_id: traceId });
+        : `I could not get the notetaker into that meeting just now, so I have not, and I have flagged it to the team to fix. I've saved the link so you can ask me to retry, or take the notes yourself and send them to me to file.`;
+      // KT #345: dev:true must come from a genuine harness/test message id, NOT from
+      // owner RANK. Coupling dev-mode to opRank meant every REAL owner notetaker/cancel
+      // reply was treated as Law-12 test traffic — rerouted + the messages insert
+      // SKIPPED — so Taona's side of those turns never persisted and vanished from
+      // historyFor (the "I never got a message" / bot-can't-recall-its-own-side gap).
+      // The main reply path already gates on isHarnessMessageId; match it here.
+      await sendTextAndLog(db, from, reply, { contactId, handledBy: "sasa", dev: isHarnessMessageId(waMsgId) ? true : undefined, trace_id: traceId });
       await markJobDone(job.id);
       return;
     }
@@ -320,6 +356,115 @@ async function processJob(db: any, job: any): Promise<void> {
     }
   }
 
+  // ──────────────────────────────────────────────────────────────────────
+  // PER-SENDER TURN COALESCING (2026-06-20). DURABLE fix for the double-reply
+  // bug: a contact sent "you're cool" then "thanks" as two separate WhatsApp
+  // messages and got TWO separate replies, because every inbound enqueues its
+  // own whatsapp.reply job -> its own brain run -> its own reply. brain-core's
+  // shouldProcess had a per-sender lock but it was an IN-MEMORY Map that does NOT
+  // survive across Vercel serverless invocations, so it could not coalesce the
+  // separate function calls. coalesceTurn() acquires a DURABLE per-contact claim
+  // (wa_turn_claim, unique on contact_id): the WINNER settles briefly, assembles
+  // ALL unhandled inbound since the last outbound into one turn, and replies
+  // once; the LOSERS no-op without replying. Exactly one reply per burst.
+  //
+  // FAIL-OPEN (honesty law): the whole gate is wrapped. If anything throws (table
+  // missing, query error), we fall straight through to the EXISTING single-
+  // message reply path on the `command` we already resolved. A coalescer bug can
+  // NEVER make the bot go silent. Sits HERE — after media resolution (so the
+  // burst text is final) and BEFORE the deterministic note/payment gates and the
+  // brain — so the whole turn (gates + brain) runs exactly once, on the burst.
+  let coalescedMessageIds: string[] = [];
+  try {
+    const co = await coalesceTurn(contactId, traceId, command);
+    if (!co.proceed) {
+      // LOSER: another job for this sender holds the claim and will coalesce this
+      // message into its turn. No reply here (exactly-once). Mark the job done
+      // cleanly so the queue drains; the winner's reply covers this text.
+      await markJobDone(job.id);
+      return;
+    }
+    if (co.winner && co.command && co.command.trim()) {
+      // WINNER: replace the single-message command with the assembled burst so
+      // the one reply reflects everything the sender said. Track the claimed rows
+      // so finishTurn() can mark them handled + release the claim after sending.
+      command = co.command;
+      coalescedMessageIds = co.claimedMessageIds || [];
+    }
+    // fail-open (co.failOpen) leaves `command` as the single message we already
+    // have and proceeds normally — never silent.
+  } catch (e: any) {
+    // FAIL-OPEN guard around the gate itself. coalesceTurn does not throw by
+    // contract, but a defensive catch guarantees a coalescer fault degrades to
+    // the normal single-message reply instead of crashing the job into silence.
+    try { await emit({ type: "whatsapp.coalesce_fail_open", source: "whatsapp", actor: "system", subject_type: "contact", subject_id: contactId, correlation_id: traceId || undefined, payload: { stage: "worker_gate", error: String(e?.message || e).slice(0, 240) } }); } catch {}
+    // fall through: reply normally on the single message.
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // COMPLETE-TASK NOTE SLOT (2026-06-20, KT #324). When a team-tier member is
+  // mid-completion (complete_task resolved exactly one task, then asked "what was
+  // the outcome?"), it staged a pending_actions slot kind='complete_task_awaiting_note'
+  // status='awaiting_note'. Their NEXT message IS that outcome note. We catch it
+  // HERE, before the payment confirm gate AND before the parseTaskOps block, and
+  // feed it back into complete_task as its `reason` via runSmartTool so the access
+  // gate + expired-exclusion + honesty all still apply. Without this slot the note
+  // re-parsed cold and "...before any changes" hit the dependency parser (live bug).
+  // Deterministic, no brain in the loop, exactly like the payment confirm path.
+  // NEW status 'awaiting_note' is distinct from 'awaiting_confirm' so this NEVER
+  // collides with the money path below.
+  // ──────────────────────────────────────────────────────────────────────
+  if (contactId && command) {
+    const noteCut = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    // a stale slot must not swallow a much-later message: supersede old ones first.
+    await db.from("pending_actions").update({ status: "superseded", resolved_at: new Date().toISOString() })
+      .eq("contact_id", contactId).eq("status", "awaiting_note").lt("created_at", noteCut);
+    const { data: slots } = await db.from("pending_actions")
+      .select("*").eq("contact_id", contactId).eq("status", "awaiting_note").eq("kind", "complete_task_awaiting_note")
+      .gte("created_at", noteCut).order("created_at", { ascending: false }).limit(1);
+    const slot = slots?.[0] || null;
+    if (slot) {
+      const raw = command.trim();
+      // ESCAPE: a clear cancel / negation / obviously-new-command must NOT be
+      // stamped as a completion note. Supersede the slot and fall through to the
+      // brain (the member changed their mind or started a new instruction).
+      const isEscape = /^(?:no|not done|never ?mind|cancel|actually|wait|hold on|stop|scrap)\b/i.test(raw)
+        || /^(?:create|add task|add a task|new task|assign)\b/i.test(raw);
+      if (isEscape) {
+        await db.from("pending_actions").update({ status: "superseded", resolved_at: new Date().toISOString() }).eq("id", slot.id);
+        await emit({ type: "sasa.task_slot_escaped", source: "agent:sasa", actor: opName || name || "team", subject_type: "task", subject_id: slot.payload?.task_id || null, correlation_id: traceId, payload: { reason: "cancel_or_new_command" } }).catch(() => null);
+        // fall through to the brain (do NOT return)
+      } else {
+        const title = String(slot.payload?.title || "");
+        // Route the note through complete_task so the access gate runs. tier=role
+        // ('team' here), senderPhone + contactId so assertTaskAccess can resolve
+        // the caller and confirm they own the task.
+        // NOTE: sourceMessageId is resolved later in the turn (after the payment
+        // confirm gate) and is only used by create_task dedup; complete_task does
+        // not read it, so we intentionally omit it here to keep this handler ahead
+        // of that resolution.
+        const res = await runSmartTool("complete_task", { title, reason: raw }, {
+          senderPhone: from, contactId: contactId || undefined, tier: role as "admin" | "team",
+          rank: opRank, operatorName: opName || name || undefined, traceId: traceId || undefined,
+        });
+        if (res?.ok) {
+          await db.from("pending_actions").update({ status: "committed", resolved_at: new Date().toISOString() }).eq("id", slot.id);
+          const shortNote = raw.length > 140 ? raw.slice(0, 137) + "..." : raw;
+          await sendTextAndLog(db, from, humanize(`Done. Marked "${title}" complete. Noted: ${shortNote}.`), { contactId, trace_id: traceId });
+          await emit({ type: "sasa.task_slot_filled", source: "agent:sasa", actor: opName || name || "team", subject_type: "task", subject_id: slot.payload?.task_id || null, correlation_id: traceId, payload: { title, note_len: raw.length } }).catch(() => null);
+          await markJobDone(job.id); return;
+        }
+        // Gate refusal or honest failure: relay the tool's own honest summary and
+        // close the slot so a retry starts clean. NEVER fall back to a raw write.
+        await db.from("pending_actions").update({ status: "superseded", resolved_at: new Date().toISOString() }).eq("id", slot.id);
+        const msg = res?.summary || `I could not close "${title}". Tell me which task you meant.`;
+        await sendTextAndLog(db, from, humanize(msg), { contactId, trace_id: traceId });
+        await emit({ type: "sasa.task_slot_refused", source: "agent:sasa", actor: opName || name || "team", subject_type: "task", subject_id: slot.payload?.task_id || null, correlation_id: traceId, payload: { error: res?.error || "complete_failed" } }).catch(() => null);
+        await markJobDone(job.id); return;
+      }
+    }
+  }
+
   // CONFIRM-BEFORE-WRITE: money staged by record_payment waits here for the
   // operator's "yes" before it touches the ledger. Handled deterministically,
   // with no model in the loop, so a confirmation always commits exactly the staged
@@ -354,14 +499,23 @@ async function processJob(db: any, job: any): Promise<void> {
         // back a Nur draft for the owner to review. Keep the two streams apart
         // so a bank confirmation never gets miscounted as "N payments logged".
         const done: string[] = [];
+        const sent: string[] = [];
         const notes: string[] = [];
+        const failed: string[] = [];
         for (const p of pend) {
-          if (p.kind === "record_payment") { await commitPaymentRow(db, p.payload); done.push(p.summary || "payment"); }
+          // VERIFIED COMMIT (KT #336/#339): only claim "Logged" for a write that
+          // actually landed. A failed commit goes to `failed[]`, and its pending
+          // action is NOT marked committed, so it stays for retry, never lost.
+          let okItem = true;
+          if (p.kind === "record_payment") {
+            const r = await commitPaymentRow(db, p.payload);
+            if (r.id) done.push(p.summary || "payment"); else { okItem = false; failed.push(p.summary || "payment"); }
+          }
           else if (p.kind === "bank_import") { const r = await commitBankImport(db, p.payload); notes.push(r.summary); }
           else if (p.kind === "parsed_task_from_group") {
             const tp = p.payload?.task;
             if (tp?.title && tp?.assignee_id) {
-              const { data: taskRow } = await db.from("tasks").insert({
+              const { data: taskRow, error: tErr } = await db.from("tasks").insert({
                 title: tp.title, assignee_id: tp.assignee_id,
                 status: "todo", priority: "medium",
                 due_on: tp.due_on || null,
@@ -371,22 +525,50 @@ async function processJob(db: any, job: any): Promise<void> {
                 source_id: tp.source_message_id || p.id,
                 source_text: tp.source_text || "",
               }).select("id").single();
-              done.push(`task "${tp.title}" for ${tp.assignee_name}`);
+              if (!tErr && taskRow) done.push(`task "${tp.title}" for ${tp.assignee_name}`); else { okItem = false; failed.push(`task "${tp.title}"`); }
             } else { done.push(p.summary || "group task"); }
           }
           else if (p.kind === "case_to_approve") {
             const caseId = p.payload?.case_id;
             if (caseId) {
-              await db.from("beneficiaries").update({ intake_stage: null, status: "active", updated_at: new Date().toISOString() }).eq("id", caseId);
-              done.push(p.summary || "case approved");
+              const { error: cErr } = await db.from("beneficiaries").update({ intake_stage: null, status: "active", updated_at: new Date().toISOString() }).eq("id", caseId);
+              if (!cErr) done.push(p.summary || "case approved"); else { okItem = false; failed.push(p.summary || "case"); }
             } else { done.push(p.summary || "case"); }
           }
+          else if (p.kind === "send_message") {
+            // KT #357: complete the relay Nur confirmed. Reuse message_person so the
+            // resolution + idempotency + logging are the SAME single send path (no
+            // forked sender). A non-resolved / ambiguous result is NOT a send: it stays
+            // staged + reported honestly, never a fabricated "Sent!".
+            const to = String(p.payload?.to_name || "").trim();
+            const text = String(p.payload?.text || "").trim();
+            // KT #357 hardening (skeptic #3): re-derive authority from the LIVE
+            // operator replying "yes", never trust the staged payload.rank. A
+            // send is a privileged act and message_person has no authz of its own.
+            const liveAdmin = opRank === "owner" || opRank === "founder";
+            if (!liveAdmin) {
+              okItem = false; notes.push("Only Nur or Taona can send messages from this line, so I did not send it.");
+            } else if (to && text) {
+              const r: any = await runSmartTool("message_person", { to, text }, { contactId, tier: "admin", rank: (opRank as any) || "owner", operatorName: "Nur", traceId: traceId || undefined });
+              // KT #357 honesty (skeptic #2): a deduped result means NOTHING new went
+              // out this turn, so it must NOT be reported as a fresh "Sent". Report it
+              // honestly as already-sent (and commit so it does not linger).
+              if (r?.ok === true && r?.detail?.deduped) { notes.push(`That was already sent to ${to}, so I did not send a duplicate.`); }
+              else {
+                const reallySent = r?.ok === true && !r?.detail?.unresolved && !r?.detail?.ambiguous;
+                if (reallySent) sent.push(to);
+                else { okItem = false; failed.push(`message to ${to}`); if (r?.summary) notes.push(String(r.summary)); }
+              }
+            } else { okItem = false; failed.push("message"); }
+          }
           else { done.push(p.summary || "item"); }
-          await db.from("pending_actions").update({ status: "committed", resolved_at: new Date().toISOString() }).eq("id", p.id);
+          if (okItem) await db.from("pending_actions").update({ status: "committed", resolved_at: new Date().toISOString() }).eq("id", p.id);
         }
         const parts: string[] = [];
+        if (sent.length) parts.push(sent.length === 1 ? `Sent to ${sent[0]}.` : `Sent to ${sent.join(", ")}.`);
         if (done.length) parts.push(done.length === 1 ? `Done. Logged ${done[0]}.` : `Done. Logged ${done.length} payments: ${done.join("; ")}.`);
         if (notes.length) parts.push(notes.join("\n\n"));
+        if (failed.length) parts.push(`I could not commit ${failed.length === 1 ? failed[0] : `${failed.length}: ${failed.join("; ")}`}, so I have not, and I left ${failed.length === 1 ? "it" : "them"} staged. Want me to retry?`);
         const msg = parts.join("\n\n") || "Done.";
         await sendTextAndLog(db, from, msg, { contactId, trace_id: traceId });
         await emit({ type: "payment.confirmed", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { committed: done.length, bank_imports: notes.length } });
@@ -401,7 +583,47 @@ async function processJob(db: any, job: any): Promise<void> {
       }
       // neither yes nor no: leave recent stages pending (supports multi-message
       // dictation) and let the conversation continue.
+    } else {
+      // KT #357 (skeptic #5): NON-SILENT EXPIRY. A send_message older than 20 min was
+      // just superseded above, so nothing is pending. If the operator now confirms,
+      // do not go silent (the old dead-end): tell them it timed out and offer to redo
+      // it. Only on an affirmative, only when a send_message lapsed in the last 2h, and
+      // it NEVER sends anything (it just offers) so an expired send can't auto-fire.
+      const t = command.trim().toLowerCase();
+      const affirm = /^(?:👍|✅|💯)|^(?:please\s+|ok(?:ay)?\s+|yes\s+|yeah\s+|sure\s+)?(?:y|yes|yep+|yeah|yup|send(?:\s+it)?|go ahead|do it|please do|confirm(?:ed)?)\b/.test(t);
+      if (affirm) {
+        const since2h = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        const { data: lapsed } = await db.from("pending_actions")
+          .select("payload").eq("contact_id", contactId).eq("kind", "send_message").eq("status", "superseded")
+          .gte("resolved_at", since2h).order("resolved_at", { ascending: false }).limit(1);
+        if (lapsed && lapsed.length) {
+          const who = String(lapsed[0]?.payload?.to_name || "them");
+          const msg = `That message to ${who} timed out before you confirmed, so I did not send it. Want me to set it up again?`;
+          await sendTextAndLog(db, from, msg, { contactId, trace_id: traceId });
+          await emit({ type: "sasa.send_confirm_expired", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { to: who } });
+          await markJobDone(job.id); return;
+        }
+      }
     }
+  }
+
+  // BARE-PRAISE / ACK NO-OP (KT #349). We only reach here when the confirm gate
+  // above did NOT commit or cancel a staged action (nothing was pending, or the
+  // message was neither yes nor no). A bare acknowledgement / praise ("Great!",
+  // "Perfect", "Thanks", "👍") with nothing staged is NOT a request, so it must NOT
+  // wake the brain: on Nur's "Great!" right after an email was queued, the brain
+  // re-ran draft_email -> a DUPLICATE Needs-You card + a fabricated "Done" reply that
+  // the honesty guard then replaced with the canned reask (live 2026-06-21 11:27).
+  // The $-anchor means ONLY a bare token matches: "Perfect, send it" / "Great, do it"
+  // keep their verb and fall through normally (and a genuinely staged action already
+  // committed in the confirm gate above, where "great"/"perfect" are yes-words). This
+  // never touches that yes-regex, so real confirmations are unaffected.
+  const ACK_ONLY = /^\s*(?:great|perfect|awesome|amazing|wonderful|excellent|brilliant|lovely|nice|cool|fab|fabulous|love\s*it|thank\s*you|thanks|thanx|thx|ty)[\s!.,]*$|^[\s👍✅💯🙏🙌🎉❤️🔥👏]+$/i;
+  if (contactId && ACK_ONLY.test(String(text || ""))) {
+    const ackMsg = "Glad that works. I'm here whenever you need the next thing.";
+    await sendTextAndLog(db, from, ackMsg, { contactId, handledBy: "sasa", trace_id: traceId });
+    await emit({ type: "sasa.ack_noop", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { text: String(text || "").slice(0, 60) } }).catch(() => {});
+    await markJobDone(job.id); return;
   }
 
   const history = await historyFor(db, contactId);
@@ -752,7 +974,12 @@ async function processJob(db: any, job: any): Promise<void> {
         const blockerHits = fuzzyMatchTasks(dt.blocker_fragment, openRows);
         const blockedHits = fuzzyMatchTasks(dt.blocked_fragment, openRows);
         if (!blockerHits.length || !blockedHits.length) {
-          await sendTextAndLog(db, from, `I could not match both tasks for the dependency ("${dt.blocker_fragment}" blocks "${dt.blocked_fragment}"). Try again with more of each title.`, { contactId, trace_id: traceId });
+          // CLARITY ASK (2026-06-20, KT #324): never leak the internal frag
+          // machinery. The "X before Y" dependency parser is greedy (it fired on
+          // a completion note "communication must be made before any changes" in
+          // the live bug), so a no-match here is usually NOT a real dependency.
+          // Ask a clean human question naming what we need, via humanize().
+          await sendTextAndLog(db, from, humanize(`I'm not sure which two tasks you mean to link. Tell me the two task names and which one blocks which.`), { contactId, trace_id: traceId });
           return;
         }
         const blocker = pickMostRecent(blockerHits) as any;
@@ -1113,7 +1340,13 @@ async function processJob(db: any, job: any): Promise<void> {
             if (lbl) swipeAnchorSubject.label = String(lbl);
           }
         }
-        const quotedExcerpt = String(quotedRow.body || "").replace(/\s+/g, " ").slice(0, 200);
+        // Widened 200 -> 700 (KT #352): the quoted text is the UNIVERSAL swipe anchor
+        // (the subject-resolution above almost never fires because every
+        // whatsapp.message_out event is subject_type:"contact"). A 200-char cut
+        // truncated drafts, task lists and beneficiary details, so the model lost what
+        // she actually swiped. 700 carries enough of any bot message for the model to
+        // identify the thing and pull it with the matching tool.
+        const quotedExcerpt = String(quotedRow.body || "").replace(/\s+/g, " ").slice(0, 700);
         if (swipeAnchorSubject) {
           swipeAnchorNote = `Nur is replying to your prior message about the ${swipeAnchorSubject.subject_type} "${swipeAnchorSubject.label || quotedExcerpt}". Her reply is: `;
         } else if (quotedExcerpt) {
@@ -1136,6 +1369,198 @@ async function processJob(db: any, job: any): Promise<void> {
       if (replyToExternalId && !swipeAnchorNote) {
         swipeAnchorNote = "Nur used swipe-to-reply. Use your tools to figure out what she is referring to. ";
       }
+    }
+  }
+
+  // DRAFT RECALL (KT #353). The model IGNORED the show_draft tool and falsely claimed
+  // "I'm not finding a draft" when one was queued (live 2026-06-21 12:24), then again
+  // on her swipe-reply. A draft she asks to SEE must be shown deterministically, not
+  // left to the model's whim. Fire when she asks to show/share/read THE DRAFT (not
+  // "draft a new email"), or swipe-replies to a draft bubble with a bare reference.
+  // YIELD to edit/send intents (let the model handle those). Falls through to the
+  // brain only when there is genuinely no pending draft.
+  {
+    const sendEmailVerb = /\b(?:send it|send the email|send that|send this|fire it|email it|go ahead and send)\b/i.test(command || "");
+    const editVerb = /\b(?:change|edit|reword|rewrite|shorten|lengthen|add|remove|update|make it|fix|correct|adjust|tweak|rephrase|delete|cancel)\b/i.test(command || "");
+    // KT #354 (adversarial sweep): the SHOW intent must have an explicit show-verb
+    // tied to "draft". A bare "the draft" match wrongly intercepted "the draft is
+    // wrong", "did you send the draft", "approve the draft", "the draft policy
+    // document" etc. — the brain never saw them. So only fire on an explicit show.
+    const showDraftIntent = /\b(?:show|share|see|pull|read|view|open|bring\s+up|send\s+me|resend|what(?:'?s| is| was)?|where(?:'?s| is)?)\b[\s\S]{0,40}\bdrafts?\b/i.test(command || "")
+      && !/\bdrafts?\s+(?:an?|me\s+an?|a\s+new|up\s+an?|out)\b/i.test(command || "");
+    const bareRef = /^\s*(?:this(?:\s+one)?|that(?:\s+one)?|it|the\s+draft|yes|yeah|show(?:\s+me)?(?:\s+it|\s+this|\s+that)?|see(?:\s+it|\s+this|\s+that)?|read(?:\s+it|\s+this|\s+that)?|share(?:\s+it|\s+this|\s+that)?|pull(?:\s+it|\s+this|\s+that)?(?:\s+up)?)\s*[.!?]*\s*$/i.test(command || "");
+    // Only a REAL draft bubble (our exact "Here's the draft" prefix), NOT any quoted
+    // text that merely contains the word "draft"/"subject:" (KT #354 — that mis-fired
+    // on a swipe-reply "yes" to any draft-mentioning or forwarded-email message).
+    const swipedDraft = !!swipeAnchorNote && /here'?s the draft/i.test(swipeAnchorNote);
+    // ADMIN ONLY (KT #354): pending email drafts are NGO-wide (donor PII, recipient,
+    // full body). A team-tier member must NEVER pull them. Gate to owner/founder.
+    if (contactId && (opRank === "owner" || opRank === "founder") && !sendEmailVerb && !editVerb && (showDraftIntent || (swipedDraft && bareRef))) {
+      try {
+        const { data: dr } = await db.from("approvals").select("proposed,created_at").eq("kind", "email_reply").eq("status", "pending").order("created_at", { ascending: false }).limit(10);
+        let drafts = (dr || []) as any[];
+        // KT #355: if she named a recipient/keyword ("show me the draft to mwangi"),
+        // narrow to it; otherwise when several are pending, LIST them so she picks the
+        // right one rather than getting the newest by default.
+        const STOP = new Set(["show", "share", "see", "pull", "read", "view", "open", "bring", "send", "resend", "what", "whats", "where", "wheres", "draft", "drafts", "email", "emails", "the", "you", "your", "made", "prepared", "earlier", "again", "please", "could", "can", "able", "are", "want", "need", "there", "ready", "this", "that", "one", "for", "from", "about", "with"]);
+        const tokens = (command || "").toLowerCase().replace(/[^a-z0-9@.]+/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w));
+        if (tokens.length && drafts.length > 1) {
+          const f = drafts.filter((a) => { const blob = JSON.stringify(a.proposed || {}).toLowerCase(); return tokens.some((t) => blob.includes(t)); });
+          if (f.length) drafts = f;
+        }
+        if (drafts.length === 1) {
+          const p = (drafts[0].proposed || {}) as any;
+          const to = p.to || p.from || null;
+          const msg = `Here's the draft${to ? ` to ${to}` : ""}:\n\n*Subject:* ${p.subject || "(no subject)"}\n\n${String(p.body || "").trim().slice(0, 3500)}\n\nIt's still in Needs You for your approval. Nothing has been sent until you say so.`;
+          await sendTextAndLog(db, from, msg, { contactId, handledBy: "sasa", trace_id: traceId });
+          await emit({ type: "sasa.draft_shown", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { count: 1, to } }).catch(() => {});
+          await markJobDone(job.id); return;
+        }
+        if (drafts.length > 1) {
+          const lines = drafts.slice(0, 8).map((a, i) => { const p = (a.proposed || {}) as any; return `${i + 1}. to ${p.to || p.from || "?"} — ${String(p.subject || "(no subject)").slice(0, 70)}`; });
+          const msg = `You have ${drafts.length} email drafts waiting in Needs You:\n\n${lines.join("\n")}\n\nWhich one do you want to see in full? Say e.g. "show me the draft to ${(drafts[0].proposed?.to || "them").split("@")[0]}".`;
+          await sendTextAndLog(db, from, msg, { contactId, handledBy: "sasa", trace_id: traceId });
+          await emit({ type: "sasa.draft_listed", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { count: drafts.length } }).catch(() => {});
+          await markJobDone(job.id); return;
+        }
+        // no pending draft -> fall through to the brain (it answers honestly / can search)
+      } catch (e: any) { console.error("[worker:draft_recall]", e?.message || e); }
+    }
+  }
+
+  // READ-EMAIL RECALL (KT #356). The model mishandled read_email and replied "the
+  // email reader isn't available" even though Gmail works (token + list + format=full
+  // all verified 200). So reading an inbox email is now DETERMINISTIC, like the draft
+  // recall. Admin-only (the sasa@nisria.co inbox is confidential). Conservative intent:
+  // an explicit read/open verb on email/inbox, never "email address", "send", "draft",
+  // or "email <name>" (compose).
+  {
+    const readEmailIntent =
+      (/\b(?:read|open|pull\s+up|read\s+me|bring\s+up)\b[\s\S]{0,25}\b(?:e-?mails?|inbox)\b/i.test(command || "")
+        || /\b(?:show|read|open)\s+me\s+(?:the\s+|my\s+)?(?:latest|most\s+recent|recent|last|newest|new)\s+(?:e-?mail|message|inbox)/i.test(command || "")
+        || /\bwhat(?:'?s| is| does)\b[\s\S]{0,20}\b(?:latest|recent|last)\s+(?:e-?mail|message)\b/i.test(command || ""))
+      && !/\bemail\s+(?:address|to)\b/i.test(command || "")
+      && !/\b(?:send|draft|compose|write)\b/i.test(command || "");
+    if (contactId && (opRank === "owner" || opRank === "founder") && readEmailIntent) {
+      try {
+        const { searchInbox, readEmail } = await import("../../../../lib/gmail");
+        // specific ("from X" / "about X") vs generic latest
+        const mFrom = (command || "").match(/\bfrom\s+([a-z0-9@.][a-z0-9@.\s]{1,40})/i);
+        const mAbout = (command || "").match(/\babout\s+([a-z0-9@.][a-z0-9@.\s]{1,40})/i);
+        let q = "in:inbox";
+        if (mFrom || mAbout) q = `${mFrom ? `from:${mFrom[1].trim().split(/\s+/)[0]} ` : ""}${mAbout ? mAbout[1].trim() : ""}`.trim() || "in:inbox";
+        const hits = await searchInbox(q, 1);
+        if (hits.length) {
+          const full = await readEmail(hits[0].id);
+          const body = String(full?.body || hits[0].snippet || "").trim().slice(0, 3500);
+          const attach = hits[0].attachments?.length ? `\n📎 ${hits[0].attachments.join(", ")}` : "";
+          const msg = `*From:* ${hits[0].from || "?"}\n*Subject:* ${hits[0].subject || "(no subject)"}\n*Date:* ${hits[0].date || "?"}${attach}\n\n${body || "(this email has no readable text body)"}`;
+          await sendTextAndLog(db, from, msg, { contactId, handledBy: "sasa", trace_id: traceId });
+          await emit({ type: "sasa.email_read", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { from: hits[0].from, subject: hits[0].subject, q } }).catch(() => {});
+          await markJobDone(job.id); return;
+        }
+        // no match -> fall through to the brain (it can search by other terms)
+      } catch (e: any) { console.error("[worker:read_email_recall]", e?.message || e); }
+    }
+  }
+
+  // DETERMINISTIC SEND (KT #358, the search-dodge). "text/message/tell/ping X <words>"
+  // used to be left to the model, which often ran the SEARCH tool instead of
+  // message_person ("Let me just pull it...") so the send never happened. Now an
+  // explicit send command is caught here, BEFORE the brain, and STAGED for a one-tap
+  // "yes" (reusing the send_message confirm path) with the exact text previewed. It
+  // NEVER sends on its own; owner/founder only; self/group recipients are excluded;
+  // a verb with no message body gets a guiding ask. Falls through to the brain on no
+  // match, so nothing else changes.
+  if (contactId && command && (opRank === "owner" || opRank === "founder")) {
+    const SELF = /^(?:me|myself|i|us|everyone|everybody|all|the\s+team|the\s+group|team|group|the\s+group\s+chat)$/i;
+    let recip = "", words = "";
+    let m = command.match(/^\s*(?:please\s+|pls\s+|can\s+you\s+|could\s+you\s+|kindly\s+)?let\s+([a-z][a-z'’.\- ]{1,30}?)\s+know\s+(?:that\s+)?(.+)$/i);
+    if (m) { recip = m[1].trim(); words = m[2].trim(); }
+    else {
+      m = command.match(/^\s*(?:please\s+|pls\s+|can\s+you\s+|could\s+you\s+|kindly\s+)?(?:text|message|msg|tell|ping|whatsapp|wa)\s+([a-z][a-z'’.\- ]{1,30}?)\s*[:,]?\s+(?:to\s+say\s+|saying\s+|that\s+|to\s+|about\s+)?(.+)$/i);
+      if (m) { recip = m[1].trim(); words = m[2].trim(); }
+    }
+    // reject an article/pronoun grabbed as a "name" ("text the team" → recip "the").
+    const okRecip = !!recip && !SELF.test(recip) && recip.split(/\s+/).length <= 2
+      && !/^(?:the|a|an|that|this|them|him|her|it|my|our|your|his|their)$/i.test(recip);
+    // KT #358 (#1a hardened, skeptic-caught over-fire): a send command must (a) not have
+    // a statement body ("message board IS full", "accounts ARE linked" are not sends),
+    // and (b) name a KNOWN team member or contact. "board"/"accounts"/"is" resolve to no
+    // one, so they fall through to the brain instead of staging a phantom send.
+    const bodyStmt = /^(?:is|are|was|were|be|been|being|will|would|should|could|has|have|had|isn'?t|aren'?t|won'?t)\b/i.test(words || "");
+    let recipKnown = false;
+    if (m && recip && words && okRecip && !bodyStmt) {
+      const likeR = `%${recip.replace(/[,()*%]/g, "")}%`;
+      const [tr, cr] = await Promise.all([
+        db.from("team_members").select("id").ilike("name", likeR).limit(1),
+        db.from("contacts").select("id").ilike("name", likeR).limit(1),
+      ]);
+      recipKnown = ((tr.data || []).length > 0) || ((cr.data || []).length > 0);
+    }
+    if (m && recip && words && okRecip && !bodyStmt && recipKnown) {
+      try {
+        await db.from("pending_actions").insert({ contact_id: contactId, kind: "send_message", status: "awaiting_confirm", summary: `message ${recip}`, payload: { to_name: recip, text: words, rank: opRank } });
+        const msg = `Want me to send this to ${recip} now: "${words}"? Reply yes and it goes out.`;
+        await sendTextAndLog(db, from, msg, { contactId, handledBy: "sasa", trace_id: traceId });
+        await emit({ type: "sasa.send_command_staged", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { to: recip } }).catch(() => {});
+        await markJobDone(job.id); return;
+      } catch (e: any) { console.error("[worker:send_cmd]", e?.message || e); }
+    } else {
+      // verb + name but NO body ("text Mark") — used to start the dodge loop. Catch it
+      // deterministically and guide her to the one-liner so the next turn is handled here.
+      const nb = command.match(/^\s*(?:please\s+|pls\s+)?(?:text|message|msg|tell|ping|whatsapp|wa)\s+([a-z][a-z'’.\- ]{1,30}?)\s*[.?!]*\s*$/i);
+      const nbName = nb ? nb[1].trim() : "";
+      if (nbName && !SELF.test(nbName) && nbName.split(/\s+/).length <= 2) {
+        const msg = `Sure, what should I send to ${nbName}? You can say it in one go, like: text ${nbName}: meeting moved to 3pm.`;
+        await sendTextAndLog(db, from, msg, { contactId, handledBy: "sasa", trace_id: traceId });
+        await emit({ type: "sasa.send_command_needs_body", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { to: nbName } }).catch(() => {});
+        await markJobDone(job.id); return;
+      }
+    }
+  }
+
+  // DETERMINISTIC BENEFICIARY/CASE INTAKE (KT #359). add_beneficiary was MODEL-ONLY and
+  // the model wasn't calling it (the "Brian Simon" case was silently dropped 2026-06-20;
+  // zero bot-driven beneficiary writes in 14 days). Now an explicit intake in a DM is
+  // caught BEFORE the brain: a GROUNDED Haiku extractor pulls ONLY the fields the operator
+  // actually stated (absent fields stay null — no hallucination), then add_beneficiary
+  // writes DETERMINISTICALLY and we confirm the REAL row. Owner/founder only. "case" →
+  // intake (casesIntake → intake_stage under_review); "beneficiary" → accepted record.
+  // No name extracted → ask (never drop). Falls through to the brain on no match.
+  if (contactId && command && (opRank === "owner" || opRank === "founder")) {
+    const intakeIntent =
+      (/\b(?:new|add(?:\s+a)?|register|intake|create(?:\s+a)?|log(?:\s+a)?|onboard)\s+(?:a\s+)?(?:case|beneficiar(?:y|ies)|child|family)\b/i.test(command)
+        || /\bthis\s+is\s+a\s+new\s+(?:case|beneficiary|child|family)\b/i.test(command))
+      && !/\b(?:list|show|find|search|how\s+many|status|update|edit|set|delete|remove|merge|approve|decline|move)\b/i.test(command);
+    if (intakeIntent) {
+      try {
+        const asCase = /\bcase\b/i.test(command) && !/\bbeneficiar/i.test(command);
+        const SYS = "You extract child/family intake fields for an NGO from ONE message. Return STRICT JSON with keys: full_name (string), age (number or null), region (string or null), program (one of safe_house|education|rescue|nutrition|other or null), gender (male|female|other or null), guardian_status (string or null), story (string or null). Use ONLY facts EXPLICITLY stated in the message. NEVER invent, guess, or infer a value that is not written. If the name is not stated, set full_name to null.";
+        const ex: any = await claudeJSON(SYS, command, 400, HAIKU);
+        if (ex && typeof ex.full_name === "string" && ex.full_name.trim()) {
+          const r: any = await runSmartTool("add_beneficiary", {
+            full_name: ex.full_name.trim(),
+            age: typeof ex.age === "number" ? ex.age : undefined,
+            region: ex.region || undefined,
+            program: ex.program || undefined,
+            gender: ex.gender || undefined,
+            guardian_status: ex.guardian_status || undefined,
+            story: ex.story || undefined,
+          }, { contactId, tier: "admin", rank: opRank, operatorName: "Nur", casesIntake: asCase, traceId: traceId || undefined });
+          if (r?.ok) {
+            await sendTextAndLog(db, from, r.summary || `Added ${ex.full_name.trim()}${asCase ? " as a new case (in intake)" : ""}.`, { contactId, handledBy: "sasa", trace_id: traceId });
+            await emit({ type: "sasa.intake_added", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: contactId, correlation_id: traceId, payload: { name: ex.full_name.trim(), as_case: asCase } }).catch(() => {});
+            await markJobDone(job.id); return;
+          }
+          // tool returned not-ok -> fall through to the brain (it answers honestly)
+        } else {
+          // intake intent but no name extracted -> ask deterministically, never drop it
+          await sendTextAndLog(db, from, "I can add that. What's the person or family name? Add age, region, and program if you have them (e.g. \"new case: Brian Simon, 13, Uganda, rescue\").", { contactId, handledBy: "sasa", trace_id: traceId });
+          await emit({ type: "sasa.intake_needs_name", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: {} }).catch(() => {});
+          await markJobDone(job.id); return;
+        }
+      } catch (e: any) { console.error("[worker:intake]", e?.message || e); }
     }
   }
 
@@ -1251,6 +1676,15 @@ async function processJob(db: any, job: any): Promise<void> {
     await withSandbox(() => autoCapture({ command, reply, rank: opRank, operatorName: opName || name || undefined, sourceMessageId, toolsRan: sasaResult?.toolsRan || [] }));
   } else {
     await autoCapture({ command, reply, rank: opRank, operatorName: opName || name || undefined, sourceMessageId, toolsRan: sasaResult?.toolsRan || [] });
+  }
+
+  // COALESCE RELEASE: the reply for the whole burst is sent, so mark every
+  // inbound we folded into this turn handled (status='coalesced') and release the
+  // durable per-sender claim. Best-effort (never throws): a miss only risks a
+  // later harmless re-coalesce, never a double-reply (the claim TTL also frees
+  // it) and never silence. Skipped when no burst was claimed (fail-open path).
+  if (coalescedMessageIds.length) {
+    await finishTurn(contactId, coalescedMessageIds).catch(() => {});
   }
 
   if (res.id) await markJobDone(job.id);

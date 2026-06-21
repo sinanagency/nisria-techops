@@ -148,6 +148,7 @@ const COMPLETION_TOOLS = new Set([
   "add_wishlist_item", "update_wishlist_item", "fund_wishlist_item",
   "set_bot_access", "import_contacts", "transfer_drive_file",
   "approve_case", "decline_case", "move_case", "edit_case", "merge_case", "delete_case",
+  "set_public_profile", "set_beneficiary_funding", "delete_beneficiary", "merge_beneficiary",
 ]);
 
 // CLAIM-SHAPE → REQUIRED TOOL CATEGORY. Any completion-class tool's ok=true used
@@ -164,6 +165,13 @@ const TASK_TOOLS = new Set(["create_task", "update_task", "complete_task", "reop
 // inside a task title and substituted the reaskPhrase four times in a row.
 const TASK_READ_TOOLS = new Set(["list_tasks"]);
 const CASE_TOOLS = new Set(["approve_case", "decline_case", "move_case", "edit_case", "merge_case", "delete_case"]);
+// KT #348: SHAPE_CASE matches the word "beneficiary", but a beneficiary
+// add/update/funding/profile is NOT a case tool — so a TRUTHFUL "I added X as a
+// beneficiary" reply was misclassified as a fabricated completion and replaced with
+// "Tell me a bit more so I can do that for you.", making Nur think the add failed
+// (the row actually landed). The case shape's backing set must also accept the
+// beneficiary write tools. (Same family as the Jensen-banned-word break, KT #335.)
+const CASE_OR_BENEFICIARY_TOOLS = new Set([...CASE_TOOLS, "add_beneficiary", "update_beneficiary", "set_public_profile", "set_beneficiary_funding", "delete_beneficiary", "merge_beneficiary"]);
 const EVENT_TOOLS = new Set(["create_event", "move_event", "delete_event"]);
 const CONTACT_TOOLS = new Set(["add_contact", "update_contact", "add_team_member", "update_team_member", "add_beneficiary", "update_beneficiary"]);
 const SHAPE_MONEY = /\b(?:KES|USD|\$|KSh|Ksh)\s*[\d,\.]+|[\d,]+(?:\.\d+)?\s*(?:KES|USD|\$|KSh)\b/i;
@@ -204,7 +212,7 @@ function _SASA_COMPLETION_GUARD(reply: string, toolRuns: { name: string; result:
       shapes: [
         { name: "money", regex: SHAPE_MONEY, requiredTools: PAYMENT_TOOLS },
         { name: "task", regex: SHAPE_TASK, requiredTools: TASK_TOOLS, readTools: TASK_READ_TOOLS },
-        { name: "case", regex: SHAPE_CASE, requiredTools: CASE_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },
+        { name: "case", regex: SHAPE_CASE, requiredTools: CASE_OR_BENEFICIARY_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },
         { name: "event", regex: SHAPE_EVENT, requiredTools: EVENT_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },
         { name: "contact", regex: SHAPE_CONTACT, requiredTools: CONTACT_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },
       ],
@@ -214,6 +222,69 @@ function _SASA_COMPLETION_GUARD(reply: string, toolRuns: { name: string; result:
     });
   }
   return _SASA_COMPLETION_GUARD_CACHED(reply, toolRuns);
+}
+
+// SINGULAR PASSIVE EDIT CLAIM (2026-06-21, KT #342). The live SANARA lie:
+// "Done. The SANARA graduation task is now correctly set to July 10." is a
+// SINGULAR, PASSIVE edit claim — "the <record> is now set/moved/changed to <X>".
+// It escaped every guard: AGENT_COMPLETION needs first-person ("I/we set"),
+// DONE_SIMPLE needs done/complete, PASSIVE_COMPLETION is plural-only (KT #274).
+// So a fabricated date change shipped with NO update_task / move_event run. Catch
+// it: the reply claims a single record was just CHANGED to a value, and no task or
+// event mutation tool succeeded this turn → it is a fabrication, substitute.
+//
+// Precision (no regression on the happy path): the CHANGE requirement is baked
+// INTO the phrase, so a pure status report never trips it. The claim matches only
+// when, right after the record noun + "is/has been/'s", it sees EITHER
+//   (a) "now [correctly] set|marked|scheduled|<change verb> … to/for/on <value>", OR
+//   (b) a hard change verb "moved|changed|updated|rescheduled|pushed|shifted|reset|bumped … to <value>".
+// A bare "the graduation is set for July 3" (no "now", no change verb) is a status
+// report and is NOT matched. And even when matched, it only substitutes if NO
+// MUTATION tool returned ok this turn — any real edit confirmation passes untouched.
+//
+// HOLE FIX (2026-06-21 adversarial audit, KT #344): the first cut keyed the success
+// check on TASK_TOOLS∪EVENT_TOOLS only, but the noun list also matches "date" /
+// "deadline" / "due date", so a TRUE edit through update_payment / update_grant /
+// update_campaign / move_case / update_team_member ("The payment date has been
+// moved to the 15th") was wrongly rewritten to "I have not changed that yet" — the
+// guard LIED that a real change failed (inverted P0). Fix: a real edit ALWAYS has a
+// successful DATE-BEARING edit tool this turn; key the success check on DATE_EDIT_TOOLS
+// (below). Only a claim with ZERO successful date edit (the SANARA fabrication ran no
+// tool) substitutes. Also an ACTIVE-voice arm ("I've pushed the graduation to July 10")
+// catches the first-person form; it is date-anchored and requires a COMPLETED prefix so
+// a relay/offer/question never trips it (KT #347).
+const SINGULAR_EDIT_CLAIM = /\b(?:task|reminder|todo|event|meeting|visit|appointment|graduation|deadline|due\s*date|date)\b[\w\s'’,-]{0,40}?\b(?:is|are|has\s+been|have\s+been|'?s)\s+(?:now\s+(?:(?:correctly|already|successfully)\s+)?(?:set|marked|scheduled|moved|changed|updated|rescheduled|pushed|shifted|reset|bumped)|(?:(?:correctly|already|successfully)\s+)?(?:moved|changed|updated|rescheduled|pushed|shifted|reset|bumped))\b[\w\s'’,-]{0,20}?\b(?:to|for|as|on)\b\s*\S/i;
+// Active-voice fabrication ("I've pushed/moved/set the X to <DATE/TIME>"), anchored
+// on a real date/time target. REGRESSION FIX (2026-06-21 skeptic sweep, KT #347):
+// the first active arm made the subject + qualifiers OPTIONAL, so it matched a bare
+// "<verb> ... to <date>" substring inside OFFERS, QUESTIONS, FUTURES and PASSIVE
+// MODALS that are NOT done-claims ("I'll set it to Friday", "Want me to set it to
+// Monday?", "Should I set the reminder to tomorrow?", "The visit could be moved to
+// the 10th") — those have no successful tool, so the guard rewrote a perfectly good
+// reply into a confusing reask. Fix: REQUIRE a completed first-person prefix
+// (I've / I have / I just / we've / we have). That keeps the real fabrication
+// ("I've pushed the graduation to July 10") and drops every offer/question/modal,
+// which never carry "I've <verb>". Bare "I" is intentionally excluded so "Should I
+// set ..." and "I'll set ..." (no space-after-"I" / no perfect) cannot match.
+const SINGULAR_EDIT_ACTIVE = /\b(?:i'?ve|i\s+have|i\s+just|we'?ve|we\s+have|we\s+just)\s+(?:just\s+|gone\s+ahead\s+and\s+|already\s+|now\s+)?(?:moved|pushed|changed|rescheduled|reset|bumped|shifted|set|updated)\b[\w\s'’,-]{0,30}?\bto\b\s+(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|mon|tues?|wed|thur?s?|fri|sat|sun(?:day)?|today|tomorrow|tonight|next\s+\w+|this\s+(?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|the\s+\d{1,2}(?:st|nd|rd|th)?\b|\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}[\/-]\d{1,2})/i;
+// A successful DATE-BEARING edit tool this turn = a real change happened. REGRESSION
+// FIX (KT #347): the first cut keyed on a broad mutation-verb PREFIX, which let an
+// UNRELATED success excuse a fabricated date change ("add Jane to contacts AND push
+// the graduation to July 10" → add_contact ok → the lie shipped). Narrow to the
+// tools that can actually change a record's date/schedule, so only a relevant edge
+// passes — broad enough for every real date edit the audit flagged
+// (payment/grant/campaign/case/member), tight enough that add_contact/record_payment/
+// set_bot_access can no longer mask a fabricated date move.
+const DATE_EDIT_TOOLS = new Set<string>([
+  ...TASK_TOOLS, ...EVENT_TOOLS,
+  "update_payment", "update_grant", "update_campaign",
+  "move_case", "edit_case",
+  "update_team_member", "update_beneficiary", "update_contact", "update_donor",
+]);
+function claimsSingularEditWithoutSuccess(reply: string, toolRuns: { name: string; result: any }[]): boolean {
+  if (!SINGULAR_EDIT_CLAIM.test(reply) && !SINGULAR_EDIT_ACTIVE.test(reply)) return false;
+  const succeeded = toolRuns.some((t) => DATE_EDIT_TOOLS.has(t.name) && (t.result as any)?.ok === true);
+  return !succeeded;
 }
 
 // PASSIVE_COMPLETION (2026-06-15, KT #274). AGENT_COMPLETION + DONE_SIMPLE both
@@ -313,6 +384,52 @@ const SEND_HAS = /\b(?:he|she|they)\s+(?:now\s+)?(?:has|have)\s+(?:it|them)\b|\b
 const HONEST_NO_SEND =
   "I logged that, but I have not actually messaged them. It is on their board and will show in their daily brief. Want me to message them directly now so they see it?";
 
+// KT #357. When the honesty wall catches a "told them" claim with no real send, pull
+// the ACTUAL intended recipient + text from THIS turn's tool runs so the confirm gate
+// can complete the send for real (instead of the old dead-end where "yes" looped back
+// to the same offer with nothing staged). Priority:
+//   1. a message_person the model TRIED but could not resolve/deliver — its {to,text}
+//      is the model's own composed message (the best, truest signal).
+//   2. a create_task assigned to someone OTHER than the operator — notify them with the
+//      task title (a task assigned to the operator themselves notifies no one).
+// Returns null when nothing concrete is derivable, so we fall back to the plain honest
+// re-offer with no staging (no over-fire, no regression).
+function extractSendTarget(
+  toolRuns: { name: string; input?: any; result?: any }[],
+  _command: string,
+): { to: string; text: string } | null {
+  if (!Array.isArray(toolRuns)) return null;
+  const ops = new Set(["nur", "taona"]);
+  // KT #357 (skeptic #4): a SINGLE newest-first pass so the MOST RECENT relevant
+  // action wins. The old two-loop version always preferred any message_person over a
+  // create_task, so a later create_task to Violet could be shadowed by an earlier
+  // failed message_person to Mark, staging the wrong recipient. Recency matches what
+  // the bot was actually talking about in its reply this turn.
+  for (let i = toolRuns.length - 1; i >= 0; i--) {
+    const r = toolRuns[i];
+    if (r?.name === "message_person") {
+      const okSend = r?.result?.ok === true
+        && !r?.result?.detail?.unresolved && !r?.result?.detail?.ambiguous && !r?.result?.detail?.deduped;
+      if (okSend) return null; // it actually sent this turn; nothing to re-send
+      const to = String(r?.input?.to || "").trim();
+      const text = String(r?.input?.text || "").trim();
+      if (to && text) return { to, text };
+    } else if (r?.name === "create_task" && r?.result?.ok === true) {
+      const who = String(r?.input?.assignee || r?.input?.assignee_name || "").trim();
+      const title = String(r?.input?.title || "").trim();
+      if (who && title && !ops.has(who.toLowerCase())) return { to: who, text: title };
+    }
+  }
+  return null;
+}
+
+// KT #357 (skeptic #1). The bot's HONEST offer to message someone, e.g. "Want me to
+// message Wahome now?", "Shall I tell Grace?", "I can let him know". When the reply
+// offers a send AND a concrete recipient is derivable this turn (extractSendTarget),
+// we stage the send so the operator's "yes" completes it. The target requirement is
+// the over-fire guard: an offer with no derivable recipient stages nothing.
+const SEND_OFFER = /\b(?:want me to|shall i|should i|do you want me to|would you like me to|want me to go ahead and|i can|let me)\b[^.?!]{0,45}?\b(?:message|text|tell|notify|remind|ping|let\s+(?:him|her|them|\w+)\s+know|reach\s+out\s+to|drop\s+(?:him|her|them)\s+a|send\s+(?:it|them|him|her|a\s+(?:message|text|note|reminder|heads.?up))\s+to)\b/i;
+
 // Capitalized narration tokens that look like proper nouns but are verbs,
 // articles, system names, or greetings. Filter them out of recipient extraction
 // so "Done, sent to Violet" doesn't think "Done" is a recipient.
@@ -389,6 +506,96 @@ function claimsSendWithoutSend(reply: string, toolRuns: { name: string; result: 
     }
   }
   return false;
+}
+
+// #8 (KT #313) UNVERIFIED SEND-STATE WALL. The model must never assert what it
+// did or did not send to a person from memory. That produced the 2026-06-19
+// "Nothing went out to Nur" fabrication: it HAD sent (in Nur's thread), which the
+// owner-thread window never saw, and the prompt pressured certainty over a check.
+// A send-state claim is honest ONLY when a real lookup ran this turn. These tools
+// ARE the ground truth (reused, never duplicated): read_contact_thread reads a
+// named person's thread incl. outbound; show_outbound_audit is the send receipt.
+const VERIFY_TOOLS = new Set(["read_contact_thread", "show_outbound_audit", "search_history"]);
+// A definite assertion about what was/wasn't sent (positive or negative). A bare
+// "tell Nur?" question must not match.
+// 2026-06-20 paraphrase audit: widened (NOT weakened) to cover natural rephrasings
+// that bypassed the guard, all still anchored to send/receive semantics:
+// "no record of (sending)", passive "messages were sent", reversed-subject
+// "she did not receive / she received", "no outbound to", and the affirmative
+// reach-out "reached out to" (a positive send-state assertion). Kept anchored so
+// it does not fire on unrelated done/figure text.
+const SEND_STATE_CLAIM = /\b(?:nothing went out|no outbound|no record of (?:sending|having sent|any (?:send|message|outbound)|that going out)|haven'?t sent|have ?n'?t sent|have not sent|did ?n'?t send|did not send|never sent|i sent|i'?ve sent|i have sent|reached out to|message sent|messages? (?:are|were|have been|went) (?:out\s+)?(?:to\b|sent)|(?:was|were) (?:anything|nothing|something|a message|the message|it) sent|has been (?:told|messaged|notified|sent|reminded)|been (?:told|notified|reminded)|(?:she|he|they) (?:did ?n'?t|did not|never|has ?n'?t|have ?n'?t) (?:receive|get|gotten)(?:\s+(?:it|anything|the|a|my|your))?|(?:she|he|they) (?:received|got|gotten) (?:it|the (?:message|text|note|report)|anything|nothing)(?:\s+from)?|(?:she|he|they) (?:received|got|gotten)[\w\s]{0,20}?\bfrom (?:me|you|us))\b/i;
+// The user ASKING what was sent/told (a recall question). Scopes the guard to the
+// fabrication case, away from a legitimate just-now send confirmation.
+// 2026-06-20 paraphrase audit: added received/got/gotten recall, "get to <person>",
+// passive "was anything sent to", and "receive anything", all send/receive anchored.
+const SEND_STATE_QUESTION = /\b(?:what did (?:you|u|ya) (?:send|tell|say|message|text)|did (?:you|u|ya) (?:send|tell|text|message|notify|reach)|who did (?:you|u|ya) (?:message|text|tell)|(?:did|does|has|have|was|were) .{1,30}\b(?:get|receive|gotten|got|received) (?:the|my|your|a|any|some)?\s*(?:thing|message|text|it|note)?|(?:did|does|has|have) .{1,30}\bget (?:to|through to)\b|(?:was|were) (?:anything|something|a message|the message|it|the report|the note)?\s*.{0,20}?sent to|what (?:went out|did you send out))\b/i;
+
+// A SPECIFIC person is named as the recipient ("to Nur", "to Mark"). For these,
+// show_outbound_audit is NOT valid verification: it hard-excludes the operator
+// (Nur, last4 2716/3640) and is a team-aggregate, so it structurally returns
+// "nothing" for her. Only read_contact_thread reads the named person's real
+// thread. This is the 2026-06-20 00:16 recurrence: the bot "verified" with
+// show_outbound_audit, got empty (Nur excluded), and still lied "nothing to Nur".
+const SEND_STATE_PERSON = /\bto\s+(?:nur|mark|wahome|violet|cynthia|maryam|charity|serena|haneen|her|him|them|[A-Z][a-z]{2,})\b/;
+// Pull the NAMED person out of a "to <person>" span so the person-specific
+// verification can match the read against the right thread. Pronouns (her/him/
+// them) carry no name to match, so they return null and the guard falls back to
+// "a read for that pronoun is unmatchable -> fail closed".
+const SEND_STATE_PERSON_NAME = /\bto\s+([A-Za-z][a-z]{2,})\b/gi;
+const SEND_STATE_PRONOUN = new Set(["her", "him", "them"]);
+function claimedPersonNames(text: string): string[] {
+  const out: string[] = [];
+  for (const m of String(text || "").matchAll(SEND_STATE_PERSON_NAME)) {
+    const w = m[1].toLowerCase();
+    if (!SEND_STATE_PRONOUN.has(w)) out.push(w);
+  }
+  return out;
+}
+// 2026-06-20 BUG-2 audit: a read_contact_thread targets a single person via its
+// input.name (smart-tools.ts schema: { name: string }). Match the read's target
+// against the claimed person (case-insensitive substring, either direction so
+// "Nur" matches "Nur Mnasria" and vice-versa).
+function readMatchesPerson(toolRuns: { name: string; input?: any; result?: any }[], person: string): boolean {
+  const p = person.toLowerCase().trim();
+  if (!p) return false;
+  return toolRuns.some((t) => {
+    if (t.name !== "read_contact_thread") return false;
+    const target = String((t.input as any)?.name ?? "").toLowerCase().trim();
+    if (!target) return false;
+    return target.includes(p) || p.includes(target);
+  });
+}
+
+function claimsUnverifiedSendState(reply: string, toolRuns: { name: string; input?: any; result: any }[], command: string): boolean {
+  if (!SEND_STATE_QUESTION.test(String(command || ""))) return false;
+  if (!SEND_STATE_CLAIM.test(String(reply || ""))) return false;
+  // A real send this turn makes the claim honest regardless.
+  const sentNow = toolRuns.some((t) => SEND_TOOLS.has(t.name) && (t.result as any)?.ok === true);
+  if (sentNow) return false;
+  // Person-specific claim -> only read_contact_thread can verify it, and only a
+  // read FOR THAT PERSON counts. A same-turn read of Mark's thread must NOT
+  // satisfy a claim about Nur (2026-06-20 BUG-2: any read was accepted). Generic
+  // ("what did I send today") -> any VERIFY_TOOL is fine.
+  const personSpecific = SEND_STATE_PERSON.test(String(command || "")) || SEND_STATE_PERSON.test(String(reply || ""));
+  if (personSpecific) {
+    // Resolve the claimed person from the command first (the operator's ask is the
+    // authoritative subject), then the reply. Pronoun-only claims yield no name to
+    // match: fail closed (require a name-matched read) rather than accept any read.
+    const names = claimedPersonNames(String(command || ""));
+    const replyNames = claimedPersonNames(String(reply || ""));
+    const targets = names.length ? names : replyNames;
+    if (targets.length === 0) {
+      // Pronoun-only ("to her") with no resolvable name: cannot prove the read was
+      // for the right person, so the guard fires (honest substitution).
+      return true;
+    }
+    // Every named target must have a read_contact_thread that matched it.
+    const verified = targets.every((person) => readMatchesPerson(toolRuns, person));
+    return !verified;
+  }
+  const verified = toolRuns.some((t) => VERIFY_TOOLS.has(t.name));
+  return !verified;
 }
 
 // PASSIVE-PLURAL SEND. Mirror of PASSIVE_COMPLETION (KT #274) for the SEND
@@ -878,6 +1085,7 @@ HONESTY, also overriding:
 - CREATING A TASK IS NOT MESSAGING THE PERSON, and it is NOT the work being done. create_task only writes a task into the portal: it does NOT contact the assignee, and it does NOT mean they have seen it, accepted it, or started it. So when you assign a task to someone, confirm ONLY what create_task returned, in the assignee's words: "I've logged a task for Cynthia: move the Drive ownership, due next Friday." NEVER say or imply the person "has it", "received the request", "is on it", "has been told", "the transfer is done", or "all handled" unless you ACTUALLY messaged them with message_person this turn and it returned success, or they themselves confirmed it. If ${who} expects the person to be notified, say plainly: "Logged it for Cynthia in the portal. I haven't messaged her yet, want me to send it to her?" The difference between "I logged a task" and "the person was told and it's handled" is the whole game: never blur it.
 - NEVER say Q1, Q2, Q3, Q4, "quadrant", "Stephen Covey", or any framework name to a user, ever, for any reason. This applies whether you mean a Covey quadrant (important/urgent) OR a calendar quarter (Jan-Mar, Apr-Jun, etc). For a CALENDAR quarter, say the months: Q1 is "January through March", Q2 is "April through June", Q3 is "July through September", Q4 is "October through December". You may also say "the first quarter of the year" etc. when a quarter as a unit is what you mean. For a COVEY quadrant, speak in plain words: "important and urgent", "important but not urgent". NEVER substitute the word "urgent" for a CALENDAR quarter (that produced a real semantic distortion: "starting Q3" became "starting urgent"). Other quarter-adjacent dates use plain words too: "next Friday", "by end of June", "next month". If a user asks "what do you mean by Q2", you misspoke; apologise briefly and restate in plain English. Do NOT explain the framework, do NOT name the framework, do NOT use the codes again in that conversation or any later one.
 - THE 727 LINE DOES NOT REACH FIELD STAFF ON ITS OWN. A task you assign to a team member who is not Nur or Taona does NOT auto-ping them from this line. To actually reach a specific person you must call message_person with their name and the words. So when ${who} says "assign this to Mark and let him know", do BOTH: create_task AND message_person. If you cannot find the person's number, say so plainly, never pretend the request reached them.
+- KNOW YOUR OWN REACH BEFORE YOU OFFER IT (self-awareness). WhatsApp only lets you START a conversation with someone who has messaged THIS line in the last 24 hours. A brand-new team member you JUST added has not messaged in, so you genuinely CANNOT reach them yet, no matter what. So do NOT offer a bare "want me to message him?" to a freshly-added or never-contacted person and then fail after ${who} says yes. Put the limit IN the offer, upfront: "I've logged it for Malek. I can't message him yet though, WhatsApp only lets me start a chat once he's texted this line. Ask him to send a quick hi to this number and I'll reach him straight away, want me to have it ready for then?" Same for sending a file. State the constraint when you offer, not after you fail. This is you being aware of what you can and cannot do.
 - When a tool reports it could not find the task or record (for example complete_task says it found no matching open task), tell ${who} plainly that you could not find it and offer to list the actual open tasks (list_tasks). NEVER paper over it by guessing the task "may have been completed already" or "is not in the list", and never flip-flop. The task list you can see is the same list she sees on the board; if it is there, find it.
 - NEVER invent a reason for your own behavior or for a gap in what you can see. If you cannot fully retrieve or recall something, say exactly that ("I can only see part of this, let me pull the rest") and look it up. Do NOT fabricate a technical cause, a usage limit, a rate limit, a "cut off mid-sentence", a glitch, unless a real error is actually in front of you THIS turn. When a search_history result is marked truncated, that is YOUR view being capped, never proof the original message was cut off, do not quote it as evidence of a cut-off. When you show a past message, quote the real retrieved text, never paraphrase it into something shorter and then call it incomplete.
 - Do not repeat yourself. Acknowledge hard or sad news ONCE, in a few words, then be useful. Never open consecutive replies with "I'm so sorry" or re-send a condolence or summary you already sent.
@@ -886,6 +1094,7 @@ YOUR CAPABILITIES, never deny these:
 - You CAN read PDFs, documents, images, screenshots, and voice notes, and you CAN file them into the platform. The system extracts the contents for you and routes them to the Brain, the Library, Finance, or a record automatically. NEVER tell ${who} that you "don't have a tool to read PDFs", "can't read documents", "can't file things into folders", or anything of that shape. That is false. If you are reasoning about an attachment, its extracted text is already in front of you in this turn.
 - FILING IS AUTOMATIC AND ALREADY DONE. Every document sent to you is read and filed the moment it arrives: its contents go into the Brain and the document library and become searchable. So when ${who} asks you to "file" a document, file these "where they belong", or asks where a document went, it is ALREADY filed. Do NOT explain the indexing mechanism, and NEVER tell ${who} to upload it through the web portal themselves. Instead CONFIRM it: call file_document (folder omitted) or search_documents to see the current shelf, then say plainly e.g. "I've filed the constitution and KRA PIN under Legal." To set or move a document to a specific shelf, call file_document with the folder (legal, finance, programs, events, media, branding, people, reports, general). You own filing end to end; act, then confirm, never punt it back to ${who}.
 - If an attachment's text genuinely failed to extract THIS turn (you will be told so in plain words), say exactly that: "I got <name> but couldn't read it just now, resend it and I'll pull it straight in." Own the one-off failure, never convert it into a missing capability, and never ask ${who} where to file something. You decide where it belongs.
+- THE BRAIN IS A REAL, BROWSABLE PAGE at https://command.nisria.co/memory. When you save a fact or link with remember_fact, it lands there and ${who} CAN open it. So when ${who} asks "where did you save this" or "I can't see it", give her the FULL clickable link (WhatsApp only makes a full https:// URL tappable, a bare "/memory" is not), e.g. "It's saved in your Brain, open it here: https://command.nisria.co/memory". NEVER tell her the Brain is "just a backend memory I hold", "not a page you can browse", or anything that DENIES the page exists. That is false and self-undermining: the page is real. To pull a saved fact back into chat yourself, use query_memory / search_history; to let her see all of them, send her the https://command.nisria.co/memory link. (Owner-private "between us" notes never show on that page, so it is safe to share.)
 - You are Sasa, and you always speak in the FIRST PERSON as Sasa ("I filed that", "I couldn't read it just now"). NEVER refer to yourself in the third person, and NEVER call yourself "the Nisria bot", "the bot", "the assistant", or "the team behind Sasa". You are one continuous person on this line.
 
 DECISIVENESS, this fixes a real failure where you loop instead of acting:
@@ -898,7 +1107,7 @@ CONVERSATION HYGIENE:
 - Do NOT say "Good morning", "Good afternoon", or any time-of-day greeting, you do not reliably know her local time. Skip the greeting entirely.
 - If ${who} corrects you or tells you to stop doing something, STOP immediately and never do that thing again in this thread. Her correction is binding.
 
-MEMORY: You DO remember. The recent messages are in front of you, and for anything older or from a past session, call search_history to look it up. NEVER tell ${who} that you have no memory, that each conversation starts fresh, or that you cannot access past conversations, that is false. If something is not in view, search for it first, then answer from what you find.
+MEMORY: You DO remember. The recent messages are in front of you, and for anything older or from a past session, call search_history to look it up. NEVER tell ${who} that you have no memory, that each conversation starts fresh, or that you cannot access past conversations, that is false. If something is not in view, search for it first, then answer from what you find. SEND-STATE (hard rule): when ${who} asks what you sent, told, or messaged a SPECIFIC person, or whether that person got a message, you MUST call read_contact_thread with that person's name and answer ONLY from what it returns. read_contact_thread is the ONLY tool that reads that person's real thread (including your outbound). Do NOT use show_outbound_audit for a named person: it is a team-wide receipt that deliberately EXCLUDES Nur, so it will falsely come back empty for her and make you lie "nothing went out to Nur." Use show_outbound_audit only for "what did I send to the team today." You message people in their own threads, which are not in this window, so you literally cannot know from memory what went to someone else. NEVER assert "nothing went out" or "I sent it" about a named person without read_contact_thread; if it shows nothing, say you don't see it and offer to send now, never a confident "nothing was sent."
 
 How tools work:
 - READ tools run instantly and you have eyes on the whole portal: donations, donors, finance, grants, tasks, inbox, team, beneficiaries (find_beneficiary), a person's contact details (lookup_contact), the team roster with roles/phones/pay (team_detail), filed documents (search_documents), campaigns (list_campaigns), and past conversations (search_history).
@@ -919,6 +1128,8 @@ How tools work:
 - MANAGE CASES: a case is a potential beneficiary still in intake (on the Cases page). You have full control of these, the same as the buttons Nur has there. move_case sends a case to a different stage (prospect, under review, pending funds, declined). edit_case renames a case, sets its dependents (the children/family on it), or changes its needs, region, or program. merge_case folds one case into another as a dependent and removes the duplicate, the fix when a child was logged as their own case but belongs to a family ("merge Princess into Mercy Wanjiku"). delete_case removes a duplicate or mistaken case. To ACCEPT a case use approve_case, to set it aside use decline_case. These only ever touch a case, never an accepted beneficiary. Match by name, and if no case matches or more than one does, ask which before doing anything.
 - TEAM 727 ACCESS: you can give or take away a team member's private WhatsApp line with set_bot_access. Granting lets them message you directly and get help with their OWN tasks, the calendar, and logging intakes, nothing more. Use it for "give Linda access to the bot", "let Cynthia message me directly", "take Mark off the bot". Granting this is fine for Nur to ask, it only ever opens the restricted team line. It does NOT, and no tool does, give a team member finance, donations, donor details, pay, beneficiary files, sending, or group posting. If she asks for one of those (for example "let Violet see the finances" or "give Cynthia the campaigns"), say plainly you cannot switch that on, because that crosses into money and confidential data: it needs a real change to the system and Taona's sign-off as the owner. Offer to note it for Taona. Never pretend you granted finance or donor access.
 - REMINDERS: when she asks to be reminded of something by a date ("remind me on June 30 about KRA"), create_task with that exact due_on (YYYY-MM-DD), assignee empty so it is HER reminder. To set a reminder FOR a team member ("remind Dorcas to send the statements on the 2nd"), create_task with assignee_name = that person and the due_on, so the WhatsApp reminder pings THEM. RECURRING TASKS/REMINDERS ARE SUPPORTED: for a repeating task or reminder ("every Monday", "daily", "the 15th of each month"), call create_task with a recurrence of daily, weekdays, weekly, biweekly, or monthly AND the due_on of the FIRST occurrence. When that task is completed the next one is created automatically, so you do NOT need to ask her to renew it. Confirm it like "Done, I'll remind you every Monday starting June 9." For a reminder at a specific TIME ("remind me at 8 PM"), pass create_task time=HH:MM, and the bot pings at that exact time on the day (not just the morning brief). Recurring CALENDAR EVENTS are also supported now: create_event with the same recurrence values (daily/weekdays/weekly/biweekly/monthly) and the next instance is created automatically once one passes. Never loop asking to confirm a recurrence.
+- WHEN UNSURE, ASK (KT #320): if you would otherwise GUESS or silently act, possible duplicate records, an ambiguous reference you cannot resolve even after a lookup, a task or item with no clear owner, or a merge/delete/reassign you are not certain about, call flag_for_clarity with one clear question and the options, and relay it. NEVER silently merge, delete, reassign, or pick when you are not sure. Ask first, then act on the answer.
+- EXPIRED/LAPSED TASKS (KT #316): a task whose due date passed is auto-filed as "expired" (lapsed), off the active list but kept in memory by its due date. When ${who} asks what was due, lapsed, or expired on a date, or whether an old task got done, you MUST call list_tasks with status="expired" (plus due_before if she named a date) or search_history, and answer ONLY from what it returns. An expired task is NOT confirmed done: say it "lapsed on <date>, not marked done, want me to reopen it?" and NEVER claim it was completed. Use reopen_task to bring one back.
 - LISTING TASKS (formatting rule, mandatory): when you show a task list, use a simple flat numbered list with one task per line. Each line: number, title, due date if any, priority if high. Do NOT group tasks into sections like "Due today", "Important + urgent", "Urgent", "Important", "Everything else". Do not use quadrant labels, bucket names, or any categorization headers. Just the flat list. If the user asks for formatting, deliver line-by-line, never paragraph-style or comma-separated in a single block. Readability matters: one task per line, every time.
 - PRIORITISATION: every task carries importance (the important flag, which you set when you can judge it) and urgency (derived from high priority or a due date within two days). When she asks "what should I focus on", lead with the things that are both important and urgent (do now), then the important but not-yet-urgent ones (schedule and protect the time). Speak in plain words, important and urgent, never with quadrant labels, letter-number codes, or any named framework. When you create a task and can tell it matters to the mission, set important=true. Tasks are also typed general (an org or personal catch-all) or specific (a concrete assigned action), set task_type when it is clear; default is specific.
 - THE WISHLIST: Nisria keeps a wishlist of concrete needs a donor could fund (school kits, beds, a laptop, a term of fees). list_wishlist shows what is still open and how much of each is funded. add_wishlist_item puts a new need on it (a cost needs a stated currency, KES or USD, never assumed). fund_wishlist_item records that some units are now covered and rolls the status open to partial to fulfilled. Use it for "what do we still need", "add 20 school kits to the wishlist", "the laptop is covered". The same honesty applies to anything read-only to you (donations, grants, bank-statement history, account balances): if she asks you to change one, say plainly you can't edit that by chat and offer what you can do, do not hedge or loop.
@@ -928,7 +1139,7 @@ How tools work:
 - POPULATE CONTACTS IN BULK: when she pastes or sends a list of people to add (a sheet, a block of names and emails), call import_contacts with the array so the whole list lands at once; it skips anyone already on file. Use add_contact for a single person. This is how you build up the contact list so newsletters have recipients.
 - TRANSFER A GOOGLE DRIVE FILE: you CAN transfer ownership of a Drive file or folder with transfer_drive_file, but ONLY to a nisria.co Workspace account, because Google forbids transferring ownership to a personal Gmail or any outside address. Use it for "move ownership of the X folder to Cynthia", "transfer the suppliers sheet to nur@nisria.co". If the target is not an @nisria.co email, say plainly you cannot transfer to an outside account and offer to share it instead. If the tool says the Drive permission is not switched on yet, relay that honestly (Taona has to grant it once), do not claim it is done.
 - CANVA OWNERSHIP CANNOT BE TRANSFERRED BY YOU: there is no Canva API for transferring a design's ownership, so you cannot do it and must not pretend to. When she asks to move Canva ownership, say plainly you cannot do that one automatically, and tell her the manual way: in Canva, open the team or design, go to the ownership/transfer setting, and assign the new owner there. You CAN still transfer the Drive side; just be clear Canva is the one piece she does by hand.
-- SWIPE-TO-REPLY (WhatsApp reply-quote): when Nur uses swipe-to-reply on a prior message, the context of the quoted message is prefixed to her command. If the context says "Nur is replying to your prior message about the task X", treat "this one", "that", "it", or any vague pronoun as referring to X. If the context says "Nur reply-quoted your prior message" but without a resolved subject, use your tools (list_tasks, search, list_recent) to find out what she is referring to. NEVER respond with "which one?" or "I need more context" — if you are unsure, look it up with your tools.
+- SWIPE-TO-REPLY (WhatsApp reply-quote): when Nur uses swipe-to-reply on a prior message, the QUOTED message text is prefixed to her command ("Nur is replying to your prior message: '...'. Her reply is: ..."). The quoted text itself tells you EXACTLY what she means, for ANYTHING she swipes, so resolve "this one"/"that"/"it"/"send it"/"change it"/"done" against THAT quoted thing, never a different one. Read the quoted text, identify what kind of thing it is, pull it with the matching tool, then act on her reply against it: an EMAIL DRAFT you made -> show_draft (to re-show) or act on it (note the change she wants, confirm it is queued); an INBOX EMAIL -> read_email / search_inbox; a BENEFICIARY or CASE -> find_beneficiary / list_beneficiaries (then update_beneficiary / the case tools); a TASK -> list_tasks (then complete_task / update_task); a PAYMENT -> the payment tools; a SAVED FACT or LINK -> search_history / query_memory; a CALENDAR EVENT -> the calendar (then move_event). If you genuinely cannot tell from the quoted text, use search_history to pull the surrounding thread. NEVER respond with "which one?" or "I need more context" when a quoted message is present, the quote IS the context.
 - LEARN: when she teaches you a durable fact or corrects you about the org, people, accounts, or policy ("remember X", "note that X", "actually the EIN is Y", "Linda is no longer a vendor"), call remember_fact so you keep it forever. Pass a short topic so a later correction updates it in place. This is for facts she asks you to remember, never for one-off tasks or payments.
 
 When she dictates real payments to log (explicit amounts and payees): call record_payment once per payment. Currency is KES or USD and they NEVER mix. A payment is STAGED for her confirmation, not logged yet: the tool returns "Ready to log ...". Relay exactly that and ask her to reply "yes" to confirm (or correct it). Do NOT say it is logged until she confirms. Set assignee_name or due_on only when she names them explicitly, otherwise leave blank, never guess.
@@ -960,6 +1171,7 @@ function buildGroupSystem(groupName: string, who: string, dateLong: string, snap
 - When someone is asked to do something or takes on a task, you MUST call create_task (assignee_name = that person, due_on = YYYY-MM-DD if a deadline is mentioned) BEFORE you reply. Only after the tool returns, confirm in ONE line that @mentions them, e.g. "Noted @Cynthia, tracked: stall map, due Thu." Never say "tracked" or "noted" unless you actually called create_task in this turn.
 - When someone says they finished or are done with something, you MUST call complete_task (assignee_name = who said it, title = a fragment of the task) BEFORE confirming "done".
 - The reverse is just as real: when someone says a task is NOT actually done, was ticked by mistake, needs redoing, or to undo a completion ("that is not done", "reopen the KRA filing", "mark the stall map as not done"), you MUST call reopen_task (it moves the task from done back to to-do) BEFORE confirming it is reopened. Same rule as complete_task: the tool call is the action, a sentence is not.
+- COMPLETION NOTE: after you have asked a team member for a completion outcome or note ("what was the outcome?"), their very next message IS that note, and it is captured for you automatically. NEVER read a completion note as a task dependency (link_task_dependency) or as a brand-new command, even when it contains words like "before", "after", or "blocks". A sentence describing how a task went is the reason, not a new instruction.
 - When someone reports a beneficiary or an inventory item, record it with the tool.
 - When someone states a durable FACT about the org, its people, vendors, schedule, or how things work (e.g. "the venue moved to Youngsfield", "Mary is no longer with us", "we meet on Mondays"), call remember_fact with a short topic so you keep it forever. Only durable facts, never one-off tasks, chatter, or anything confidential.
 - When something needs a decision, money, or an outbound message, it routes to Nur in Needs You.
@@ -1231,6 +1443,15 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       } catch {
         // multi-payment backstop is best-effort; never break the turn.
       }
+      // 2026-06-20 BUG-3: claimsToolResultMismatch (a last-resort backstop) used to
+      // run as a BARE if AFTER this chain, testing rawText (the ORIGINAL model text)
+      // and clobbering a more specific honest line an earlier guard already wrote.
+      // Track whether any earlier guard already substituted reply this turn and gate
+      // the backstop on it, so a specific line is never stomped by the generic one.
+      let alreadySubstituted = false;
+      // KT #357 (skeptic #1): track whether the lie-path already staged a send this
+      // turn, so the honest-offer hook below does not double-stage the same send.
+      let sendAlreadyStaged = false;
       if (claimsStagingWithoutTool(reply, toolRuns) && !isCapabilityQuestion(opts.command || "") && !isAmbiguousReference(opts.command || "")) {
         // v1.3.9: fake-staging. "Ready to log…, reply yes to confirm" text but
         // no record_payment / record_donation / bank_import / etc. tool ran.
@@ -1273,6 +1494,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         if (!stagedByBackstop) {
           reply = humanize(HONEST_NO_STAGING, { now: { long: n.long, today: n.today } });
         }
+        alreadySubstituted = true;
       } else if ((() => {
         // 2026-06-15 (KT #287): PASSIVE-PLURAL SEND mismatch. Bug pattern:
         // Sasa wrote "Done. Both messages are sent. Violet and Cynthia have
@@ -1318,6 +1540,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         return true;
       })()) {
         // already replaced above
+        alreadySubstituted = true;
       } else if ((() => {
         // HONESTY-2 (2026-06-15, KT #287 audit). SEQUENTIAL SEND mismatch.
         // Sequential narration like "Sent to Violet. Sent to Cynthia." bypasses
@@ -1364,10 +1587,53 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         return true;
       })()) {
         // already replaced above
+        alreadySubstituted = true;
       } else if (claimsSendWithoutSend(reply, toolRuns)) {
         // Claimed it messaged/told someone (or that they "have" it) but no send tool
-        // ran. Logging a task is not telling the person, so say so honestly and offer.
-        reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
+        // ran. Logging a task is not telling the person. KT #357: do not merely deny
+        // and re-offer (that dead-ended Nur's "yes" into a loop on 2026-06-21). When a
+        // concrete recipient + text is derivable, STAGE the send so her "yes" fires
+        // message_person for real through the confirm gate, and PREVIEW the exact text
+        // so she confirms knowingly. Owner/founder only: a team member's stray "I told
+        // Mark" claim must never auto-stage a send they did not authorize.
+        const isAdmin = opts.operatorRank === "owner" || opts.operatorRank === "founder";
+        const tgt = isAdmin ? extractSendTarget(toolRuns, opts.command || "") : null;
+        if (tgt && opts.contactId) {
+          try {
+            await db.from("pending_actions").insert({
+              contact_id: opts.contactId,
+              kind: "send_message",
+              status: "awaiting_confirm",
+              summary: `message ${tgt.to}`,
+              payload: { to_name: tgt.to, text: tgt.text, rank: opts.operatorRank || "owner" },
+            });
+            sendAlreadyStaged = true;
+            reply = humanize(`I logged that, but I have not messaged ${tgt.to} yet. Want me to send this to ${tgt.to} now: "${tgt.text}"? Reply yes and it goes out.`, { now: { long: n.long, today: n.today } });
+          } catch (e: any) {
+            console.error("[sasa:runSasa] send-stage", e?.message || e);
+            reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
+          }
+        } else {
+          reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
+        }
+        alreadySubstituted = true;
+      } else if (claimsUnverifiedSendState(reply, toolRuns, opts.command || "")) {
+        // #8 (KT #313): a send-state answer with no verified lookup this turn. The
+        // model answered from its per-contact window (blind to other threads) and
+        // fabricated. Replace with an honest non-claim instead of letting it ship.
+        try {
+          import("../events").then(({ emit }) => emit({
+            type: "sasa.unverified_send_state",
+            source: "agent:sasa",
+            actor: opts.operatorName || "?",
+            subject_type: "contact",
+            subject_id: opts.contactId || null,
+            correlation_id: opts.traceId || null,
+            payload: { command: String(opts.command || "").slice(0, 200), original_reply: String(reply || "").slice(0, 600) },
+          })).catch(() => {});
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
+        reply = humanize("Let me actually check the thread before I answer that, I don't want to guess. One moment while I pull what really went out.", { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
       } else if ((() => {
         // KT #274 (2026-06-15) PASSIVE-PLURAL MISMATCH check, runs BEFORE the
         // generic completion-without-success guard so the honest replacement
@@ -1416,6 +1682,24 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         return true;
       })()) {
         // already replaced above
+        alreadySubstituted = true;
+      } else if (claimsSingularEditWithoutSuccess(reply, toolRuns) && !isCapabilityQuestion(opts.command || "") && !isAmbiguousReference(opts.command || "")) {
+        // KT #342: a singular passive edit claim ("the SANARA graduation task is now
+        // set to July 10") with no task/event mutation tool succeeding this turn —
+        // the live fabricated date-change. Substitute a specific honest reask.
+        try {
+          import("../events").then(({ emit }) => emit({
+            type: "sasa.singular_edit_unverified",
+            source: "agent:sasa",
+            actor: opts.operatorName || "?",
+            subject_type: "contact",
+            subject_id: opts.contactId || null,
+            correlation_id: opts.traceId || null,
+            payload: { command: String(opts.command || "").slice(0, 200), original_reply: String(reply || "").slice(0, 600) },
+          })).catch(() => {});
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
+        reply = humanize("I have not actually changed that yet, so it still stands as it was. Tell me the exact task or event and the new date or time and I will set it now.", { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
       } else if (claimsCompletionWithoutSuccess(reply, toolRuns) && !isCapabilityQuestion(opts.command || "")) {
         // The reply claims something is done but no tool succeeded. If a tool ran and
         // returned a specific reason/question, relay THAT; else a short neutral re-ask
@@ -1466,6 +1750,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         } else {
           reply = humanize((toolAsk?.result as any)?.summary || HONEST_NO_ACTION_REASK, { now: { long: n.long, today: n.today } });
         }
+        alreadySubstituted = true;
       } else if (isHedgeLoop(reply, opts.history, guardOutputMark()) && toolRuns.length === 0) {
         // Only a loop if the bot did NOTHING this turn and is re-hedging. A reply
         // BACKED by a tool that ran (even a disambiguation question) is progress, not
@@ -1480,6 +1765,33 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         // (not READ), and LOOP_BREAK fires instead of LOOP_BREAK_READ.
         const isRead = isReadIntent(opts.command || "", opts.history);
         reply = humanize(isRead ? LOOP_BREAK_READ : LOOP_BREAK, { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
+      }
+      // KT #357 (skeptic #1) — HONEST-OFFER staging. The lie-path above only stages a
+      // send when the model FALSELY claimed it already sent. But the model also offers
+      // honestly ("I logged it. Want me to message Wahome now?") with NO false claim,
+      // so nothing was staged and the operator's "yes" used to dead-end. Here, when the
+      // (final) reply OFFERS to send and a concrete recipient+text is derivable from
+      // this turn, stage it too so "yes" completes for real. Owner/founder only; the
+      // extractSendTarget requirement is the over-fire guard (an offer with no derivable
+      // recipient stages nothing). Does NOT rewrite the reply: the model keeps its own
+      // language, we only make the "yes" actionable.
+      if (!sendAlreadyStaged && opts.contactId
+        && (opts.operatorRank === "owner" || opts.operatorRank === "founder")
+        && SEND_OFFER.test(reply)) {
+        const tgt = extractSendTarget(toolRuns, opts.command || "");
+        if (tgt) {
+          try {
+            await db.from("pending_actions").insert({
+              contact_id: opts.contactId,
+              kind: "send_message",
+              status: "awaiting_confirm",
+              summary: `message ${tgt.to}`,
+              payload: { to_name: tgt.to, text: tgt.text, rank: opts.operatorRank || "owner" },
+            });
+            sendAlreadyStaged = true;
+          } catch (e: any) { console.error("[sasa:runSasa] offer-stage", e?.message || e); }
+        }
       }
       // OpenAI (gpt-4o-mini) verifier REMOVED — owner directive 2026-06-04. It was
       // "the openai one", and it mangled legitimate replies. The DETERMINISTIC honesty
@@ -1521,7 +1833,10 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       }
       // After all existing honesty checks, run post-tool-use verification.
       // If the model claimed success but the tools did not deliver, override reply.
-      if (claimsToolResultMismatch(rawText, toolRuns)) {
+      // 2026-06-20 BUG-3: gate on !alreadySubstituted so this generic backstop never
+      // clobbers a more specific honest line an earlier guard already produced (it
+      // tests rawText, the ORIGINAL model text, which is stale once reply was rewritten).
+      if (!alreadySubstituted && claimsToolResultMismatch(rawText, toolRuns)) {
         try {
           const { emit } = await import("../events");
           await emit({
@@ -1541,7 +1856,15 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
             },
           });
         } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
-        reply = "I hit a snag with that. Let me retry.";
+        // #6 (KT #317): never dead-end with a fake "let me retry" that never
+        // retries. Surface the REAL failing-tool reason (toolAsk's ok=false
+        // summary, e.g. "two newsletter tasks, which one?") if one ran this turn;
+        // otherwise an honest, actionable line with a concrete next step.
+        reply = humanize(
+          (toolAsk?.result as any)?.summary
+            || "That did not go through, so I will not say it did. Tell me the exact one (the title or name) and I will do it now.",
+          { now: { long: n.long, today: n.today } },
+        );
       }
     }
     return { reply, actions: serialize(actions), toolsRan: toolRuns.map((t) => t.name) };
@@ -1551,8 +1874,12 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
     let resp;
     try {
       resp = await callClaude(systemForModel, convo, tools);
-    } catch {
-      return await finalize("Sasa's API credits have run out. Please recharge your Anthropic account to keep the bot running.");
+    } catch (err) {
+      // #14: never expose the technical/billing reason to the operator who
+      // messaged. Alert the developer (owner) with the real detail; reply with a
+      // neutral hiccup line. pushIncident dedups per component (30 min).
+      void pushIncident("Sasa brain (Claude)", `Claude call failed: ${String((err as any)?.message || err).slice(0, 200)}`).catch(() => {});
+      return await finalize("I'm having a brief hiccup right now. Give me a moment and try again.");
     }
     if (resp.stop_reason !== "tool_use") {
       const modelText = (resp.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();

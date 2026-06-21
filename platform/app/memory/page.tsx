@@ -3,6 +3,7 @@ import { Badge } from "../../components/ui";
 import { admin, date } from "../../lib/supabase-admin";
 import DispatchBox from "../../components/DispatchBox";
 import TabbedPane, { type TabbedTab } from "../../components/TabbedPane";
+import { OWNER_PRIVATE_KIND } from "../../lib/privacy";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,13 @@ export default async function Memory() {
   // doesn't surface in Nur's portal even on inspection. Production never sets
   // SASA_SANDBOX_MODE on the page-render process, so sandbox=false is correct.
   const [{ data: factRows }, { data: entRows }, { data: linkRows }, { data: runRows }] = await Promise.all([
-    db.from("agent_memory").select("id,kind,title,content,status,review_note,topic,created_at").eq("sandbox", false).order("created_at", { ascending: false }).limit(500),
+    // PRIVACY (KT #344, adversarial audit): the portal is a single shared session
+    // (one token for Nur AND Taona), so it cannot tier per-user. Owner-private notes
+    // ("between us" facts) must therefore NEVER render here — they reach the owner
+    // only via chat recall (lib/memory.ts ownerView gate). Excluding the kind at the
+    // query is the wall; without it, Nur could open /memory and read every private
+    // note, and the #343 affordance now actively drives her to this page.
+    db.from("agent_memory").select("id,kind,title,content,status,review_note,topic,created_at").eq("sandbox", false).neq("kind", OWNER_PRIVATE_KIND).order("created_at", { ascending: false }).limit(500),
     db.from("memory_entities").select("id,type,name,summary").eq("sandbox", false).order("name", { ascending: true }).limit(300),
     db.from("memory_entity_links").select("entity_id").limit(2000),
     db.from("memory_curation_runs").select("*").order("started_at", { ascending: false }).limit(1),

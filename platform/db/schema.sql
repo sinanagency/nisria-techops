@@ -671,6 +671,21 @@ CREATE TABLE public.jobs (
 CREATE INDEX jobs_status_kind_idx ON public.jobs USING btree (status, kind, created_at);
 CREATE INDEX jobs_subject_idx ON public.jobs USING btree (subject_id);
 
+-- ===== table: wa_turn_claim (durable per-sender WhatsApp turn coalescing) =====
+-- Migration 20260620_wa_turn_claim.sql. The first whatsapp.reply job for a
+-- contact wins this claim (PK on contact_id => concurrent insert is 23505); the
+-- winner coalesces the burst and replies once, losers no-op. expires_at is a
+-- self-healing TTL so a crashed winner never wedges a sender into silence.
+CREATE TABLE public.wa_turn_claim (
+  "contact_id" uuid NOT NULL,
+  "claimed_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "expires_at" timestamp with time zone NOT NULL,
+  "claimed_by" text,
+  "trace_id" text,
+  CONSTRAINT "wa_turn_claim_pkey" PRIMARY KEY (contact_id)
+);
+CREATE INDEX wa_turn_claim_expires_idx ON public.wa_turn_claim USING btree (expires_at);
+
 -- ===== table: messages =====
 CREATE TABLE public.messages (
   "id" uuid DEFAULT gen_random_uuid() NOT NULL,
@@ -823,7 +838,7 @@ CREATE TABLE public.tasks (
   CONSTRAINT "tasks_brand_id_fkey" FOREIGN KEY (brand_id) REFERENCES brands(id),
   CONSTRAINT "tasks_priority_check" CHECK ((priority = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text]))),
   CONSTRAINT "tasks_source_check" CHECK ((source = ANY (ARRAY['manual'::text, 'ai'::text]))),
-  CONSTRAINT "tasks_status_check" CHECK ((status = ANY (ARRAY['todo'::text, 'in_progress'::text, 'done'::text, 'blocked'::text])))
+  CONSTRAINT "tasks_status_check" CHECK ((status = ANY (ARRAY['todo'::text, 'in_progress'::text, 'in_review'::text, 'done'::text, 'blocked'::text, 'abandoned'::text, 'expired'::text])))
 );
 CREATE INDEX idx_tasks_assignee ON public.tasks USING btree (assignee_id);
 CREATE INDEX idx_tasks_status ON public.tasks USING btree (status);

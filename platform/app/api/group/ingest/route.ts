@@ -13,7 +13,7 @@ import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
 import { runSasa } from "../../../../lib/agents/sasa";
 import { autoCapture } from "../../../../lib/memory-extract";
-import { operatorOf, sendText } from "../../../../lib/whatsapp";
+import { operatorOf, sendText, toE164 } from "../../../../lib/whatsapp";
 import { transcribeAudio } from "../../../../lib/transcribe";
 
 export const dynamic = "force-dynamic";
@@ -80,12 +80,17 @@ function substantive(text: string, parseTasksFired: boolean = false): boolean {
 }
 
 async function resolveContact(db: any, phone: string, name: string | null) {
-  const { data: found } = await db.from("contacts").select("id,name").eq("phone", phone).eq("channel", "whatsapp").limit(1);
-  if (found?.[0]?.id) {
-    if (name && !found[0].name) await db.from("contacts").update({ name }).eq("id", found[0].id);
-    return found[0].id;
+  // Match by normalized digits (so +254../254../00254.. resolve to one record),
+  // store as +E.164. KT #314.
+  const digits = String(phone || "").replace(/\D/g, "").replace(/^00/, "");
+  if (!digits) return null;
+  const { data: found } = await db.from("contacts").select("id,name,phone").eq("channel", "whatsapp").ilike("phone", `%${digits}%`).limit(5);
+  const hit = (found || []).find((c: any) => String(c.phone || "").replace(/\D/g, "").replace(/^00/, "") === digits);
+  if (hit) {
+    if (name && !hit.name) await db.from("contacts").update({ name }).eq("id", hit.id);
+    return hit.id;
   }
-  const { data: ins } = await db.from("contacts").insert({ phone, name: name || null, channel: "whatsapp" }).select("id").single();
+  const { data: ins } = await db.from("contacts").insert({ phone: toE164(digits), name: name || null, channel: "whatsapp" }).select("id").single();
   return ins?.id || null;
 }
 

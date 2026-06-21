@@ -1,0 +1,17 @@
+{
+  "name": "maisha-inventory-sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated PGlite sandbox for the Sasa Maisha Inventory function. Nothing live. The schema.sql here IS the future Supabase migration; the tool modules mirror Sasa smart-tool signatures so connecting later is wiring, not a rewrite.",
+  "scripts": {
+    "test": "node --import tsx --test test/*.test.ts",
+    "demo": "node --import tsx src/run.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}

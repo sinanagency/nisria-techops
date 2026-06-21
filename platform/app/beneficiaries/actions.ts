@@ -477,3 +477,126 @@ export async function setStatus(fd: FormData) {
   revalidatePath("/beneficiaries");
   revalidatePath(`/beneficiaries/${id}`);
 }
+
+// ---- FULL BENEFICIARY MANAGEMENT (accepted records, intake_stage IS NULL) ----
+// KT #348: the portal had no way to EDIT, ARCHIVE, MERGE, or manually CREATE an
+// accepted beneficiary (only status + consent existed). Nur reported "can't edit
+// the existing ones on the portal." These mirror the case actions
+// (app/cases/actions.ts) but guard to `intake_stage IS NULL` so they ONLY ever
+// touch ACCEPTED beneficiaries, never a case (cases are managed on /cases). DELETE
+// is a SOFT delete (archive -> status='exited', fully restorable) because these are
+// vulnerable-people records that carry funding/photo/history (operator call 06-21).
+const B_PROGRAMS = ["safe_house", "education", "rescue", "nutrition", "other"];
+function newRefCode() { return `NB-${Date.now().toString(36).toUpperCase()}`; }
+
+// EDIT an accepted beneficiary's intake fields (no money totals; consent is its own toggle).
+export async function editBeneficiary(fd: FormData) {
+  const id = String(fd.get("id") || "");
+  if (!id) return;
+  const db = admin();
+  const { data: row } = await db.from("beneficiaries").select("id,ref_code,intake_stage").eq("id", id).is("intake_stage", null).single();
+  if (!row) return;
+  const patch: any = {};
+  const s = (k: string, max: number) => { const v = String(fd.get(k) || "").trim(); return v ? v.slice(0, max) : null; };
+  if (fd.has("full_name")) { const v = s("full_name", 200); if (v) patch.full_name = v; }
+  if (fd.has("region")) { const r = s("region", 120); patch.region = r; patch.location = r; }
+  if (fd.has("needs")) patch.needs = s("needs", 600);
+  if (fd.has("story_private")) patch.story_private = s("story_private", 4000);
+  if (fd.has("public_name")) patch.public_name = s("public_name", 120);
+  if (fd.has("public_story")) patch.public_story = s("public_story", 4000);
+  if (fd.has("guardian_status")) patch.guardian_status = s("guardian_status", 120);
+  if (fd.has("contact_phone")) patch.contact_phone = s("contact_phone", 40);
+  if (fd.has("national_id")) patch.national_id = s("national_id", 60);
+  if (fd.has("program")) { const p = String(fd.get("program") || "").trim(); if (B_PROGRAMS.includes(p)) patch.program = p; }
+  if (fd.has("gender")) { const g = String(fd.get("gender") || "").trim().toLowerCase(); patch.gender = ["male", "female", "other"].includes(g) ? g : null; }
+  if (fd.has("date_of_birth")) { const d = String(fd.get("date_of_birth") || "").trim(); patch.date_of_birth = /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null; }
+  if (fd.has("age_at_intake")) { const a = parseInt(String(fd.get("age_at_intake") || ""), 10); patch.age_at_intake = a > 0 && a < 120 ? a : null; }
+  if (fd.has("tags")) { const t = String(fd.get("tags") || "").split(/\s*,\s*/).map((x) => x.trim()).filter(Boolean).slice(0, 20); patch.tags = t.length ? t : null; }
+  if (fd.has("goal_amount")) { const g = Number(fd.get("goal_amount")); patch.goal_amount = isFinite(g) && g >= 0 ? g : null; }
+  if (!Object.keys(patch).length) return;
+  await db.from("beneficiaries").update(patch).eq("id", id);
+  await emit({ type: "beneficiary.edited", source: "beneficiaries", actor: "Nur", subject_type: "beneficiary", subject_id: id, payload: { ref: row.ref_code, fields: Object.keys(patch) } });
+  revalidatePath("/beneficiaries"); revalidatePath(`/beneficiaries/${id}`);
+}
+
+// ARCHIVE (soft delete) an accepted beneficiary. Recoverable: status -> 'exited',
+// drops off the active roster, ALL funding/photo/history kept. restoreBeneficiary undoes it.
+export async function archiveBeneficiary(fd: FormData) {
+  const id = String(fd.get("id") || "");
+  if (!id) return;
+  const db = admin();
+  const { data: row } = await db.from("beneficiaries").select("id,ref_code,full_name,intake_stage,status").eq("id", id).is("intake_stage", null).single();
+  if (!row) return;
+  await db.from("beneficiaries").update({ status: "exited" }).eq("id", id);
+  await emit({ type: "beneficiary.archived", source: "beneficiaries", actor: "Nur", subject_type: "beneficiary", subject_id: id, payload: { ref: row.ref_code, name: row.full_name, prev_status: row.status } });
+  revalidatePath("/beneficiaries"); revalidatePath(`/beneficiaries/${id}`);
+}
+
+// RESTORE an archived beneficiary back to active.
+export async function restoreBeneficiary(fd: FormData) {
+  const id = String(fd.get("id") || "");
+  if (!id) return;
+  const db = admin();
+  const { data: row } = await db.from("beneficiaries").select("id,ref_code,intake_stage").eq("id", id).is("intake_stage", null).single();
+  if (!row) return;
+  await db.from("beneficiaries").update({ status: "active" }).eq("id", id);
+  await emit({ type: "beneficiary.restored", source: "beneficiaries", actor: "Nur", subject_type: "beneficiary", subject_id: id, payload: { ref: row.ref_code } });
+  revalidatePath("/beneficiaries"); revalidatePath(`/beneficiaries/${id}`);
+}
+
+// MERGE a duplicate accepted beneficiary INTO another (the survivor). Folds funding,
+// photo, story/needs, tags, and any attributed donations into the survivor, then
+// ARCHIVES the duplicate (soft, recoverable) with a merge note. Never hard-deletes
+// a person's record.
+export async function mergeBeneficiary(fd: FormData) {
+  const id = String(fd.get("id") || "");      // the duplicate to fold in + archive
+  const into = String(fd.get("into") || "");  // the record to keep
+  if (!id || !into || id === into) return;
+  const db = admin();
+  const { data: dup } = await db.from("beneficiaries").select("*").eq("id", id).is("intake_stage", null).single();
+  const { data: keep } = await db.from("beneficiaries").select("*").eq("id", into).is("intake_stage", null).single();
+  if (!dup || !keep) return;
+  const patch: any = {};
+  const fundedSum = Number(keep.funded_amount || 0) + Number(dup.funded_amount || 0);
+  if (fundedSum !== Number(keep.funded_amount || 0)) patch.funded_amount = fundedSum;
+  const goalMax = Math.max(Number(keep.goal_amount || 0), Number(dup.goal_amount || 0));
+  if (goalMax !== Number(keep.goal_amount || 0)) patch.goal_amount = goalMax;
+  if (!keep.photo_asset_id && dup.photo_asset_id) patch.photo_asset_id = dup.photo_asset_id;
+  if (!keep.story_private && dup.story_private) patch.story_private = dup.story_private;
+  if (!keep.needs && dup.needs) patch.needs = dup.needs;
+  const tagSet = new Set([...(Array.isArray(keep.tags) ? keep.tags : []), ...(Array.isArray(dup.tags) ? dup.tags : [])].map(String));
+  if (tagSet.size) patch.tags = Array.from(tagSet).slice(0, 30);
+  if (Object.keys(patch).length) await db.from("beneficiaries").update(patch).eq("id", into);
+  // move any attributed donations to the survivor (best-effort; ignored if not linked)
+  await db.from("donations").update({ beneficiary_id: into }).eq("beneficiary_id", id).then(() => {}, () => {});
+  const note = `${String(dup.story_private || "").trim()}\n[merged into ${keep.full_name || keep.ref_code} on ${new Date().toISOString().slice(0, 10)}]`.trim().slice(0, 4000);
+  await db.from("beneficiaries").update({ status: "exited", story_private: note }).eq("id", id);
+  await emit({ type: "beneficiary.merged", source: "beneficiaries", actor: "Nur", subject_type: "beneficiary", subject_id: into, payload: { merged_ref: dup.ref_code, merged_name: dup.full_name, into_ref: keep.ref_code, into_name: keep.full_name } });
+  revalidatePath("/beneficiaries"); revalidatePath(`/beneficiaries/${into}`); revalidatePath(`/beneficiaries/${id}`);
+}
+
+// CREATE an accepted beneficiary manually from the portal (the RELIABLE add path,
+// independent of the bot/guard). Lands active + private (consent off), like add_beneficiary.
+export async function createBeneficiary(fd: FormData) {
+  const full_name = String(fd.get("full_name") || "").trim();
+  if (!full_name) return;
+  const db = admin();
+  const program = B_PROGRAMS.includes(String(fd.get("program") || "")) ? String(fd.get("program")) : "other";
+  const region = String(fd.get("region") || "").trim().slice(0, 120) || null;
+  const gender = ["male", "female", "other"].includes(String(fd.get("gender") || "").toLowerCase()) ? String(fd.get("gender")).toLowerCase() : null;
+  const dobRaw = String(fd.get("date_of_birth") || "").trim();
+  const ref_code = newRefCode();
+  const ins: any = {
+    ref_code, full_name: full_name.slice(0, 200), program, region, location: region,
+    needs: String(fd.get("needs") || "").trim().slice(0, 600) || null,
+    guardian_status: String(fd.get("guardian_status") || "").trim().slice(0, 120) || null,
+    contact_phone: String(fd.get("contact_phone") || "").trim().slice(0, 40) || null,
+    story_private: String(fd.get("story_private") || "").trim().slice(0, 4000) || null,
+    gender, date_of_birth: /^\d{4}-\d{2}-\d{2}$/.test(dobRaw) ? dobRaw : null,
+    status: "active", consent_public: false, intake_date: new Date().toISOString().slice(0, 10),
+  };
+  const { data: row, error } = await db.from("beneficiaries").insert(ins).select("id,ref_code").single();
+  if (error || !row) return;
+  await emit({ type: "beneficiary.intake", source: "beneficiaries", actor: "Nur", subject_type: "beneficiary", subject_id: row.id, payload: { ref: ref_code, program, via: "portal" } });
+  revalidatePath("/beneficiaries"); revalidatePath(`/beneficiaries/${row.id}`);
+}

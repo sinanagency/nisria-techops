@@ -141,6 +141,50 @@ function attachmentNames(payload: any): string[] {
   return out;
 }
 
+// Decode a Gmail base64url body part to UTF-8 text.
+function b64urlDecode(d: string): string {
+  try { return Buffer.from(String(d).replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"); }
+  catch { return ""; }
+}
+
+// Pull a readable body out of a Gmail `format=full` payload: prefer text/plain,
+// fall back to a stripped text/html. Walks multipart trees.
+function extractGmailBody(payload: any): string {
+  let plain = "", html = "";
+  const walk = (p: any) => {
+    if (!p) return;
+    const mt = String(p.mimeType || "");
+    if (mt === "text/plain" && p.body?.data) plain += b64urlDecode(p.body.data);
+    else if (mt === "text/html" && p.body?.data) html += b64urlDecode(p.body.data);
+    (p.parts || []).forEach(walk);
+  };
+  walk(payload);
+  if (plain.trim()) return plain.trim();
+  if (html.trim()) {
+    return html
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+      .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  return "";
+}
+
+// Read ONE email's FULL body (so the bot can read it to Nur, not just a snippet).
+// Returns null on error. `subject` selects the mailbox (defaults to sasa@).
+export async function readEmail(id: string, subject?: string): Promise<{ id: string; from: string | null; subject: string | null; date: string | null; body: string } | null> {
+  const tok = await gmailToken(subject);
+  const auth = { Authorization: `Bearer ${tok}` };
+  const mr = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`, { headers: auth, cache: "no-store" });
+  const mj = await mr.json();
+  if (mj.error) return null;
+  const headers = mj.payload?.headers || [];
+  return { id, from: header(headers, "From"), subject: header(headers, "Subject"), date: header(headers, "Date"), body: extractGmailBody(mj.payload) };
+}
+
 // Search the sasa@ inbox with a Gmail query string (e.g. 'from:imbank subject:statement
 // newer_than:30d'). Returns lightweight hits with from/subject/date/snippet/attachments.
 export async function searchInbox(query: string, max = 10): Promise<InboxHit[]> {
