@@ -384,6 +384,34 @@ const SEND_HAS = /\b(?:he|she|they)\s+(?:now\s+)?(?:has|have)\s+(?:it|them)\b|\b
 const HONEST_NO_SEND =
   "I logged that, but I have not actually messaged them. It is on their board and will show in their daily brief. Want me to message them directly now so they see it?";
 
+// KT #206542. The promise-without-subscription detector — the generalized #357
+// wall. The bot must NOT promise a future-contingent action that depends on another
+// party doing something ("the moment Malek texts in I'll message him", "I'll let you
+// know once Taona replies") unless a durable subscription was actually registered
+// this turn (a tool returned detail.subscribed or detail.queued, e.g. message_person
+// holding an off-window relay as a window_open pending_intent). Without a backing
+// subscription the promise is hollow: nothing fires when the event happens and the
+// next turn forgets. When unbacked, rewrite to an honest line that does not pretend.
+const HONEST_DEFERRED_NO_SUB =
+  "I can't reliably promise to do that on my own when they next come online, so I won't pretend I will. Tell me again at that point and I'll handle it right away, or I can put it on your board now so it isn't lost.";
+const DEFERRED_PROMISE_FWD = /\b(?:i['’]?\s?ll|i\s+will|i\s+can\s+have\s+it\s+ready)\b[^.?!\n]{0,70}\b(?:the\s+moment|as\s+soon\s+as|once|when|whenever)\b[^.?!\n]{0,45}\b(?:messages?|texts?|reach(?:es)?\s+out|gets?\s+back|repl(?:y|ies)|comes?\s+back|back\s+online|hears?\s+back|in\s+touch)\b/i;
+const DEFERRED_PROMISE_REV = /\b(?:the\s+moment|as\s+soon\s+as|once|whenever)\b[^.?!\n]{0,45}\b(?:messages?|texts?|reach(?:es)?\s+out|gets?\s+back|repl(?:y|ies)|comes?\s+back|back\s+online|hears?\s+back)\b[^.?!\n]{0,45}\b(?:i['’]?\s?ll|i\s+will|i\s+can)\b/i;
+function subscribedThisTurn(toolRuns: { name: string; result?: any }[]): boolean {
+  return Array.isArray(toolRuns) && toolRuns.some((t) => { const d = t?.result?.detail; return !!d && (d.subscribed === true || d.queued === true); });
+}
+// A real send/action happened this turn (delivered to someone). Used to exempt the
+// deferred-promise detector so a true "Sent to Mark" confirmation that also carries a
+// hollow follow-up clause is NOT clobbered wholesale (skeptic-caught false positive).
+function deliveredThisTurn(toolRuns: { name: string; result?: any }[]): boolean {
+  return Array.isArray(toolRuns) && toolRuns.some((t) => t?.result?.detail?.delivered === true);
+}
+function claimsDeferredWithoutSubscription(reply: string, toolRuns: { name: string; result?: any }[]): boolean {
+  if (subscribedThisTurn(toolRuns)) return false;  // a real subscription backs the promise
+  if (deliveredThisTurn(toolRuns)) return false;   // a real send happened; don't eat the confirmation
+  const r = String(reply || "");
+  return DEFERRED_PROMISE_FWD.test(r) || DEFERRED_PROMISE_REV.test(r);
+}
+
 // KT #357. When the honesty wall catches a "told them" claim with no real send, pull
 // the ACTUAL intended recipient + text from THIS turn's tool runs so the confirm gate
 // can complete the send for real (instead of the old dead-end where "yes" looped back
@@ -838,7 +866,7 @@ function guardOutputMark(): RegExp {
   // Each rewrite matched by its first 60 chars: long enough to be unique,
   // short enough to survive minor copy edits.
   const prefix = (s: string) => escape(s.slice(0, Math.min(60, s.length)));
-  const rewrites = [HONEST_NO_ACTION_REASK, HONEST_NO_SEND, LOOP_BREAK, LOOP_BREAK_READ, HONEST_NO_FIGURE, HONEST_NO_FIGURE_READ, HONEST_NO_STAGING, SUBSTITUTION_LOOP_BREAK];
+  const rewrites = [HONEST_NO_ACTION_REASK, HONEST_NO_SEND, HONEST_DEFERRED_NO_SUB, LOOP_BREAK, LOOP_BREAK_READ, HONEST_NO_FIGURE, HONEST_NO_FIGURE_READ, HONEST_NO_STAGING, SUBSTITUTION_LOOP_BREAK];
   GUARD_OUTPUT_MARK_CACHED = new RegExp("^(?:" + rewrites.map(prefix).join("|") + ")", "i");
   return GUARD_OUTPUT_MARK_CACHED;
 }
@@ -1633,6 +1661,25 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
           })).catch(() => {});
         } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
         reply = humanize("Let me actually check the thread before I answer that, I don't want to guess. One moment while I pull what really went out.", { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
+      } else if (claimsDeferredWithoutSubscription(reply, toolRuns)) {
+        // KT #206542: the reply promised a future-contingent action ("the moment they
+        // message in I'll...", "I'll let you know once they reply") but NO durable
+        // subscription was registered this turn (no tool returned detail.subscribed/
+        // queued). That promise is hollow, nothing would fire. Rewrite to honest, and
+        // emit so the gap (a surface that still needs a trigger type wired) is visible.
+        try {
+          import("../events").then(({ emit }) => emit({
+            type: "sasa.deferred_promise_unbacked",
+            source: "agent:sasa",
+            actor: opts.operatorName || "?",
+            subject_type: "contact",
+            subject_id: opts.contactId || null,
+            correlation_id: opts.traceId || null,
+            payload: { command: String(opts.command || "").slice(0, 200), original_reply: String(reply || "").slice(0, 600) },
+          })).catch(() => {});
+        } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
+        reply = humanize(HONEST_DEFERRED_NO_SUB, { now: { long: n.long, today: n.today } });
         alreadySubstituted = true;
       } else if ((() => {
         // KT #274 (2026-06-15) PASSIVE-PLURAL MISMATCH check, runs BEFORE the

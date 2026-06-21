@@ -59,7 +59,13 @@ export function withSandbox<T>(fn: () => T | Promise<T>): Promise<T> | T {
 // Keeping the prefix recognition in one place so the harness can change the
 // stamp without a worker-side edit hunt. wamid.TOURN_ is the current marker
 // (eval/integration/tournament-harness.mjs:48).
+// All harness prefixes in one place. tournament-harness=TOURN_, prod-harness=
+// HARNESS_, replay-nur=REPLAY_, extended-sweep=XSWP_, group-bot-harness=
+// GROUPHARNESS_. KT #206542: any of these must mark traffic as test so a held
+// deferred send registered during a test run is tagged origin='harness' (never
+// 'live') and can never fire at a real user.
+const HARNESS_PREFIXES = ["wamid.TOURN_", "wamid.HARNESS_", "wamid.REPLAY_", "wamid.XSWP_", "wamid.GROUPHARNESS_"];
 export function isHarnessMessageId(waMsgId: string | null | undefined): boolean {
   if (!waMsgId) return false;
-  return waMsgId.startsWith("wamid.TOURN_") || waMsgId.startsWith("wamid.HARNESS_");
+  return HARNESS_PREFIXES.some((p) => waMsgId.startsWith(p));
 }

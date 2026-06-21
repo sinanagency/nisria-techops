@@ -40,6 +40,7 @@ import { ownerContactIds, OWNER_PRIVATE_KIND } from "./privacy";
 import { draftThankYou } from "./agents/steward";
 import { enqueueJob, triggerWorker } from "./jobs";
 import { pushTaskAlert, pushOperatorUpdate, pushCalendarAlert } from "./notify";
+import { registerIntent } from "./pending-intents";
 import { getCalendar, holidayOn, type CalEvent } from "./calendar";
 import { searchInbox, readEmail } from "./gmail";
 import { createEvent as gcalCreate, patchEvent as gcalPatch, deleteEvent as gcalDelete, gcalConfigured } from "./gcal";
@@ -2127,7 +2128,28 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
           return { ok: true, summary: humanize(`${toName} is outside the 24-hour window, so I delivered it as an update notification instead. Sent.`, opts), detail: { delivered: true, to: toName, to_last4: number.slice(-4), via: "template" } };
         }
       }
-      const why = /re-?engag|24|window|outside/i.test(String(res?.error || "")) ? `${toName} has not messaged us in the last 24 hours, so WhatsApp will not let me reach them directly right now.` : `I could not deliver that to ${toName}.${res?.error ? ` (${res.error})` : ""}`;
+      const outsideWindow = /re-?engag|24|window|outside/i.test(String(res?.error || ""));
+      if (outsideWindow) {
+        // KT #206542: do NOT drop the relay. Register a durable window_open intent
+        // keyed on the recipient's number; the worker delivers it the moment they
+        // next message this line (which reopens the 24h window). Best-effort: if the
+        // subscription store is unavailable (table not yet migrated), fall through to
+        // the honest can't-reach line below, exactly today's behavior.
+        const sub = await registerIntent(db, {
+          triggerType: "window_open",
+          triggerKey: number,
+          actionType: "send_text",
+          payload: { body: text },
+          toName,
+          requesterWaId: ctx.senderPhone ? phoneKey(ctx.senderPhone) : null,
+          requesterContactId: ctx.contactId ?? null,
+          reason: "deferred relay (recipient outside 24h window)",
+        });
+        if (sub) {
+          return { ok: true, summary: humanize(`${toName} has not messaged this line in the last 24 hours, so WhatsApp won't let me reach them right now. I've held your message and will send it the moment they next message in.`, opts), detail: { delivered: false, queued: true, subscribed: true, to: toName, to_last4: number.slice(-4), deduped: sub.deduped } };
+        }
+      }
+      const why = outsideWindow ? `${toName} has not messaged us in the last 24 hours, so WhatsApp will not let me reach them directly right now.` : `I could not deliver that to ${toName}.${res?.error ? ` (${res.error})` : ""}`;
       return { ok: false, summary: humanize(why, opts), error: res?.error || "send failed", detail: { delivered: false } };
     }
     // SCHEMA-4 (2026-06-15 audit): payload.via canonicalized to "whatsapp" so

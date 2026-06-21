@@ -24,6 +24,7 @@ import { autoCapture } from "../../../../lib/memory-extract";
 import { withSandbox, isHarnessMessageId } from "../../../../lib/sandbox";
 import { pushIncident } from "../../../../lib/notify";
 import { commitPaymentRow, runSmartTool } from "../../../../lib/smart-tools";
+import { dispatchWindowOpenFor } from "../../../../lib/pending-intents";
 import { humanize } from "../../../../lib/humanize";
 import { readMedia, claudeJSON, HAIKU } from "../../../../lib/anthropic";
 import { transcribeAudio } from "../../../../lib/transcribe";
@@ -402,6 +403,20 @@ async function processJob(db: any, job: any): Promise<void> {
   }
 
   // ──────────────────────────────────────────────────────────────────────
+  // PENDING-INTENTS FLUSH (window_open) — KT #206542. This inbound just (re)opened
+  // `from`'s 24h WhatsApp window, so any relay we HELD for this person while they
+  // were unreachable can go out now. Runs after the coalescer (once per burst, on
+  // the winner) and does NOT return: the normal turn still runs after. `isLive`
+  // gates out harness + maintenance so a TEST message can never fire a held send at
+  // a real user (guardrail 5). Best-effort + fail-open inside the helper; dark until
+  // the pending_intents table exists (it no-ops if absent), so deploying this before
+  // the migration changes nothing.
+  try {
+    const isLive = !!(text || mediaId) && !isHarnessMessageId(waMsgId) && process.env.MAINTENANCE_MODE !== "1";
+    await dispatchWindowOpenFor(db, from, { isLive, senderContactId: contactId, traceId });
+  } catch { /* a flush fault must never block the turn */ }
+
+  // ──────────────────────────────────────────────────────────────────────
   // COMPLETE-TASK NOTE SLOT (2026-06-20, KT #324). When a team-tier member is
   // mid-completion (complete_task resolved exactly one task, then asked "what was
   // the outcome?"), it staged a pending_actions slot kind='complete_task_awaiting_note'
@@ -549,13 +564,26 @@ async function processJob(db: any, job: any): Promise<void> {
             if (!liveAdmin) {
               okItem = false; notes.push("Only Nur or Taona can send messages from this line, so I did not send it.");
             } else if (to && text) {
-              const r: any = await runSmartTool("message_person", { to, text }, { contactId, tier: "admin", rank: (opRank as any) || "owner", operatorName: "Nur", traceId: traceId || undefined });
+              // KT #206542: during a harness run, wrap the confirm-gate send so an
+              // off-window relay enqueued here is tagged origin='harness' (via
+              // isSandbox()), never 'live', so a test "yes" can never plant a row that
+              // later fires at a real user.
+              const _sendCall = () => runSmartTool("message_person", { to, text }, { contactId, tier: "admin", rank: (opRank as any) || "owner", operatorName: "Nur", traceId: traceId || undefined });
+              const r: any = isHarnessMessageId(waMsgId) ? await withSandbox(_sendCall) : await _sendCall();
               // KT #357 honesty (skeptic #2): a deduped result means NOTHING new went
               // out this turn, so it must NOT be reported as a fresh "Sent". Report it
               // honestly as already-sent (and commit so it does not linger).
               if (r?.ok === true && r?.detail?.deduped) { notes.push(`That was already sent to ${to}, so I did not send a duplicate.`); }
+              else if (r?.ok === true && r?.detail?.queued) {
+                // KT #206542: the recipient was outside their 24h window at confirm
+                // time, so message_person HELD the relay as a window_open intent. It is
+                // NOT sent yet, so it must NEVER be reported as "Sent". Report the honest
+                // held line; okItem stays true so the staged action commits (the durable
+                // intent now owns delivery, it fires when they next message in).
+                notes.push(r?.summary ? String(r.summary) : `${to} is outside the 24-hour window, so I've held your message and will send it the moment they next message in.`);
+              }
               else {
-                const reallySent = r?.ok === true && !r?.detail?.unresolved && !r?.detail?.ambiguous;
+                const reallySent = r?.ok === true && !r?.detail?.unresolved && !r?.detail?.ambiguous && !r?.detail?.queued;
                 if (reallySent) sent.push(to);
                 else { okItem = false; failed.push(`message to ${to}`); if (r?.summary) notes.push(String(r.summary)); }
               }
