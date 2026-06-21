@@ -1311,6 +1311,38 @@ async function processJob(db: any, job: any): Promise<void> {
     }
   }
 
+  // DRAFT RECALL (KT #353). The model IGNORED the show_draft tool and falsely claimed
+  // "I'm not finding a draft" when one was queued (live 2026-06-21 12:24), then again
+  // on her swipe-reply. A draft she asks to SEE must be shown deterministically, not
+  // left to the model's whim. Fire when she asks to show/share/read THE DRAFT (not
+  // "draft a new email"), or swipe-replies to a draft bubble with a bare reference.
+  // YIELD to edit/send intents (let the model handle those). Falls through to the
+  // brain only when there is genuinely no pending draft.
+  {
+    const sendEmailVerb = /\b(?:send it|send the email|send that|send this|fire it|email it|go ahead and send)\b/i.test(command || "");
+    const editVerb = /\b(?:change|edit|reword|rewrite|shorten|lengthen|add|remove|update|make it|fix|correct|adjust|tweak|rephrase|delete|cancel)\b/i.test(command || "");
+    const showDraftIntent = /\b(?:show|share|see|pull|read|view|open|send\s+me|resend|what(?:'?s| is| was)?|where(?:'?s| is)?)\b[\s\S]{0,40}\bdrafts?\b|\bthe\s+drafts?\b/i.test(command || "")
+      && !/\bdrafts?\s+(?:an?|me\s+an?|a\s+new|up\s+an?|out)\b/i.test(command || "");
+    const bareRef = /^\s*(?:this(?:\s+one)?|that(?:\s+one)?|it|the\s+draft|yes|yeah|show(?:\s+me)?(?:\s+it|\s+this|\s+that)?|see(?:\s+it|\s+this|\s+that)?|read(?:\s+it|\s+this|\s+that)?|share(?:\s+it|\s+this|\s+that)?|pull(?:\s+it|\s+this|\s+that)?(?:\s+up)?)\s*[.!?]*\s*$/i.test(command || "");
+    const swipedDraft = !!swipeAnchorNote && /\bdraft\b|\bsubject:/i.test(swipeAnchorNote);
+    if (contactId && !sendEmailVerb && !editVerb && (showDraftIntent || (swipedDraft && bareRef))) {
+      try {
+        const { data: dr } = await db.from("approvals").select("proposed,created_at").eq("kind", "email_reply").eq("status", "pending").order("created_at", { ascending: false }).limit(5);
+        const drafts = (dr || []) as any[];
+        if (drafts.length) {
+          const p = (drafts[0].proposed || {}) as any;
+          const to = p.to || p.from || null;
+          const more = drafts.length > 1 ? `\n\n(${drafts.length} drafts are waiting. This is the most recent. Name a recipient to see another.)` : "";
+          const msg = `Here's the draft${to ? ` to ${to}` : ""}:\n\n*Subject:* ${p.subject || "(no subject)"}\n\n${String(p.body || "").trim().slice(0, 3500)}\n\nIt's still in Needs You for your approval. Nothing has been sent until you say so.${more}`;
+          await sendTextAndLog(db, from, msg, { contactId, handledBy: "sasa", trace_id: traceId });
+          await emit({ type: "sasa.draft_shown", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { count: drafts.length, to } }).catch(() => {});
+          await markJobDone(job.id); return;
+        }
+        // no pending draft -> fall through to the brain (it answers honestly / can search)
+      } catch (e: any) { console.error("[worker:draft_recall]", e?.message || e); }
+    }
+  }
+
   let reply: string | undefined;
   try {
     // Inject the parseTasks context note (if any) so the model narrates the
