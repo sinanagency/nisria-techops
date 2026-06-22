@@ -35,6 +35,7 @@ import {
 import { isReadIntent } from "../intent.mjs";
 import { groupTokens } from "../group-tokens.mjs";
 import { recallMatch, claimCoveredBySend } from "../name-variant.mjs";
+import { proactiveSendsSince } from "../proactive-sends.mjs";
 // OpenAI verifier removed (owner directive 2026-06-04): no gpt-4o-mini in the reply path.
 // OpenAI fallback removed (owner directive 2026-06-18): never silently answer as gpt-4o.
 import { pushIncident } from "../notify";
@@ -757,10 +758,12 @@ async function answerSendStateFromLog(
     const dayKey = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: DEFAULT_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
     const todayKey = dayKey(new Date().toISOString());
     const since = new Date(Date.now() - 1000 * 60 * 60 * 30).toISOString();
-    // RE-KEY (Phase 1, self-recall-v1): read OUTBOUND from the `messages` table keyed on
-    // contact_id — the un-blind store read_contact_thread uses — NOT events.message_out
-    // grouped by to_name, which is null on 93% of sends and structurally blind to Nur and
-    // most replies. messages rows carry contact_id + direction='out'.
+    // COMPLETE source: read OUTBOUND from `messages` keyed on contact_id (every send writes a
+    // row), UNION events.whatsapp.message_out (proactive sends carry to_name). NOTE (KT #373,
+    // class C1, OPEN): this is COMPLETE but POLLUTED — a reply-to-operator also writes a
+    // direction='out' row, so the list can include people the bot only replied to. The CLEAN
+    // record (proactiveSendsSince) is incomplete (misses notify/file sends), so closing this
+    // sibling needs a canonical send-event emit at EVERY proactive seam first. Tracked.
     const { data: outs } = await db.from("messages").select("contact_id,created_at").eq("direction", "out").not("contact_id", "is", null).gte("created_at", since).limit(3000);
     const sentIds = new Set<string>();
     for (const m of (outs || []) as any[]) {
@@ -778,10 +781,6 @@ async function answerSendStateFromLog(
       const { data: cs } = await db.from("contacts").select("id,name").in("id", [...sentIds]);
       for (const c of (cs || []) as any[]) addName(String(c?.name || ""));
     }
-    // UNION the second store: proactive `message_person` sends write an event but NO
-    // messages row, so they are invisible above (this is why Cynthia vanished). Add today's
-    // events.whatsapp.message_out rows that carry a REAL to_name (the name the bot recorded
-    // at send time — the only reliable link given duplicate/mismatched contact phones).
     const { data: ev } = await db.from("events").select("created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since).limit(500);
     for (const e of (ev || []) as any[]) {
       if (dayKey(String(e?.created_at || "")) !== todayKey) continue;
@@ -824,18 +823,10 @@ async function answerSendStateFromLog(
 async function recentlySentTo(db: any, claimedNames: string[], command: string, claimText: string, mins: number): Promise<string | null> {
   try {
     const since = new Date(Date.now() - mins * 60 * 1000).toISOString();
-    // PROACTIVE sends ONLY (events), NEVER the messages table. A conversational REPLY to the
-    // operator writes a direction='out' messages row but is NOT a relay — using it to SUPPRESS
-    // an honesty guard let the bot launder a lie ("I messaged Mark" just because it replied to
-    // Mark) (skeptic 2026-06-22, KT #372 v2). whatsapp.message_out / sasa.relayed_colleague are
-    // emitted ONLY by message_person / relay at real send time, carrying to_name + the sent text.
-    const [mo, rc] = await Promise.all([
-      db.from("events").select("payload").eq("type", "whatsapp.message_out").gte("created_at", since).limit(200),
-      db.from("events").select("payload").eq("type", "sasa.relayed_colleague").gte("created_at", since).limit(200),
-    ]);
-    const sends = [...((mo?.data || []) as any[]), ...((rc?.data || []) as any[])]
-      .map((e) => ({ to: String(e?.payload?.to_name || ""), text: String(e?.payload?.text || ""), delivered: e?.payload?.delivered }))
-      .filter((s) => s.to && s.delivered !== false);
+    // THE CANONICAL PROACTIVE-SEND RECORD (KT #373) — one shared reader for every honesty
+    // decision, never the polluted messages table. Excludes replies, status-pings, and queued
+    // relays by construction. Replaces the inline two-event read (zero drift).
+    const sends = (await proactiveSendsSince(db, since)).map((s) => ({ to: s.to_name, text: s.text }));
     if (!sends.length) return null;
     const matchedName = recallMatch(sends.map((s) => s.to), claimedNames, command);
     if (!matchedName) return null;

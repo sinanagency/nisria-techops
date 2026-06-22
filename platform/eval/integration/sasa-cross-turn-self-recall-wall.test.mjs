@@ -78,15 +78,15 @@ T(wouldSuppress([], ["Malek"], "Send it to Malek", SIKKA_CLAIM), null,
 // ---- S6: the deployed branch is wired to the HARDENED source (seam) ----
 {
   if (!/import \{ recallMatch, claimCoveredBySend \} from "\.\.\/name-variant\.mjs";/.test(SASA))
-    fail("S6a sasa.ts must import recallMatch + claimCoveredBySend (shared, zero drift)");
+    fail("S6a sasa.ts must import the shared matchers (recallMatch, claimCoveredBySend)");
   else ok("S6a sasa.ts imports the shared matchers");
   const i = SASA.indexOf("async function recentlySentTo");
   const fn = i >= 0 ? SASA.slice(i, i + 2900) : "";
-  if (/from\("messages"\)/.test(fn)) fail("S6b recentlySentTo must NOT read the messages table (reply pollution) — events only");
+  if (/from\("messages"\)/.test(fn)) fail("S6b recentlySentTo must NOT read the messages table (reply pollution)");
   else ok("S6b recentlySentTo does not read the polluted messages table");
-  if (!/eq\("type", "whatsapp\.message_out"\)/.test(fn) || !/eq\("type", "sasa\.relayed_colleague"\)/.test(fn))
-    fail("S6c recentlySentTo must read PROACTIVE send events (message_out + relayed_colleague)");
-  else ok("S6c recentlySentTo reads proactive send events only");
+  if (!/const sends = \(await proactiveSendsSince\(db, since\)\)/.test(fn))
+    fail("S6c recentlySentTo must read the CANONICAL proactive-send record (KT #373 shared reader)");
+  else ok("S6c recentlySentTo reads the canonical proactive-send record");
   if (!/claimCoveredBySend\(claimText, send\.text, exclude\)/.test(fn)) fail("S6d recentlySentTo must apply the CONTAINMENT tie (name-excluded) before suppressing");
   else ok("S6d recentlySentTo applies the containment tie");
   const ci = SASA.indexOf("const alreadySent = await recentlySentTo(");
