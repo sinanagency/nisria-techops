@@ -127,10 +127,10 @@ const flat = (s) => s.replace(/\s+/g, " ");
   if (!/const GROUP_SHAPED_CLAIM = /.test(SASA)) fail("G6a GROUP_SHAPED_CLAIM regex must exist");
   else ok("G6a GROUP_SHAPED_CLAIM exists");
   const i = SASA.indexOf("function claimsSendWithoutSend");
-  const region = i >= 0 ? SASA.slice(i, i + 4200) : "";
+  const region = i >= 0 ? SASA.slice(i, i + 5200) : "";
   if (!/const sentGroupTokens = new Set/.test(region)) fail("G6b group tokens must be a SEPARATE set from sentRecipients");
   else ok("G6b group tokens kept separate from person recipients");
-  if (!/if \(groupShaped && sentGroupTokens\.has\(c\)\) continue;/.test(region)) fail("G6c a group token may only cover a group-shaped claim");
+  if (!/if \(cl\.groupShaped && sentGroupTokens\.has\(cl\.c\)\) continue;/.test(region)) fail("G6c a group token may only cover a group-shaped claim");
   else ok("G6c group token gated on a group-shaped claim");
 }
 

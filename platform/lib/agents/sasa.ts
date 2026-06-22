@@ -564,7 +564,8 @@ function claimsSendWithoutSend(reply: string, toolRuns: { name: string; result: 
   // claim whose sentence is GROUP-SHAPED ("posted to ... group / in the ..."), never a
   // person-send shape ("messaged/told/texted <Name>"). See match loop below.
   const sentGroupTokens = new Set<string>();
-  let personSendCount = 0;
+  const sentNames: string[] = []; // resolved person-send recipients (lowercased), one per delivered send
+  let namelessSends = 0;          // delivered person-sends whose recipient name we could not resolve
   for (const t of toolRuns) {
     if (!SEND_TOOLS.has(t.name)) continue;
     if ((t.result as any)?.ok !== true) continue;
@@ -582,51 +583,62 @@ function claimsSendWithoutSend(reply: string, toolRuns: { name: string; result: 
       continue;
     }
     const who = extractToolRecipient(t.result);
-    if (who) sentRecipients.add(who);
-    personSendCount++;
+    if (who) { sentRecipients.add(who); sentNames.push(who); } else namelessSends++;
   }
 
   const FUTURE_PER_SENTENCE = /\b(?:i will|i'?ll|let me|should i|shall i|do you want me|want me to|would you like me|can i|haven'?t|have not|not yet)\b/i;
   const sentences = String(reply || "").split(/[.!?]+\s+/).filter((s) => s.trim());
 
-  // The COUNT of real person-sends is the truth, not the name spelling. A claimed name
-  // with no EXACT match is still covered by an otherwise-unaccounted-for successful send
-  // this turn (2026-06-22 live: the contact resolved as "Malieng" but the model narrated
-  // "Malek" → a delivered send was falsely corrected into HONEST_NO_SEND, so Nur thought
-  // it failed and the bot re-sent 3×). This still catches a multi-send LIE ("Sent to
-  // Violet. Cynthia has it." with only Violet sent): Violet consumes the one send, Cynthia
-  // has no spare send left → flagged. `pool` is the count of sends not yet matched.
-  let pool = personSendCount;
+  // A claimed name with no EXACT match is covered ONLY by a real delivered send this turn
+  // to a SPELLING VARIANT of that name (2026-06-22 live: the contact resolved as "Malieng"
+  // but the model narrated "Messaged Malek" → a delivered send was falsely corrected into
+  // HONEST_NO_SEND, so Nur thought it failed and the bot re-sent 3×). It is NOT covered by
+  // a send to a genuinely DIFFERENT person (skeptic KT #369: "Messaged Grace" over a send
+  // to Malieng must STILL flag — that is a real lie, not a spelling variant). A variant =
+  // one name contains the other, or they share a ≥3-char prefix. Each real recipient
+  // covers at most one claim (consumed), so the multi-send lie ("Sent to Violet. Cynthia
+  // has it." with only Violet sent) still trips: Violet consumes the lone send, Cynthia has
+  // no recipient to match → flagged.
+  const remaining = [...sentNames];
+  let spare = namelessSends; // a send whose recipient could not be named — covers an UNNAMED claim only, never a named one
+  const sharedPrefix = (a: string, b: string) => { let n = 0; const m = Math.min(a.length, b.length); while (n < m && a[n] === b[n]) n++; return n; };
+  const isVariant = (r: string, c: string) => r === c || r.startsWith(c) || c.startsWith(r) || sharedPrefix(r, c) >= 3;
 
+  // Collect qualifying send claims (per sentence: named recipients + group-shaped flag,
+  // or an unnamed claim). Two passes so an EXACT recipient is never stolen by a variant.
+  const namedClaims: { c: string; groupShaped: boolean }[] = [];
+  let unnamedClaims = 0;
   for (const s of sentences) {
     if (!(SEND_CLAIM.test(s) || SEND_HAS.test(s))) continue;
     if (FUTURE_PER_SENTENCE.test(s)) continue;
-
     const claimed = extractClaimedRecipients(s);
-
-    if (claimed.length === 0) {
-      // No named recipient (e.g. "Message sent."): require at least one successful send
-      // (person OR group). Count-based, so a send whose detail.to was null still counts.
-      if (personSendCount === 0 && sentGroupTokens.size === 0) return true;
-      continue;
-    }
-
-    // Named recipients: every claimed recipient must have a matching successful send.
-    // A group token covers a claim ONLY when the sentence is group-shaped, so a
-    // person-name that happens to be a group token ("I messaged Mark", group "Mark
-    // Updates") is NOT laundered (skeptic hole B). person-send always falls to
-    // sentRecipients (the real detail.to), never the group set.
+    if (claimed.length === 0) { unnamedClaims++; continue; }
     const groupShaped = GROUP_SHAPED_CLAIM.test(s);
-    for (const c of claimed) {
-      if (sentRecipients.has(c)) { pool = Math.max(0, pool - 1); continue; }
-      if (groupShaped && sentGroupTokens.has(c)) continue;
-      // No exact name match, but a real send this turn is unaccounted for: the model
-      // narrated the same person under a different spelling (Malek/Malieng). Cover it
-      // by consuming one send from the pool. A genuine extra un-sent name finds an
-      // empty pool and is flagged (the multi-send lie still trips).
-      if (pool > 0) { pool -= 1; continue; }
-      return true;
-    }
+    for (const c of claimed) namedClaims.push({ c, groupShaped });
+  }
+
+  // PASS 1: exact recipient matches (each consumes one real send).
+  const unresolved: { c: string; groupShaped: boolean }[] = [];
+  for (const cl of namedClaims) {
+    const i = remaining.indexOf(cl.c);
+    if (i >= 0) { remaining.splice(i, 1); continue; }
+    unresolved.push(cl);
+  }
+  // PASS 2: a still-unmatched name needs a group-token (group-shaped) OR a spelling
+  // variant of a remaining real recipient. Otherwise it is a lie → flag.
+  for (const cl of unresolved) {
+    if (cl.groupShaped && sentGroupTokens.has(cl.c)) continue;
+    const vi = remaining.findIndex((r) => isVariant(r, cl.c));
+    if (vi >= 0) { remaining.splice(vi, 1); continue; }
+    return true;
+  }
+  // UNNAMED claims ("Message sent."): each needs SOME real send (named, nameless, or a
+  // group post), and consumes one so a later named claim cannot reuse it (skeptic F).
+  for (let k = 0; k < unnamedClaims; k++) {
+    if (remaining.length) { remaining.shift(); continue; }
+    if (spare > 0) { spare--; continue; }
+    if (sentGroupTokens.size > 0) continue; // a group post satisfies an unnamed "posted"
+    return true;
   }
   return false;
 }
