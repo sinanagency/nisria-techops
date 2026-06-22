@@ -47,5 +47,15 @@ const eq = (a, b, m) => (JSON.stringify(a) === JSON.stringify(b) ? ok(m) : fail(
   else ok("Z4 gcal mirror uses the operator zone, consistent with the stored operator-local time");
 }
 
+// ---- Z5: move_event ALSO converts (the gap the parallel session caught) ----
+{
+  const i = ST.indexOf('if (name === "move_event")');
+  const region = i >= 0 ? ST.slice(i, i + 2400) : "";
+  if (!/convertWallClock\(new_date, inputTime, String\(input\.source_timezone\), DEFAULT_TZ\)/.test(region)) fail("Z5a move_event must convert a new time stated in a source zone (not just create_event)");
+  if (!/if \(inputTime && String\(input\.source_timezone \|\| ""\)\.trim\(\)\)/.test(region)) fail("Z5b move_event must only convert the explicitly-provided new time (not the existing stored time)");
+  if (!/move_event"[\s\S]{0,1200}?source_timezone: \{ type: "string"/.test(ST)) fail("Z5c move_event schema must expose source_timezone");
+  else ok("Z5 move_event converts a stated source zone too (gap closed)");
+}
+
 if (process.exitCode) console.error("\nWALL RED.");
 else console.log("\nWALL GREEN.");
