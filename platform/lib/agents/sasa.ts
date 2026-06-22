@@ -412,6 +412,48 @@ function claimsDeferredWithoutSubscription(reply: string, toolRuns: { name: stri
   return DEFERRED_PROMISE_FWD.test(r) || DEFERRED_PROMISE_REV.test(r);
 }
 
+// The DELIVERED recipients (full names) of this turn's successful, ACTUALLY-delivered
+// sends. Only detail.delivered===true counts (a held/queued/template-failed send is
+// not a delivery), so we never claim "Sent" for something that did not land.
+function sentRecipientNames(toolRuns: { name: string; result?: any }[]): string[] {
+  const out: string[] = [];
+  for (const t of toolRuns || []) {
+    if (!SEND_TOOLS.has(t.name)) continue;
+    if ((t?.result as any)?.ok !== true) continue;
+    if ((t?.result as any)?.detail?.delivered !== true) continue;
+    const to = (t?.result as any)?.detail?.to;
+    if (to && !out.includes(String(to))) out.push(String(to));
+  }
+  return out;
+}
+// The MIRROR of claimsSendWithoutSend (Nur 2026-06-22, KT #206547 follow-up). The bot
+// SENT to Mark+Cynthia, then its reply said "I have not actually messaged them" — a
+// false DENIAL that the false-CLAIM guard cannot see (a denial isn't a SEND_CLAIM).
+// That blanket-denial line ALSO ends in an offer ("Want me to message them now?") which
+// staged the send that "yes" then double-fired. Catch a blanket denial (generic object:
+// them/him/her/it) when a real delivery happened this turn, and rewrite to the truth.
+const DENIES_SEND = /\b(?:have\s*n['’]?t|has\s*n['’]?t|have\s+not|has\s+not|not\s+yet|did\s*n['’]?t|did\s+not)\s+(?:actually\s+|yet\s+|really\s+|ever\s+)?(?:messaged?|sent|told|texted|notified|reached\s+out|pinged)\s+(?:them|him|her|it|that|anyone|anybody)\b/i;
+const SEND_NEG = /\b(?:have\s*n['’]?t|has\s*n['’]?t|have\s+not|has\s+not|not\s+yet|did\s*n['’]?t|did\s+not|won['’]?t|will\s+not|not)\b/i;
+function deniesSendThatHappened(reply: string, toolRuns: { name: string; result?: any }[]): boolean {
+  const r = String(reply || "");
+  if (!DENIES_SEND.test(r)) return false;
+  if (sentRecipientNames(toolRuns).length === 0) return false;
+  // Only a PURE false denial. If ANY CLAUSE affirmatively acknowledges a send (a
+  // SEND_CLAIM that is NOT itself negated), it is a mixed/honest reply about more than
+  // one person ("I messaged Mark, but haven't messaged her") — leave it untouched so the
+  // surgical rewrite can't clobber the truthful negative clause (skeptic must-fix). The
+  // denial line itself ("I have not messaged them") contains "messaged" but is negated,
+  // so it does NOT count as an affirmative acknowledgment.
+  const clauses = r.split(/(?<=[.!?])\s+|,\s+|\s+\b(?:but|and|however|though)\b\s+/i);
+  const hasAffirmative = clauses.some((s) => (SEND_CLAIM.test(s) || SEND_HAS.test(s)) && !DENIES_SEND.test(s) && !SEND_NEG.test(s));
+  return !hasAffirmative;
+}
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] || "them";
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 // KT #357. When the honesty wall catches a "told them" claim with no real send, pull
 // the ACTUAL intended recipient + text from THIS turn's tool runs so the confirm gate
 // can complete the send for real (instead of the old dead-end where "yes" looped back
@@ -1661,6 +1703,26 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       })()) {
         // already replaced above
         alreadySubstituted = true;
+      } else if (deniesSendThatHappened(reply, toolRuns)) {
+        // FALSE DENIAL (Nur 2026-06-22): a send DID land this turn but the reply denies
+        // it ("I have not actually messaged them") — the inverse of claimsSendWithoutSend.
+        // Rewrite to the truth and DROP the spurious offer, which is what staged the send
+        // that "yes" double-fired. No new send is staged here (sendAlreadyStaged stays as
+        // is); the real send already happened.
+        const sent = sentRecipientNames(toolRuns);
+        // SURGICAL (skeptic): keep every honest clause; drop ONLY the false-denial
+        // sentence and the spurious offer it trailed, and prepend the truth. So a reply
+        // that also says something true ("It is on their board") survives intact.
+        const kept = String(reply || "").split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s && !DENIES_SEND.test(s) && !SEND_OFFER.test(s));
+        reply = humanize(`Sent to ${joinNames(sent)}.${kept.length ? " " + kept.join(" ") : ""}`, { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
+        try {
+          import("../events").then(({ emit }) => emit({
+            type: "sasa.false_no_send_corrected", source: "agent:sasa", actor: opts.operatorName || "?",
+            subject_type: "contact", subject_id: opts.contactId || null, correlation_id: opts.traceId || null,
+            payload: { command: String(opts.command || "").slice(0, 200), sent: sent.slice(0, 6) },
+          })).catch(() => {});
+        } catch {}
       } else if (claimsSendWithoutSend(reply, toolRuns)) {
         // Claimed it messaged/told someone (or that they "have" it) but no send tool
         // ran. Logging a task is not telling the person. KT #357: do not merely deny
@@ -1887,6 +1949,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       // language, we only make the "yes" actionable.
       if (!sendAlreadyStaged && opts.contactId
         && (opts.operatorRank === "owner" || opts.operatorRank === "founder")
+        && !deliveredThisTurn(toolRuns)   // never stage a re-send when one ALREADY landed this turn (the 11:09 double-send)
         && SEND_OFFER.test(reply)) {
         const tgt = extractSendTarget(toolRuns, opts.command || "");
         if (tgt) {
