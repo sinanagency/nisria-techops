@@ -35,8 +35,8 @@ const eq = (a, b, m) => (JSON.stringify(a) === JSON.stringify(b) ? ok(m) : fail(
   if (!/async function answerSendStateFromLog\(/.test(SA)) fail("T2a the deterministic answerer must exist");
   if (!/const truthful = canAnswerSendState \? await answerSendStateFromLog\(db, opts, reply, n\) : null;/.test(SA)) fail("T2b the guard branch must CALL the deterministic lookup (tier-gated)");
   if (!/reply = truthful \|\| humanize\("Let me actually check/.test(SA)) fail("T2c truth is used; 'let me check' is only the fallback when unresolved");
-  if (!/from\("events"\)\.select\("created_at,payload"\)\.eq\("type", "whatsapp\.message_out"\)/.test(SA)) fail("T2d it must read the real outbound log (events.whatsapp.message_out)");
-  else ok("T2 the guard now pulls the real log and answers from it (no dead 'let me check' promise)");
+  if (!/for \(const s of await proactiveSendsSince\(db, since\)\)/.test(SA)) fail("T2d it must read the canonical proactive-send record (KT #373), never the polluted messages table");
+  else ok("T2 the guard pulls the canonical clean+complete record and answers from it (no reply pollution, no send-blindness)");
 }
 
 // ---- T4: tier-gate (no leak) + no over-share fallback (skeptic #5/#6) ----
@@ -45,7 +45,7 @@ const eq = (a, b, m) => (JSON.stringify(a) === JSON.stringify(b) ? ok(m) : fail(
   if (!/if \(asked\.length === 0\) return null;/.test(SA)) fail("T4b when the asked person is unresolved it must return null (honest 'let me check'), NOT dump the day's roster");
   if (/today I have messaged \$\{joinNames\(all\)\}/.test(SA)) fail("T4c the over-share 'today I have messaged <everyone>' branch must be removed");
   // tz-correct 'today' (skeptic #3): filtered to the Dubai calendar day, not now-18h
-  if (!/dayKey\(String\(e\?\.created_at \|\| ""\)\) !== todayKey\) continue;/.test(SA)) fail("T4d sends must be filtered to the operator's calendar today (tz-correct), not a rolling window");
+  if (!/dayKey\(String\(s\.ts \|\| ""\)\) !== todayKey\) continue;/.test(SA)) fail("T4d sends must be filtered to the operator's calendar today (tz-correct), not a rolling window");
   else ok("T4 tier-gated, no over-share fallback, tz-correct 'today'");
 }
 

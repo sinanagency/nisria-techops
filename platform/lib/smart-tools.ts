@@ -2056,7 +2056,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       ? await sendImage(number!, link, doc.title || undefined)
       : await sendDocument(number!, link, doc.title || "file");
     if (!res?.id) return { ok: false, summary: humanize(`I could not deliver "${doc.title}" to ${toName} (${res?.error || "send failed"}). They may need to message this line first (24h window).`, opts), error: res?.error || "send failed" };
-    await emit({ type: "whatsapp.file_sent", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: null, payload: { to_last4: number!.slice(-4), title: doc.title, mime } });
+    // KT #373: carry to_name so the canonical proactive-send record (proactiveSendsSince) can
+    // include this delivery by name — a file send IS a proactive person-send the honesty layer
+    // must know about ("did you send X the lease?"). Additive field, no behaviour change.
+    await emit({ type: "whatsapp.file_sent", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: null, payload: { to_name: toName, to_last4: number!.slice(-4), title: doc.title, mime } });
     return { ok: true, summary: humanize(`Sent "${doc.title}" to ${toName} on WhatsApp.`, opts), detail: { title: doc.title, to: toName } };
   }
 

@@ -8,6 +8,8 @@ import { evalSasa, evalSasaMulti, __testing } from "../../../lib/agents/sasa";
 import { intakeIsCase } from "../../../lib/intake-class.mjs";
 import { commandReferencesGroup } from "../../../lib/group-tokens.mjs";
 import { parseStateTransition, fuzzyMatchTasks } from "../whatsapp/worker/parseTaskOps.mjs";
+import { proactiveSendsSince } from "../../../lib/proactive-sends.mjs";
+import { admin } from "../../../lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -76,6 +78,18 @@ export async function POST(req: NextRequest) {
       return { id: c.id, isStateTransition: st !== null, status: st?.status ?? null, matches };
     });
     return NextResponse.json({ results: out });
+  }
+
+  // SENDRECORD mode: the CANONICAL proactive-send record (KT #373) read from REAL prod events
+  // over the last `mins` minutes. Proves the reader is clean (no replies) + complete (file/task
+  // sends included). Read-only. Returns counts by `via` + de-identified rows (name + via + ts).
+  if (body?.mode === "sendrecord") {
+    const mins = Math.min(Number(body?.mins) || 60, 1800);
+    const since = new Date(Date.now() - mins * 60 * 1000).toISOString();
+    const rows = await proactiveSendsSince(admin(), since);
+    const byVia: Record<string, number> = {};
+    for (const r of rows) byVia[r.via] = (byVia[r.via] || 0) + 1;
+    return NextResponse.json({ mins, total: rows.length, byVia, sample: rows.slice(0, 25).map((r) => ({ to_name: r.to_name, via: r.via, ts: r.ts })) });
   }
 
   const scenarios = Array.isArray(body?.scenarios) ? body.scenarios : null;

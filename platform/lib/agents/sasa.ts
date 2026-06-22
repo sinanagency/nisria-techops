@@ -758,18 +758,14 @@ async function answerSendStateFromLog(
     const dayKey = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: DEFAULT_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
     const todayKey = dayKey(new Date().toISOString());
     const since = new Date(Date.now() - 1000 * 60 * 60 * 30).toISOString();
-    // COMPLETE source: read OUTBOUND from `messages` keyed on contact_id (every send writes a
-    // row), UNION events.whatsapp.message_out (proactive sends carry to_name). NOTE (KT #373,
-    // class C1, OPEN): this is COMPLETE but POLLUTED — a reply-to-operator also writes a
-    // direction='out' row, so the list can include people the bot only replied to. The CLEAN
-    // record (proactiveSendsSince) is incomplete (misses notify/file sends), so closing this
-    // sibling needs a canonical send-event emit at EVERY proactive seam first. Tracked.
-    const { data: outs } = await db.from("messages").select("contact_id,created_at").eq("direction", "out").not("contact_id", "is", null).gte("created_at", since).limit(3000);
-    const sentIds = new Set<string>();
-    for (const m of (outs || []) as any[]) {
-      if (dayKey(String(m?.created_at || "")) !== todayKey) continue; // not today (Dubai calendar day)
-      sentIds.add(String(m.contact_id));
-    }
+    // CANONICAL PROACTIVE-SEND RECORD (KT #373, class C1). The ONE clean+complete source of real
+    // sends — never the polluted messages.direction='out' (which included the bot's own REPLIES,
+    // so "who did you message today" listed people it only replied to). Now COMPLETE: it includes
+    // message_person sends, team relays, FILE sends, and TASK alerts (all enriched with to_name),
+    // so "did you remind Cynthia" is answerable. A Blue skeptic proved an events-ONLY-but-partial
+    // version went send-blind; this version is clean AND complete for person-sends. Matching stays
+    // EXACT first-name (no variant) — unlike recentlySentTo there is no content-tie here, so a
+    // 3-prefix variant could false-affirm (Mark→Martha); the safe miss ships an honest "let me check".
     const byName = new Map<string, { name: string }>();
     const addName = (raw: string) => {
       const clean = String(raw || "").replace(/\s*\([^)]*\)\s*/g, "").trim();
@@ -777,14 +773,9 @@ async function answerSendStateFromLog(
       if (!/^[a-z]{2,}$/.test(key)) return; // skip numeric / empty names
       if (!byName.has(key)) byName.set(key, { name: clean });
     };
-    if (sentIds.size) {
-      const { data: cs } = await db.from("contacts").select("id,name").in("id", [...sentIds]);
-      for (const c of (cs || []) as any[]) addName(String(c?.name || ""));
-    }
-    const { data: ev } = await db.from("events").select("created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since).limit(500);
-    for (const e of (ev || []) as any[]) {
-      if (dayKey(String(e?.created_at || "")) !== todayKey) continue;
-      if (e?.payload?.to_name) addName(String(e.payload.to_name));
+    for (const s of await proactiveSendsSince(db, since)) {
+      if (dayKey(String(s.ts || "")) !== todayKey) continue; // today only (Dubai calendar day)
+      if (s.to_name) addName(String(s.to_name));
     }
     const cmd = String(opts.command || "").toLowerCase();
     // A LIST question ("who did you message today") — no specific subject. Owner/founder
