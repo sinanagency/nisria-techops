@@ -58,7 +58,7 @@ const KEY = () => process.env.ANTHROPIC_API_KEY || "";
 // so a team member can neither read a figure nor remove a financial item. This
 // gives the group bot the back-and-forth add/edit/delete calendar access asked
 // for, without breaching the money wall.
-const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "complete_task", "reopen_task", "add_beneficiary", "add_inventory_item", "team_detail", "lookup_contact", "list_campaigns", "remember_fact", "flag_to_nur",
+const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "complete_task", "reopen_task", "add_beneficiary", "add_inventory_item", "team_detail", "lookup_contact", "list_campaigns", "remember_fact", "flag_to_nur", "relay_to_colleague",
   "query_calendar", "check_conflicts", "create_event", "move_event", "delete_event"]);
 
 // Brain grounding that carries money. A team member never sees donor or
@@ -369,7 +369,7 @@ function claimsPluralCompletionMismatch(reply: string, toolRuns: { name: string;
 // in Needs You for your approval, nothing has sent yet." so the queue/send wall is
 // already a tenant policy. SEND_TOOLS now reflects only tools that deliver to a
 // human recipient on this turn.
-const SEND_TOOLS = new Set(["message_person", "post_to_group", "send_file_to_person", "transfer_drive_file"]);
+const SEND_TOOLS = new Set(["message_person", "post_to_group", "send_file_to_person", "transfer_drive_file", "relay_to_colleague"]);
 // HONESTY-1 (2026-06-15, KT #287 audit). Shared verb list so PASSIVE_SEND,
 // ELLIPTICAL_SEND, NAMED_PAIR_SEND, and the new claimsSequentialSendMismatch all
 // inherit the same family. Drift between these three regexes was the original
@@ -1263,7 +1263,8 @@ TONE WITH ${who}: warm, brief, respectful. Greet at most ONCE per thread, never 
 
 THE CALENDAR: you can see what is coming up (query_calendar) and add, move, or cancel team events like meetings, travel, and site visits (create_event, move_event, delete_event). Before you schedule anything that needs someone to travel or show up, check_conflicts on the date first, and if it is a Kenya public holiday (Eid, Madaraka Day, and so on) tell them the team is off that day. You can see THAT a payment or money day exists on the calendar, never the amount, and you cannot move or remove financial or grant items, those are Nur's.
 
-YOUR CAPABILITIES (NEVER DENY these): you CAN read PDFs, photos, screenshots, and voice notes; you CAN create / update / reassign / complete tasks (THEIR tasks, or one they assign to a colleague); you CAN look up a colleague's role and number; you CAN add a beneficiary intake or inventory item; you CAN check the calendar; you CAN flag something to Nur for her decision (flag_to_nur). If asked "what can you do?", give a plain warm summary, never the cold list.
+YOUR CAPABILITIES (NEVER DENY these): you CAN read PDFs, photos, screenshots, and voice notes; you CAN create / update / reassign / complete tasks (THEIR tasks, or one they assign to a colleague); you CAN look up a colleague's role and number; you CAN pass a message to another teammate (relay_to_colleague), delivered with "From ${who}:" so they know who it is from; you CAN add a beneficiary intake or inventory item; you CAN check the calendar; you CAN flag something to Nur for her decision (flag_to_nur). If asked "what can you do?", give a plain warm summary, never the cold list.
+TEAM-TO-TEAM (relay_to_colleague): when ${who} asks you to tell / message / update / ask a NAMED teammate something ("tell Mark the visit moved to Thursday", "let Grace know I dropped the forms"), use relay_to_colleague with that teammate and the exact message. It is ONLY for teammates on the roster. Anything that needs NUR'S decision goes to flag_to_nur, not relay. Never relay to a donor, beneficiary, or outside contact. Never claim you passed a message on unless the tool confirmed it.
 
 DOCUMENTS AND PHOTOS FROM ${who} (important): when ${who} sends you a document, report, intake form, or photos, it is SAVED ON FILE automatically, you do not need a tool for that. If it is something Nur should see (a case or beneficiary update, a reunification report, an intake, supporting photos), use flag_to_nur with a short summary of who sent it and what it is, so Nur gets it on WhatsApp and decides whether to flag it for follow-up or keep it on file. NEVER tell ${who} to forward the document to Nur themselves, and never claim you cannot pass it on: you save it and you flag it. Then thank them briefly.
 
@@ -2315,6 +2316,7 @@ function stubTool(name: string, input: any): { ok: boolean; summary: string } {
     case "set_bot_access": return { ok: true, summary: `${I.enabled ? "Granted" : "Revoked"} 727 access for ${I.name || "them"}.` };
     case "message_person": return { ok: true, summary: `Message sent to ${I.name || "them"}.` };
     case "post_to_group": return { ok: true, summary: `Queued to the ${I.group || "group"} group.`, detail: { job_id: "stub", group: I.group || "" } } as any;
+    case "relay_to_colleague": return { ok: true, summary: `Passed it to ${I.to || "them"}. I told them it's from you.`, detail: { delivered: true, to: I.to || "" } } as any;
     case "send_file_to_person": return { ok: true, summary: `Sent the file to ${I.to || "them"}.` };
     case "send_newsletter": return { ok: true, summary: `Drafted the newsletter and queued it in Needs You for approval. Nothing sent yet.` };
     case "import_contacts": return { ok: true, summary: `Added ${Array.isArray(I.contacts) ? I.contacts.length : 0} contacts.` };

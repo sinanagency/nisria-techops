@@ -409,6 +409,7 @@ export const SMART_TOOLS = [
   { name: "read_contact_thread", description: "Read the recent message history with a specific contact (what was last said to/from them). Use for 'what did we last say to John', 'show my thread with Mary'. Match by name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "flag_for_clarity", description: "Ask the operator a clarifying question WHEN YOU ARE UNSURE and would otherwise guess or silently act: possible duplicate records, an ambiguous reference you cannot resolve even after a lookup, a task/item with no clear owner, or a merge/delete/reassign you are not certain about. Pass one clear question and the candidate options. Use this INSTEAD of guessing, silently picking, merging, deleting, or reassigning. The operator's answer then tells you what to do.", input_schema: { type: "object", properties: { question: { type: "string", description: "the one clear question to ask the operator" }, options: { type: "array", items: { type: "string" }, description: "the candidate choices, e.g. the two duplicate task titles" }, about: { type: "string", description: "short tag, e.g. 'possible duplicate tasks' or 'missing owner'" } }, required: ["question"] } },
   { name: "flag_to_nur", description: "Surface something to Nur for a keep-or-flag decision, as a WhatsApp message she can reply to. Use this when a TEAM MEMBER sends you a document, report, intake, or photos that Nur should know about (a case update, a child-reunification report, a beneficiary intake, anything that belongs on her desk). The file is ALREADY saved on file, so you do NOT tell the team member to forward it to Nur themselves: you summarise what came in and flag it to Nur here. Pass a short, specific summary including who sent it and what it is. Nur then replies to decide whether to flag it for follow-up or keep it on file.", input_schema: { type: "object", properties: { summary: { type: "string", description: "short specific summary, e.g. 'Mark sent a child-reunification report for Jazbon (OB 29/05/06/2026) plus 2 photos, saved on file'" } }, required: ["summary"] } },
+  { name: "relay_to_colleague", description: "Pass a message from THIS team member to ANOTHER team member (colleague-to-colleague), delivered on WhatsApp with clear attribution ('From <sender>: ...'). Use when a team member asks you to tell, message, update, or pass something to a NAMED colleague on the team (e.g. 'tell Mark the visit is moved to Thursday', 'let Grace know I dropped the forms at the office', 'ask Violet to call me'). This is ONLY for teammates on the roster. It is NOT for Nur or the owner: anything that needs Nur's decision goes through flag_to_nur instead. It is NOT for outside contacts, donors, or beneficiaries. Pass the colleague's name (or number) and the exact message to relay.", input_schema: { type: "object", properties: { to: { type: "string", description: "the colleague's name as the team knows them (e.g. 'Mark', 'Grace'), or their full international number" }, message: { type: "string", description: "the exact message to relay to the colleague, in the sender's own words" } }, required: ["to", "message"] } },
   { name: "show_outbound_audit", description: "Show what YOU (Sasa) have actually sent to TEAM MEMBERS on WhatsApp in a recent window. This is the audit/receipt view, the ground truth of what really went out, independent of any earlier narration. Use whenever Nur asks 'what did you send today', 'who did you message', 'did you actually text X', 'show me what you sent', 'show your outbound', 'audit your sends', 'what messages went out from you today', 'did Cynthia get the message'. Returns a per-recipient summary with timestamps and the bodies of each message. Excludes messages back to Nur herself. Always also point her to /admin/transcripts for the full filterable view. Admin only.", input_schema: { type: "object", properties: { window_hours: { type: "number", description: "Lookback window in hours, default 24" }, contact: { type: "string", description: "Optional name filter (e.g. 'Mark', 'Violet'); omit for all recipients" } } } },
   { name: "search_inbox", description: "Search the sasa@nisria.co email INBOX (read-only) to check what actually arrived. Use for 'did the SANARA statements come into the sasa email', 'did we get the I&M statement', 'any email from <sender> about <thing>', 'check the inbox for invoices'. Returns sender, subject, date, snippet and attachment filenames. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "What to look for in plain words (e.g. 'SANARA bank statement', 'invoice from Java'). Optionally a sender name/email." }, max: { type: "number", description: "max results, default 10" } }, required: ["query"] } },
   { name: "show_draft", description: "Show the operator an email DRAFT you already made that is waiting in Needs You for her approval. Use whenever she asks to SEE a draft you composed: 'show me the draft', 'show me the draft you made', 'what was the draft', 'read me the draft again', 'pull up that email draft', OR when she swipe-replies to a draft message asking to see or check it. Returns the recipient, subject and FULL body of the pending draft(s). It is still unsent. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional: a recipient name or a few words to pick which draft if there are several" } } } },
@@ -2082,6 +2083,65 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     }
     await emit({ type: "document.filed", source: "agent:sasa", actor: ctx.operatorName || "Nur", subject_type: "asset", subject_id: null, payload: { folder, brand, count: filed.length, query } });
     return { ok: true, summary: humanize(filed.length === 1 ? `Filed ${filed[0]} under ${folder}.` : `Filed ${filed.length} documents under ${folder}: ${filed.join(", ")}.`, opts), affordance: { kind: "open", label: "Open library", href: "/library" }, detail: { filed: filed.length, folder, brand } };
+  }
+
+  // ---- ACTION · TEAM-TO-TEAM RELAY: relay_to_colleague ----
+  // (2026-06-22, Bug 4 / KT #368) A team member could reach Nur (flag_to_nur) but had
+  // NO way to pass a message to a COLLEAGUE (message_person is admin-only). This is the
+  // walled team equivalent: resolve a TEAMMATE only, attribute the sender ("From <name>:
+  // ..."), honor the 24h window with a held relay (KT #206542), dedup, verified send.
+  // Operators (Nur/owner) are REFUSED here and pointed at flag_to_nur, so a decision
+  // never masquerades as a peer ping; outside contacts/donors/beneficiaries are never
+  // reachable from a team tool (it only ever resolves against team_members).
+  if (name === "relay_to_colleague") {
+    const toRaw = String(input.to || "").trim();
+    const message = String(input.message || "").trim();
+    if (!toRaw || !message) return { ok: false, summary: humanize("Tell me which teammate and the message to pass on.", opts), error: "missing to/message" };
+    const senderName = (ctx.operatorName || "").trim() || "a teammate";
+    const senderKey = ctx.senderPhone ? phoneKey(ctx.senderPhone) : "";
+    // Resolve against the TEAM ROSTER ONLY (active members). Never the contacts book.
+    const likeT = `%${toRaw.replace(/[,()*%]/g, "")}%`;
+    const byNumber = phoneKey(toRaw).length >= 9 && !/^0/.test(toRaw.replace(/\D/g, ""));
+    const { data: teamRows } = await db.from("team_members").select("name,phone,status").not("phone", "is", null)
+      .or(byNumber ? `phone.ilike.%${phoneKey(toRaw).slice(-9)}%` : `name.ilike.${likeT}`).limit(8);
+    const active = ((teamRows || []) as any[]).filter((m) => (m.status === "active" || !m.status) && phoneKey(m.phone).length >= 9);
+    // collapse format-variant duplicates of one line
+    const uniq = distinctLines(active.map((m) => ({ name: m.name, phone: m.phone })), orgCCs());
+    if (uniq.length === 0) return { ok: false, summary: humanize(`I do not have a teammate called ${toRaw} on the roster, so I have not sent anything. Who do you mean, or give me their number?`, opts), detail: { unresolved: true } };
+    if (uniq.length > 1) return { ok: false, summary: humanize(`More than one teammate matches ${toRaw}: ${uniq.slice(0, 4).map((m) => m.name).join(", ")}. Which one?`, opts), detail: { ambiguous: true } };
+    const colleague = uniq[0];
+    const number = phoneKey(colleague.phone);
+    const toName = colleague.name || toRaw;
+    // REFUSE relaying to self or to an OPERATOR (Nur / owner): those route via flag_to_nur.
+    if (senderKey && number === senderKey) return { ok: false, summary: humanize("That is your own number, so there is nothing to relay. Tell me which teammate to pass it to.", opts), detail: { self: true } };
+    const { role: recipRole, rank: recipRank } = await operatorOf(db, number);
+    if (recipRole === "admin" || recipRank === "owner" || recipRank === "founder") {
+      return { ok: false, summary: humanize(`${toName} is an operator, not a peer I relay to. If this needs Nur's attention, I can flag it to her instead. Want me to do that?`, opts), detail: { operator: true, suggest: "flag_to_nur" } };
+    }
+    const body = `From ${senderName}: ${message}`;
+    // DEDUP: do not relay the same message to the same colleague twice within ~3 min.
+    try {
+      const since = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+      const { data: recent } = await db.from("events").select("id,payload").eq("type", "sasa.relayed_colleague").gte("created_at", since).limit(20);
+      const dupe = ((recent || []) as any[]).some((e) => e.payload?.to_last4 === number.slice(-4) && String(e.payload?.text || "").slice(0, 120) === message.slice(0, 120));
+      if (dupe) return { ok: true, summary: humanize(`I already passed that to ${toName} a moment ago, so I won't send it twice.`, opts), detail: { deduped: true, to: toName } };
+    } catch { /* best-effort dedup */ }
+    const res: any = await sendText(number, body);
+    if (!res?.id) {
+      // 24h window: hold the relay (KT #206542) and deliver when the colleague next
+      // messages in. Verified: only claim queued if the subscription actually landed.
+      const sub = await registerIntent(db, {
+        triggerType: "window_open", triggerKey: number, actionType: "send_text",
+        payload: { body }, toName,
+        requesterWaId: senderKey || null, requesterContactId: ctx.contactId ?? null,
+        reason: "team relay (colleague outside 24h window)",
+      });
+      await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: message.slice(0, 300), delivered: false, queued: !!sub } });
+      if (sub) return { ok: true, summary: humanize(`${toName} has not messaged this line in the last 24 hours, so WhatsApp won't let me reach them right now. I've held your message and will send it the moment they next message in.`, opts), detail: { delivered: false, queued: true, to: toName } };
+      return { ok: false, summary: humanize(`I could not reach ${toName} just now${res?.error ? ` (${res.error})` : ""}, so I have not passed it on.`, opts), error: res?.error || "send failed", detail: { delivered: false } };
+    }
+    await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: message.slice(0, 300), delivered: true } });
+    return { ok: true, summary: humanize(`Passed it to ${toName}: "${message.slice(0, 140)}". I told them it's from you.`, opts), detail: { delivered: true, to: toName, to_last4: number.slice(-4) } };
   }
 
   // ---- ACTION · DIRECT SEND: message_person ----
