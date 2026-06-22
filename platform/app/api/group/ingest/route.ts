@@ -160,9 +160,22 @@ export async function POST(req: NextRequest) {
   // is passed (match by the task's words, not by who reacted). Reuses the existing
   // tool, so this adds a signal with zero new tool surface. Always silent.
   if (reactionTargetId && reactionEmoji) {
+    // IDEMPOTENCY (KT #366 F3, 2026-06-22): the message-level dedup above keys on the
+    // reaction event's OWN id and writes no row for a reaction, so it does not cover
+    // reactions. WhatsApp re-delivers reaction events on reconnect/backfill, so without
+    // this a re-fired reaction re-runs complete_task on an ALREADY-CLOSED task ("the
+    // group bot doesnt have to hallucinate especially when it has already done"). Dedup
+    // on (target message, emoji) within a durable window before doing any work.
+    const rSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: seenR } = await db.from("events").select("id").eq("type", "group.reaction_processed")
+      .eq("payload->>target", reactionTargetId).eq("payload->>emoji", reactionEmoji).gte("created_at", rSince).limit(1);
+    if (seenR?.[0]) return NextResponse.json({ ok: true, reply: "", reaction: "deduped" });
     const { data: tgt } = await db.from("messages").select("body").eq("external_id", reactionTargetId).limit(1);
     const targetBody = tgt?.[0]?.body ? String(tgt[0].body) : "";
     if (!targetBody) return NextResponse.json({ ok: true, reply: "", reaction: "no_target" });
+    // Mark this reaction processed BEFORE running, so a re-delivery that races in cannot
+    // double-fire (the marker is the gate, not the side effect).
+    await emit({ type: "group.reaction_processed", source: "group-bot", actor: senderName || senderPhone, subject_type: "message", subject_id: null, correlation_id: traceId, payload: { target: reactionTargetId, emoji: reactionEmoji, group } }).catch(() => {});
     await runSasa({
       surface: "group",
       groupName: group,
