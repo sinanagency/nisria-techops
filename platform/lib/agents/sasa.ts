@@ -2203,9 +2203,20 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       const modelText = (resp.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
       // group reply gate: if the model chose silence, send nothing (tools still ran)
       if (inGroup && /^\s*NO_REPLY\s*$/i.test(modelText)) return { reply: "", actions: serialize(actions), toolsRan: toolRuns.map((t) => t.name) };
-      // Escalation sentinel: return it raw (skip humanize/verify) so the caller can
-      // route it to Nur on the 727 instead of posting it into the group.
-      if (inGroup && /^\s*FLAG_NUR:/i.test(modelText)) return { reply: modelText.trim(), actions: serialize(actions), toolsRan: toolRuns.map((t) => t.name) };
+      // Escalation sentinel: the reason goes to Nur on the 727 (not the group), and
+      // it fires EVEN in listen-only. Skeptic F1 (2026-06-22): this used to return the
+      // RAW model text, so a false completion/send claim inside the flag ("I recorded
+      // the case and notified the family") reached Nur ungated, bypassing the entire
+      // honesty chain. Fix: strip the sentinel, run the reason through finalize() (the
+      // same completion/send guards every other reply gets), then RE-PREFIX the sentinel
+      // so the caller's routing is unchanged. A false claim is now neutralized before it
+      // reaches Nur; a truthful flag passes through.
+      if (inGroup && /^\s*FLAG_NUR:/i.test(modelText)) {
+        const reason = modelText.replace(/^\s*FLAG_NUR:\s*/i, "").trim();
+        const checked = await finalize(reason);
+        const safeReason = (checked.reply || reason).trim();
+        return { reply: `${GROUP_FLAG}: ${safeReason}`, actions: checked.actions, toolsRan: checked.toolsRan };
+      }
       return await finalize(modelText || (inGroup ? "" : fallbackReply(actions)));
     }
     convo.push({ role: "assistant", content: resp.content });

@@ -24,10 +24,17 @@ export async function POST(req: NextRequest) {
   if (body?.mode === "guardcheck") {
     const checks = Array.isArray(body?.checks) ? body.checks : null;
     if (!checks) return NextResponse.json({ error: "checks[] required" }, { status: 400 });
-    const out = checks.map((c: any) => ({
-      id: c.id,
-      flagged: __testing.claimsSendWithoutSend(String(c.reply || ""), Array.isArray(c.toolRuns) ? c.toolRuns : []),
-    }));
+    // guard: "send" (default) = claimsSendWithoutSend, "completion" = claimsCompletionWithoutSuccess.
+    // Both are pure (no DB, no send) so they prove the DEPLOYED guard's verdict live.
+    const out = checks.map((c: any) => {
+      const reply = String(c.reply || "");
+      const toolRuns = Array.isArray(c.toolRuns) ? c.toolRuns : [];
+      const guard = c.guard === "completion" ? "completion" : "send";
+      const flagged = guard === "completion"
+        ? __testing.claimsCompletionWithoutSuccess(reply, toolRuns)
+        : __testing.claimsSendWithoutSend(reply, toolRuns);
+      return { id: c.id, guard, flagged };
+    });
     return NextResponse.json({ honest_no_send: __testing.HONEST_NO_SEND, results: out });
   }
 
