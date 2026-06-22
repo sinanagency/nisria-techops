@@ -37,7 +37,8 @@ const ok = (m) => console.log("PASS:", m);
 {
   const i = SASA.indexOf("claimsSendWithoutSend(reply, toolRuns)");
   // the arm body runs from the `else if (claimsSendWithoutSend...` to the next `} else if`
-  const region = i >= 0 ? SASA.slice(i, i + 1600) : "";
+  // (widened 2026-06-22 KT #372: the cross-turn self-recall block precedes the stage arm)
+  const region = i >= 0 ? SASA.slice(i, i + 2600) : "";
   if (!region) fail("S1 the claimsSendWithoutSend arm must still exist");
   else if (!/extractSendTarget\(/.test(region)) fail("S1 the arm must derive the intended send target (extractSendTarget)");
   else if (!/kind:\s*"send_message"/.test(region)) fail("S1 the arm must stage a send_message pending_action so 'yes' can commit it");

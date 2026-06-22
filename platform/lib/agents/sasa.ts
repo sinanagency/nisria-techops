@@ -34,6 +34,7 @@ import {
 // (eval/unit/intent.test.mjs) imports from the same source — no regex drift.
 import { isReadIntent } from "../intent.mjs";
 import { groupTokens } from "../group-tokens.mjs";
+import { recallMatch } from "../name-variant.mjs";
 // OpenAI verifier removed (owner directive 2026-06-04): no gpt-4o-mini in the reply path.
 // OpenAI fallback removed (owner directive 2026-06-18): never silently answer as gpt-4o.
 import { pushIncident } from "../notify";
@@ -810,6 +811,31 @@ async function answerSendStateFromLog(
   } catch {
     return null;
   }
+}
+
+// CROSS-TURN SELF-RECALL for the honesty guard (KT #372, 2026-06-22). claimsSendWithoutSend
+// only sees THIS turn's tools, but the send may have ACTUALLY happened in a PRIOR turn (the
+// deterministic SEND route, or an earlier brain turn in the same multi-step request). LIVE
+// 11:40pm: the bot sent to Malieng, then 6s later said "I have not actually messaged them"
+// and re-offered → it re-sent. Fix: before crying no-send, check the REAL outbound log
+// (messages.direction=out by contact ∪ events.whatsapp.message_out.to_name) within `mins`,
+// VARIANT-matched so a claim about "Malek" finds a send logged under "Malieng". Returns the
+// matched recipient name (the claim is TRUE → suppress the lie + the re-offer) or null.
+async function recentlySentTo(db: any, claimedNames: string[], command: string, mins: number): Promise<string | null> {
+  try {
+    const since = new Date(Date.now() - mins * 60 * 1000).toISOString();
+    const names: string[] = [];
+    const { data: outs } = await db.from("messages").select("contact_id").eq("direction", "out").not("contact_id", "is", null).gte("created_at", since).limit(500);
+    const ids = [...new Set(((outs || []) as any[]).map((m) => String(m.contact_id)).filter(Boolean))];
+    if (ids.length) {
+      const { data: cs } = await db.from("contacts").select("name").in("id", ids);
+      for (const c of (cs || []) as any[]) if (c?.name) names.push(String(c.name));
+    }
+    const { data: ev } = await db.from("events").select("payload").eq("type", "whatsapp.message_out").gte("created_at", since).limit(300);
+    for (const e of (ev || []) as any[]) if (e?.payload?.to_name) names.push(String(e.payload.to_name));
+    if (!names.length) return null;
+    return recallMatch(names, claimedNames, command);
+  } catch { return null; }
 }
 
 // PASSIVE-PLURAL SEND. Mirror of PASSIVE_COMPLETION (KT #274) for the SEND
@@ -1897,6 +1923,19 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
           })).catch(() => {});
         } catch {}
       } else if (claimsSendWithoutSend(reply, toolRuns)) {
+        // CROSS-TURN SELF-RECALL (KT #372): the send may have ACTUALLY happened in a PRIOR
+        // turn of this multi-step request (the deterministic SEND route, or an earlier brain
+        // turn). claimsSendWithoutSend only sees THIS turn's tools, so without the log it
+        // falsely cries "I have not messaged them" and re-offers → the bot re-sends (LIVE
+        // 11:40pm: sent to Malieng, then 6s later "haven't messaged them", then re-sent).
+        // Check the real outbound log first: if we DID message the claimed recipient
+        // recently, the claim is TRUE — keep the model's reply, never lie or re-offer.
+        const alreadySent = await recentlySentTo(db, extractClaimedRecipients(reply), opts.command || "", 30);
+        if (alreadySent) {
+          void import("../events").then(({ emit }) => emit({ type: "sasa.send_claim_confirmed_from_log", source: "agent:sasa", actor: opts.operatorName || "Nur", subject_type: "contact", subject_id: opts.contactId || null, payload: { recipient: alreadySent } })).catch(() => {});
+          // claim verified against the outbound log — no substitution, no re-offer.
+          alreadySubstituted = true;
+        } else {
         // Claimed it messaged/told someone (or that they "have" it) but no send tool
         // ran. Logging a task is not telling the person. KT #357: do not merely deny
         // and re-offer (that dead-ended Nur's "yes" into a loop on 2026-06-21). When a
@@ -1925,6 +1964,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
           reply = humanize(HONEST_NO_SEND, { now: { long: n.long, today: n.today } });
         }
         alreadySubstituted = true;
+        }
       } else if (claimsUnverifiedSendState(reply, toolRuns, opts.command || "")) {
         // #8 (KT #313): a send-state answer with no verified lookup this turn. The
         // model answered from its per-contact window (blind to other threads) and
@@ -2422,6 +2462,7 @@ function serialize(actions: ToolResult[]) {
 export const __testing = {
   claimsCompletionWithoutSuccess,
   claimsSendWithoutSend,
+  recentlySentTo,
   priorWasGuardReask,
   HONEST_NO_ACTION_REASK,
   SUBSTITUTION_LOOP_BREAK,
