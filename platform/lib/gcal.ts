@@ -22,6 +22,7 @@
 //   NISRIA_CAL_IMPERSONATE   default "sasa@nisria.co" (DWD subject user)
 //   NISRIA_HOLIDAYS_CAL_ID   default Google's Kenya holiday calendar
 import crypto from "crypto";
+import { DEFAULT_TZ } from "./now";
 
 const CAL_SCOPE = "https://www.googleapis.com/auth/calendar";
 export const PRIMARY_CAL = () => process.env.NISRIA_CALENDAR_ID || "sasa@nisria.co";
@@ -153,7 +154,10 @@ function toResource(ev: { title: string; starts_on: string; ends_on?: string | n
     return { summary: ev.title, location: ev.location || undefined, description: ev.notes || undefined,
       start: { date: ev.starts_on }, end: { date: d.toISOString().slice(0, 10) } };
   }
-  const tz = "Africa/Nairobi";
+  // The stored start_time is the operator's local wall-clock (create_event converts any
+  // stated source zone to DEFAULT_TZ deterministically), so Google must label it with the
+  // SAME zone, not a hardcoded Nairobi (the 2026-06-22 Nairobi/Dubai inconsistency).
+  const tz = DEFAULT_TZ;
   const startDT = `${ev.starts_on}T${(ev.start_time || "09:00")}:00`;
   const endDT = `${ev.ends_on || ev.starts_on}T${(ev.end_time || ev.start_time || "10:00")}:00`;
   return { summary: ev.title, location: ev.location || undefined, description: ev.notes || undefined,
