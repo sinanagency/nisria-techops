@@ -107,6 +107,35 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Lifecycle pings (KT #362, opt-in via dispatch lifecycle:true). These arrive
+    // BEFORE the terminal callback and carry no transcript and no error, so they
+    // MUST be handled before the error/empty branches below (otherwise a join ping
+    // would wrongly trip the empty-capture relay). The engine fires each at most
+    // once; the acked-guard above already short-circuits an already-captured one.
+    // This is the positive half of the fix: the user now hears the moment the bot
+    // is actually in the room, and is told to admit it if it is stuck at the door.
+    // Any lifecycle ping carries an `event` and never a transcript or error.
+    // Gate on event PRESENCE (not a two-string whitelist): handle the known ones,
+    // and for ANY other event value acknowledge + return WITHOUT falling through
+    // to the error/empty relay. A future/unknown lifecycle event must never be
+    // mistaken for a failed capture (which would mis-message Nur and, on the
+    // jensen side, poison the max-1-retry guard). KT #362, skeptic-hardened.
+    if (body?.event) {
+      if (body.event === "joined" || body.event === "waiting") {
+        const msg = body.event === "joined"
+          ? `Hi Nur, Digital Nur is in ${title} now. I will send you the summary and your action items here when the room closes.`
+          : `Hi Nur, Digital Nur is at the door for ${title} but it is sitting in the Zoom waiting room. Please admit "Digital Nur" so I can get in and take the notes.`;
+        if (to) await sendTextAndLog(db, to, msg.replace(/—/g, ", ").replace(/–/g, ", "), { handledBy: "sasa" });
+        // 'joined' advances the ledger to an allowed in-progress state so the portal
+        // reflects it (transcribing is in the status CHECK; in_call/waiting are not).
+        // 'waiting' has no allowed status value, so leave the row untouched.
+        if (body.event === "joined") {
+          await db.from("digital_u_meetings").upsert({ id: meetingId, title, source, status: "transcribing" }, { onConflict: "id" }).catch(() => {});
+        }
+      }
+      return NextResponse.json({ ok: true, mode: `lifecycle-${body.event}` });
+    }
+
     // Failure path: meeting-bot couldn't capture (waiting room, host kicked, etc).
     if (body?.error) {
       const reason = String(body.error).slice(0, 240);
