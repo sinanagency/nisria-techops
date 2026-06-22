@@ -38,14 +38,28 @@ export function contentTokens(s, exclude = []) {
       .filter((w) => w.length >= 4 && !CONTENT_STOP.has(w) && !ex.has(w)),
   );
 }
-// TOPIC overlap, excluding the recipient name(s) — the person's name appears in both the
-// claim and the send body, so it must NOT count as a topic match (else any claim about the
-// right person ties regardless of subject). Pass the claimed + matched names to exclude.
+// TOPIC overlap, excluding the recipient name(s). Kept for non-suppress callers.
 export function sharesDistinctiveToken(a, b, exclude = []) {
   const A = contentTokens(a, exclude); if (!A.size) return false;
   const B = contentTokens(b, exclude);
   for (const t of B) if (A.has(t)) return true;
   return false;
+}
+
+// DIRECTIONAL CONTAINMENT (2026-06-23, skeptic round 2). To SUPPRESS an honesty guard we
+// require the CLAIM's distinctive content to be (mostly) CONTAINED IN the ACTUAL SENT body —
+// not just "share one word". A genuine narration paraphrases what was sent, so its content
+// tokens are a near-subset of the send body. A FALSE "second update" ("the venue is the
+// warehouse") to the same person is NOT a subset of the real earlier body ("figures
+// finalized") → not suppressed. Excludes names (they're in both). 0 claim tokens → false
+// (can't verify → don't suppress; a loud redo beats a silent lie).
+export function claimCoveredBySend(claimText, sendText, exclude = [], threshold = 0.6) {
+  const C = contentTokens(claimText, exclude);
+  if (!C.size) return false;
+  const S = contentTokens(sendText, exclude);
+  let hit = 0;
+  for (const t of C) if (S.has(t)) hit++;
+  return hit / C.size >= threshold;
 }
 
 // Given the names actually messaged recently and the names the operator/model referenced

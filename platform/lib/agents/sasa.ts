@@ -34,7 +34,7 @@ import {
 // (eval/unit/intent.test.mjs) imports from the same source — no regex drift.
 import { isReadIntent } from "../intent.mjs";
 import { groupTokens } from "../group-tokens.mjs";
-import { recallMatch, sharesDistinctiveToken } from "../name-variant.mjs";
+import { recallMatch, claimCoveredBySend } from "../name-variant.mjs";
 // OpenAI verifier removed (owner directive 2026-06-04): no gpt-4o-mini in the reply path.
 // OpenAI fallback removed (owner directive 2026-06-18): never silently answer as gpt-4o.
 import { pushIncident } from "../notify";
@@ -844,9 +844,12 @@ async function recentlySentTo(db: any, claimedNames: string[], command: string, 
     // NEW false claim. If the claim has no distinctive content to tie, we DO NOT suppress (the
     // honest no-send path runs — a loud redo beats a silent lie).
     const send = sends.find((s) => s.to === matchedName);
-    // exclude the recipient name(s) from the topic comparison (the name is in both texts)
+    // CONTAINMENT TIE: the CLAIM (the model's own reply, NOT the operator's command — the
+    // command trivially echoes the topic) must be a >=60% subset of the ACTUAL sent body.
+    // Excludes the recipient name(s) (in both texts). This blocks "same person, different
+    // update narrated-but-not-sent" and prefix-name collisions (skeptic round 2, KT #372 v3).
     const exclude = [...claimedNames, ...matchedName.split(/\s+/)].map((x) => String(x).toLowerCase());
-    if (!send || !sharesDistinctiveToken(claimText, send.text, exclude)) return null;
+    if (!send || !claimCoveredBySend(claimText, send.text, exclude)) return null;
     return matchedName;
   } catch { return null; }
 }
@@ -1943,7 +1946,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         // 11:40pm: sent to Malieng, then 6s later "haven't messaged them", then re-sent).
         // Check the real outbound log first: if we DID message the claimed recipient
         // recently, the claim is TRUE — keep the model's reply, never lie or re-offer.
-        const alreadySent = await recentlySentTo(db, extractClaimedRecipients(reply), opts.command || "", `${reply} ${opts.command || ""}`, 8);
+        const alreadySent = await recentlySentTo(db, extractClaimedRecipients(reply), opts.command || "", reply, 8);
         if (alreadySent) {
           void import("../events").then(({ emit }) => emit({ type: "sasa.send_claim_confirmed_from_log", source: "agent:sasa", actor: opts.operatorName || "Nur", subject_type: "contact", subject_id: opts.contactId || null, payload: { recipient: alreadySent } })).catch(() => {});
           // claim verified against the outbound log — no substitution, no re-offer.
