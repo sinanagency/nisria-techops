@@ -10,7 +10,7 @@
 // anything needing a decision is routed to Nur. The web console caller passes no
 // role, so it keeps full-admin behavior unchanged.
 import { admin } from "../supabase-admin";
-import { now, clockBlock } from "../now";
+import { now, clockBlock, DEFAULT_TZ } from "../now";
 import { humanize, withHumanSystem } from "../humanize";
 import { recall, groundingText } from "../memory";
 import { knownGroups } from "../groups";
@@ -594,7 +594,7 @@ const VERIFY_TOOLS = new Set(["read_contact_thread", "show_outbound_audit", "sea
 // "she did not receive / she received", "no outbound to", and the affirmative
 // reach-out "reached out to" (a positive send-state assertion). Kept anchored so
 // it does not fire on unrelated done/figure text.
-const SEND_STATE_CLAIM = /\b(?:nothing went out|no outbound|no record of (?:sending|having sent|any (?:send|message|outbound)|that going out)|haven'?t sent|have ?n'?t sent|have not sent|did ?n'?t send|did not send|never sent|i sent|i'?ve sent|i have sent|reached out to|message sent|messages? (?:are|were|have been|went) (?:out\s+)?(?:to\b|sent)|(?:was|were) (?:anything|nothing|something|a message|the message|it) sent|has been (?:told|messaged|notified|sent|reminded)|been (?:told|notified|reminded)|(?:she|he|they) (?:did ?n'?t|did not|never|has ?n'?t|have ?n'?t) (?:receive|get|gotten)(?:\s+(?:it|anything|the|a|my|your))?|(?:she|he|they) (?:received|got|gotten) (?:it|the (?:message|text|note|report)|anything|nothing)(?:\s+from)?|(?:she|he|they) (?:received|got|gotten)[\w\s]{0,20}?\bfrom (?:me|you|us))\b/i;
+const SEND_STATE_CLAIM = /\b(?:nothing went out|no outbound|no record of (?:sending|having sent|any (?:send|message|outbound)|that going out)|haven'?t sent|have ?n'?t sent|have not sent|did ?n'?t send|did not send|never sent|(?:have ?n'?t|have not|has ?n'?t|has not|did ?n'?t|did not|never|not (?:actually|yet))\s+(?:actually\s+|yet\s+)?(?:messaged?|texted?|tell|told|notif(?:y|ied)|remind(?:ed)?|contact(?:ed)?|ping(?:ed)?)|i sent|i'?ve sent|i have sent|reached out to|message sent|messages? (?:are|were|have been|went) (?:out\s+)?(?:to\b|sent)|(?:was|were) (?:anything|nothing|something|a message|the message|it) sent|has been (?:told|messaged|notified|sent|reminded)|been (?:told|notified|reminded)|(?:she|he|they) (?:did ?n'?t|did not|never|has ?n'?t|have ?n'?t) (?:receive|get|gotten)(?:\s+(?:it|anything|the|a|my|your))?|(?:she|he|they) (?:received|got|gotten) (?:it|the (?:message|text|note|report)|anything|nothing)(?:\s+from)?|(?:she|he|they) (?:received|got|gotten)[\w\s]{0,20}?\bfrom (?:me|you|us))\b/i;
 // The user ASKING what was sent/told (a recall question). Scopes the guard to the
 // fabrication case, away from a legitimate just-now send confirmation.
 // 2026-06-20 paraphrase audit: added received/got/gotten recall, "get to <person>",
@@ -666,6 +666,60 @@ function claimsUnverifiedSendState(reply: string, toolRuns: { name: string; inpu
   }
   const verified = toolRuns.some((t) => VERIFY_TOOLS.has(t.name));
   return !verified;
+}
+
+// DETERMINISTIC send-state answer (KT #313 follow-up, Nur 2026-06-22). When the
+// operator asks "did you text X today?" the bot must answer from the REAL outbound log,
+// never from its per-contact memory window — which is blind to other threads and on
+// 2026-06-22 fabricated "I have not messaged them" while FOUR real sends to Mark and
+// Cynthia sat in the log. Reads the SAME source as read_contact_thread
+// (events.whatsapp.message_out) but at the finalize seam, so the answer is deterministic
+// (code-side) rather than model-discretion. Returns a truthful reply, or null if it
+// cannot tell who is being asked about (caller falls back to the honest "let me check").
+async function answerSendStateFromLog(
+  db: any,
+  opts: { command?: string; history?: { role: string; content: string }[] },
+  reply: string,
+  n: { long: string; today: string },
+): Promise<string | null> {
+  try {
+    // Query a generous 30h window, then keep only sends on the operator's CALENDAR
+    // today (Asia/Dubai), so "earlier today" is never a tz lie near midnight (skeptic).
+    const since = new Date(Date.now() - 1000 * 60 * 60 * 30).toISOString();
+    const { data: rows } = await db.from("events").select("created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since).order("created_at", { ascending: true }).limit(400);
+    const dayKey = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: DEFAULT_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+    const todayKey = dayKey(new Date().toISOString());
+    // today's REAL sends, grouped by recipient first-name key. Skip numeric to_name
+    // rows (some sends logged the raw number) and strip a "(the one ending …)" tag.
+    const byName = new Map<string, { name: string }>();
+    for (const e of (rows || []) as any[]) {
+      if (dayKey(String(e?.created_at || "")) !== todayKey) continue; // not today (Dubai)
+      const raw = String(e?.payload?.to_name || "").trim();
+      const clean = raw.replace(/\s*\([^)]*\)\s*/g, "").trim();
+      const key = clean.toLowerCase().split(/\s+/)[0];
+      if (!/^[a-z]{2,}$/.test(key)) continue; // not a real name (numeric recipient)
+      if (!byName.has(key)) byName.set(key, { name: clean });
+    }
+    // Resolve who is being asked about by intersecting the conversation (command +
+    // recent turns) with the REAL recipient keys — this resolves "them" AND ignores
+    // junk like the verb in "to message them" (proof caught that). Real names only.
+    const ctx = (String(opts.command || "") + " " + (opts.history || []).slice(-6).map((m) => String(m.content || "")).join(" ")).toLowerCase();
+    let asked: string[] = [];
+    for (const key of byName.keys()) if (new RegExp(`\\b${key}\\b`).test(ctx)) asked.push(key);
+    asked = [...new Set(asked)];
+    // Unresolved (a pronoun we cannot pin to a real recipient): return null so the
+    // caller ships the honest "let me check" — NEVER dump the day's full roster (the
+    // over-share the skeptic flagged), which would also leak to other-tier sends.
+    if (asked.length === 0) return null;
+    const sent: string[] = [], notSent: string[] = [];
+    for (const a of asked) { const hit = byName.get(a); if (hit) sent.push(hit.name); else notSent.push(a.charAt(0).toUpperCase() + a.slice(1)); }
+    let msg = "";
+    if (sent.length) msg += `Yes, I did message ${joinNames(sent)} earlier today.`;
+    if (notSent.length) msg += `${msg ? " " : ""}I have not messaged ${joinNames(notSent)} today.`;
+    return humanize(msg || "I have not sent anything to them today.", { now: { long: n.long, today: n.today } });
+  } catch {
+    return null;
+  }
 }
 
 // PASSIVE-PLURAL SEND. Mirror of PASSIVE_COMPLETION (KT #274) for the SEND
@@ -1767,7 +1821,15 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
             payload: { command: String(opts.command || "").slice(0, 200), original_reply: String(reply || "").slice(0, 600) },
           })).catch(() => {});
         } catch (e: any) { console.error("[sasa:runSasa]", e?.message || e); }
-        reply = humanize("Let me actually check the thread before I answer that, I don't want to guess. One moment while I pull what really went out.", { now: { long: n.long, today: n.today } });
+        // DETERMINISTIC truth (Nur 2026-06-22): the old behaviour promised "let me
+        // check… one moment" and then NEVER checked. Pull the real outbound log now and
+        // answer from it; only if we genuinely cannot resolve who is being asked about
+        // do we fall back to the honest "let me check". TIER-GATED (skeptic #6): only the
+        // owner/founder on a private line — NEVER a team caller or a group surface, which
+        // must not see the org's outbound roster.
+        const canAnswerSendState = !inGroup && (opts.operatorRank === "owner" || opts.operatorRank === "founder");
+        const truthful = canAnswerSendState ? await answerSendStateFromLog(db, opts, reply, n) : null;
+        reply = truthful || humanize("Let me actually check the thread before I answer that, I don't want to guess. One moment while I pull what really went out.", { now: { long: n.long, today: n.today } });
         alreadySubstituted = true;
       } else if (claimsDeferredWithoutSubscription(reply, toolRuns)) {
         // KT #206542: the reply promised a future-contingent action ("the moment they
