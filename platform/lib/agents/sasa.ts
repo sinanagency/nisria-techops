@@ -604,7 +604,7 @@ const SEND_STATE_DENIAL = /\b(?:nothing went out|no outbound|no record of (?:sen
 // fabrication case, away from a legitimate just-now send confirmation.
 // 2026-06-20 paraphrase audit: added received/got/gotten recall, "get to <person>",
 // passive "was anything sent to", and "receive anything", all send/receive anchored.
-const SEND_STATE_QUESTION = /\b(?:what did (?:you|u|ya) (?:send|tell|say|message|text)|did (?:you|u|ya) (?:send|tell|text|message|notify|reach)|who did (?:you|u|ya) (?:message|text|tell)|(?:did|does|has|have|was|were) .{1,30}\b(?:get|receive|gotten|got|received) (?:the|my|your|a|any|some)?\s*(?:thing|message|text|it|note)?|(?:did|does|has|have) .{1,30}\bget (?:to|through to)\b|(?:was|were) (?:anything|something|a message|the message|it|the report|the note)?\s*.{0,20}?sent to|what (?:went out|did you send out))\b/i;
+const SEND_STATE_QUESTION = /\b(?:what did (?:you|u|ya) (?:send|tell|say|message|text)|did (?:you|u|ya) (?:send|tell|text|message|notify|reach)|who did (?:you|u|ya) (?:message|text|tell)|asking (?:if|whether) (?:you|u|ya) (?:sent|texted|messaged|told|notified|reached|emailed|contacted|pinged)|(?:did|does|has|have|was|were) .{1,30}\b(?:get|receive|gotten|got|received) (?:the|my|your|a|any|some)?\s*(?:thing|message|text|it|note)?|(?:did|does|has|have) .{1,30}\bget (?:to|through to)\b|(?:was|were) (?:anything|something|a message|the message|it|the report|the note)?\s*.{0,20}?sent to|what (?:went out|did you send out))\b/i;
 
 // A SPECIFIC person is named as the recipient ("to Nur", "to Mark"). For these,
 // show_outbound_audit is NOT valid verification: it hard-excludes the operator
@@ -688,30 +688,51 @@ async function answerSendStateFromLog(
   n: { long: string; today: string },
 ): Promise<string | null> {
   try {
-    // Query a generous 30h window, then keep only sends on the operator's CALENDAR
-    // today (Asia/Dubai), so "earlier today" is never a tz lie near midnight (skeptic).
-    const since = new Date(Date.now() - 1000 * 60 * 60 * 30).toISOString();
-    const { data: rows } = await db.from("events").select("created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since).order("created_at", { ascending: true }).limit(400);
     const dayKey = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: DEFAULT_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
     const todayKey = dayKey(new Date().toISOString());
-    // today's REAL sends, grouped by recipient first-name key. Skip numeric to_name
-    // rows (some sends logged the raw number) and strip a "(the one ending …)" tag.
-    const byName = new Map<string, { name: string }>();
-    for (const e of (rows || []) as any[]) {
-      if (dayKey(String(e?.created_at || "")) !== todayKey) continue; // not today (Dubai)
-      const raw = String(e?.payload?.to_name || "").trim();
-      const clean = raw.replace(/\s*\([^)]*\)\s*/g, "").trim();
-      const key = clean.toLowerCase().split(/\s+/)[0];
-      if (!/^[a-z]{2,}$/.test(key)) continue; // not a real name (numeric recipient)
-      if (!byName.has(key)) byName.set(key, { name: clean });
+    const since = new Date(Date.now() - 1000 * 60 * 60 * 30).toISOString();
+    // RE-KEY (Phase 1, self-recall-v1, KT #206550 follow-up): read OUTBOUND from the
+    // `messages` table keyed on contact_id — the un-blind store read_contact_thread uses
+    // (smart-tools.ts:962) — NOT events.whatsapp.message_out grouped by to_name, which is
+    // null on 93% of sends and structurally blind to Nur and most replies. messages rows
+    // carry contact_id + direction='out', so EVERY real send resolves to a person.
+    const { data: outs } = await db.from("messages").select("contact_id,created_at").eq("direction", "out").not("contact_id", "is", null).gte("created_at", since).limit(3000);
+    const sentIds = new Set<string>();
+    for (const m of (outs || []) as any[]) {
+      if (dayKey(String(m?.created_at || "")) !== todayKey) continue; // not today (Dubai calendar day)
+      sentIds.add(String(m.contact_id));
     }
-    // Resolve who is being asked about from the COMMAND first (the authoritative
-    // subject) — intersect the command with the REAL recipient keys. A NAMED question
-    // ("did you text Mark") never bleeds a different person from history (skeptic #2).
-    // Only when the command is a bare PRONOUN ("did you text them") do we resolve it
-    // from the recent turns. Junk like the verb in "to message them" can't match because
-    // we only test against real recipient name-keys.
+    // resolve today's recipient contact_ids to names (display + matching)
+    const byName = new Map<string, { name: string }>();
+    const addName = (raw: string) => {
+      const clean = String(raw || "").replace(/\s*\([^)]*\)\s*/g, "").trim();
+      const key = clean.toLowerCase().split(/\s+/)[0];
+      if (!/^[a-z]{2,}$/.test(key)) return; // skip numeric / empty names
+      if (!byName.has(key)) byName.set(key, { name: clean });
+    };
+    if (sentIds.size) {
+      const { data: cs } = await db.from("contacts").select("id,name").in("id", [...sentIds]);
+      for (const c of (cs || []) as any[]) addName(String(c?.name || ""));
+    }
+    // UNION the second store: proactive `message_person` sends write an event but NO
+    // messages row, so they are invisible above (this is why Cynthia vanished). Add today's
+    // events.whatsapp.message_out rows that carry a REAL to_name (the name the bot recorded
+    // at send time — the only reliable link given duplicate/mismatched contact phones).
+    const { data: ev } = await db.from("events").select("created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since).limit(500);
+    for (const e of (ev || []) as any[]) {
+      if (dayKey(String(e?.created_at || "")) !== todayKey) continue;
+      if (e?.payload?.to_name) addName(String(e.payload.to_name));
+    }
     const cmd = String(opts.command || "").toLowerCase();
+    // A LIST question ("who did you message today") — no specific subject. Owner/founder
+    // only (the caller is already tier-gated), so listing today's real recipients is the
+    // truthful answer, not an over-share.
+    if (/\bwho\b[^.?!]{0,16}\b(?:did|have|d)\b[^.?!]{0,12}\b(?:you|u|ya)\b[^.?!]{0,14}\b(?:messag|text|sen[dt]|tell|told|contact|reach|email|ping)/.test(cmd)) {
+      const all = [...byName.values()].map((v) => v.name);
+      return humanize(all.length ? `Today I have messaged ${joinNames(all)}.` : "I have not sent anyone a WhatsApp message today.", { now: { long: n.long, today: n.today } });
+    }
+    // Named/pronoun subject — resolve from the COMMAND first (authoritative subject; a
+    // named question never bleeds a different person from history), pronoun → history.
     let asked: string[] = [];
     for (const key of byName.keys()) if (new RegExp(`\\b${key}\\b`).test(cmd)) asked.push(key);
     if (asked.length === 0 && /\b(?:them|they|her|him)\b/.test(cmd)) {
@@ -719,16 +740,10 @@ async function answerSendStateFromLog(
       for (const key of byName.keys()) if (new RegExp(`\\b${key}\\b`).test(hist)) asked.push(key);
     }
     asked = [...new Set(asked)];
-    // Unresolved (a pronoun we cannot pin to a real recipient): return null so the
-    // caller ships the honest "let me check" — NEVER dump the day's full roster (the
-    // over-share the skeptic flagged), which would also leak to other-tier sends.
+    // Unresolved subject: return null → caller ships the honest "let me check". Never a roster dump.
     if (asked.length === 0) return null;
-    const sent: string[] = [], notSent: string[] = [];
-    for (const a of asked) { const hit = byName.get(a); if (hit) sent.push(hit.name); else notSent.push(a.charAt(0).toUpperCase() + a.slice(1)); }
-    let msg = "";
-    if (sent.length) msg += `Yes, I did message ${joinNames(sent)} earlier today.`;
-    if (notSent.length) msg += `${msg ? " " : ""}I have not messaged ${joinNames(notSent)} today.`;
-    return humanize(msg || "I have not sent anything to them today.", { now: { long: n.long, today: n.today } });
+    const sent = asked.map((a) => byName.get(a)!.name);
+    return humanize(`Yes, I did message ${joinNames(sent)} earlier today.`, { now: { long: n.long, today: n.today } });
   } catch {
     return null;
   }

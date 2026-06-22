@@ -35,17 +35,21 @@ const eq = (a, b, m) => (JSON.stringify(a) === JSON.stringify(b) ? ok(m) : fail(
   if (!/async function answerSendStateFromLog\(/.test(SA)) fail("T2a the deterministic answerer must exist");
   if (!/const truthful = canAnswerSendState \? await answerSendStateFromLog\(db, opts, reply, n\) : null;/.test(SA)) fail("T2b the guard branch must CALL the deterministic lookup (tier-gated)");
   if (!/reply = truthful \|\| humanize\("Let me actually check/.test(SA)) fail("T2c truth is used; 'let me check' is only the fallback when unresolved");
-  if (!/from\("events"\)\.select\("created_at,payload"\)\.eq\("type", "whatsapp\.message_out"\)/.test(SA)) fail("T2d it must read the real outbound log (events.whatsapp.message_out)");
-  else ok("T2 the guard now pulls the real log and answers from it (no dead 'let me check' promise)");
+  // Phase-1 re-key: reads the un-blind `messages` store by contact_id (the bulk replies)…
+  if (!/from\("messages"\)\.select\("contact_id,created_at"\)\.eq\("direction", "out"\)/.test(SA)) fail("T2d it must read the un-blind messages store (by contact_id, direction=out)");
+  // …UNION the events store by to_name (proactive message_person sends that write no messages row)
+  if (!/UNION the second store[\s\S]{0,600}?from\("events"\)\.select\("created_at,payload"\)\.eq\("type", "whatsapp\.message_out"\)/.test(SA)) fail("T2e it must UNION events.message_out (real to_name) so proactive sends like Cynthia aren't missed");
+  else ok("T2 the guard reads BOTH stores (messages by contact_id + events by to_name) — no blind spot");
 }
 
 // ---- T4: tier-gate (no leak) + no over-share fallback (skeptic #5/#6) ----
 {
   if (!/const canAnswerSendState = !inGroup && \(opts\.operatorRank === "owner" \|\| opts\.operatorRank === "founder"\);/.test(SA)) fail("T4a the deterministic answer must be tier-gated to owner/founder on a private line (no team/group leak)");
-  if (!/if \(asked\.length === 0\) return null;/.test(SA)) fail("T4b when the asked person is unresolved it must return null (honest 'let me check'), NOT dump the day's roster");
-  if (/today I have messaged \$\{joinNames\(all\)\}/.test(SA)) fail("T4c the over-share 'today I have messaged <everyone>' branch must be removed");
+  if (!/if \(asked\.length === 0\) return null;/.test(SA)) fail("T4b an unresolved NAMED/pronoun subject must return null (honest 'let me check'), NOT dump the roster");
+  // the roster list is allowed ONLY for an explicit 'who did you message' question, gated by the who-regex
+  if (!/A LIST question[\s\S]{0,500}?Today I have messaged \$\{joinNames\(all\)\}/.test(SA)) fail("T4c the roster list may appear ONLY inside the explicit 'who did you message' branch (not as an unresolved fallback)");
   // tz-correct 'today' (skeptic #3): filtered to the Dubai calendar day, not now-18h
-  if (!/dayKey\(String\(e\?\.created_at \|\| ""\)\) !== todayKey\) continue;/.test(SA)) fail("T4d sends must be filtered to the operator's calendar today (tz-correct), not a rolling window");
+  if (!/dayKey\(String\(m\?\.created_at \|\| ""\)\) !== todayKey\) continue;/.test(SA)) fail("T4d sends must be filtered to the operator's calendar today (tz-correct), not a rolling window");
   else ok("T4 tier-gated, no over-share fallback, tz-correct 'today'");
 }
 
@@ -122,6 +126,22 @@ const eq = (a, b, m) => (JSON.stringify(a) === JSON.stringify(b) ? ok(m) : fail(
   eq(gatePasses(command, lie, [], "member"), false, "T5j team tier never triggers the override");
   // skeptic #1: a CORRECT, richer affirmative reply must NOT be clobbered (denial gate)
   eq(gatePasses(command, "Yes, I sent Mark the report at 9am and he replied he is on it.", [], "founder"), false, "T5k a correct affirmative reply is left intact (not flattened)");
+}
+
+// ---- T6: the widened trigger catches the live phrasings the regex missed ----
+{
+  const SEND_STATE_QUESTION = (() => { const m = SA.match(/const SEND_STATE_QUESTION = (\/.*\/i);/); return m ? eval(m[1]) : /$^/; })();
+  // the exact phrasing that slipped through live (no "did you", just "asking if you texted")
+  if (!SEND_STATE_QUESTION.test("I am asking if u texted mark and cynthia today?")) fail("T6a trigger must catch 'I am asking if u texted…' (the live miss)");
+  if (!SEND_STATE_QUESTION.test("who did u message today from the team")) fail("T6b trigger must catch 'who did u message today'");
+  if (!SEND_STATE_QUESTION.test("did u message nur today?")) fail("T6c trigger must catch 'did u message nur'");
+  // an action command must NOT trigger recall (don't-break: assign-task stays honest)
+  if (SEND_STATE_QUESTION.test("message mark to bring the receipts")) fail("T6d an imperative send command must NOT match the recall trigger");
+  // the 'who' list-path regex matches a who-question and not a named one
+  const WHO = /\bwho\b[^.?!]{0,16}\b(?:did|have|d)\b[^.?!]{0,12}\b(?:you|u|ya)\b[^.?!]{0,14}\b(?:messag|text|sen[dt]|tell|told|contact|reach|email|ping)/i;
+  if (!WHO.test("who did u message today from the team")) fail("T6e the list-path regex must match a 'who did you message' question");
+  if (WHO.test("did u text mark today?")) fail("T6f the list-path must NOT fire on a named question");
+  else ok("T6 trigger widened to the live phrasings; list-path scoped to 'who' questions; imperatives excluded");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");
