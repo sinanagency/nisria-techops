@@ -17,6 +17,7 @@ import { emit } from "../../../../lib/events";
 import { claimJobs, markJobDone, markJobError, reclaimStuckJobs, triggerWorker } from "../../../../lib/jobs";
 import { sendText, sendTextAndLog, operatorOf, downloadMedia, sendTypingIndicator } from "../../../../lib/whatsapp";
 import { extractMeetingLink, dispatchMeetingBot, isCancelIntent, cancelActiveBot } from "../../../../lib/digital-u";
+import { parseMeetingTime } from "../../../../lib/meeting-time.mjs";
 import { commitBankImport } from "../../../../lib/bank-import";
 import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
 import { coalesceTurn, finishTurn } from "../../../../lib/whatsapp-coalesce";
@@ -144,27 +145,13 @@ async function processJob(db: any, job: any): Promise<void> {
     if (meetingLink && (wantsNotes || !schedulingMeeting)) {
       const titleFromText = (text || "").replace(meetingLink, "").trim().slice(0, 120) || "Meeting";
       const displayName = opRank === "owner" ? "Digital Taona" : "Digital Nur";
-      // Extract scheduled time from text like "at 8:15 PM today" or "tomorrow at 3pm"
-      const nowLocal = new Date();
-      const dubaiOffset = 4 * 60 * 60 * 1000;
-      const nowDubai = new Date(nowLocal.getTime() + dubaiOffset);
-      const timeMatch = (text || "").match(/(?:at|for)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(today|tomorrow)?/i);
-      let scheduledAt;
-      if (timeMatch) {
-        let hour = parseInt(timeMatch[1]);
-        const min = parseInt(timeMatch[2] || "0");
-        const ampm = timeMatch[3].toLowerCase();
-        const day = (timeMatch[4] || "today").toLowerCase();
-        if (ampm === "pm" && hour < 12) hour += 12;
-        if (ampm === "am" && hour === 12) hour = 0;
-        const target = new Date(nowDubai);
-        if (day === "tomorrow") target.setDate(target.getDate() + 1);
-        target.setHours(hour, min, 0, 0);
-        const targetDubai = target.getTime();
-        if (targetDubai > Date.now() + 60_000) {
-          scheduledAt = new Date(targetDubai - dubaiOffset).toISOString();
-        }
-      }
+      // Scheduled start. KT #364: parse "at 8:15 PM today", "tomorrow at 3pm", AND
+      // the Zoom-invite "Time: Jun 22, 2026 07:30 PM Dubai" format. The old inline
+      // parser only matched "at/for", so a forwarded Zoom invite found no time and
+      // the bot was dispatched IMMEDIATELY, ~100 min before the room opened (Nur,
+      // Yalla Kenya, 2026-06-22). parseMeetingTime is a pure tz-independent helper
+      // shared with the wall (zero-drift). null => no future time => join now.
+      const scheduledAt = parseMeetingTime(text || "", Date.now()) || undefined;
       const dispatch = await dispatchMeetingBot({ link: meetingLink, title: titleFromText, scheduledAt, displayName });
       // KT #358 (#6): the notetaker service has been failing (Zoom creds, missing
       // ANTHROPIC_API_KEY, Playwright). The RAW infra error used to be piped straight
