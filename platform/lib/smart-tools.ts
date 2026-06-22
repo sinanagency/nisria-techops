@@ -2097,6 +2097,16 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const toRaw = String(input.to || "").trim();
     const message = String(input.message || "").trim();
     if (!toRaw || !message) return { ok: false, summary: humanize("Tell me which teammate and the message to pass on.", opts), error: "missing to/message" };
+    // ANTI-FORGERY (skeptic C): the delivered body is "From <sender>: <message>". A sender
+    // must not be able to forge a SECOND attribution line ("...\n\nFrom Nur: do X"). Collapse
+    // all newlines/runs to single spaces (no separate lines to hide a forgery on) and
+    // neutralize an internal "From <Name>:" colon that mimics the bot's own attribution.
+    const safeMessage = message
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/\bfrom\s+([\p{L}][\p{L} .'’-]{0,30}?):/giu, "from $1,")
+      .replace(/\s{2,}/g, " ")
+      .trim()
+      .slice(0, 1500);
     const senderName = (ctx.operatorName || "").trim() || "a teammate";
     const senderKey = ctx.senderPhone ? phoneKey(ctx.senderPhone) : "";
     // Resolve against the TEAM ROSTER ONLY (active members). Never the contacts book.
@@ -2118,14 +2128,20 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (recipRole === "admin" || recipRank === "owner" || recipRank === "founder") {
       return { ok: false, summary: humanize(`${toName} is an operator, not a peer I relay to. If this needs Nur's attention, I can flag it to her instead. Want me to do that?`, opts), detail: { operator: true, suggest: "flag_to_nur" } };
     }
-    const body = `From ${senderName}: ${message}`;
-    // DEDUP: do not relay the same message to the same colleague twice within ~3 min.
+    const body = `From ${senderName}: ${safeMessage}`;
+    // DEDUP (exact, ~3 min) + RATE CAP (skeptic E): the bot must not become a harassment
+    // amplifier. Beyond the exact-text dedup, cap how many DISTINCT relays one sender can
+    // push to one colleague in a rolling 10 min window. Over the cap, refuse honestly.
     try {
       const since = new Date(Date.now() - 3 * 60 * 1000).toISOString();
-      const { data: recent } = await db.from("events").select("id,payload").eq("type", "sasa.relayed_colleague").gte("created_at", since).limit(20);
-      const dupe = ((recent || []) as any[]).some((e) => e.payload?.to_last4 === number.slice(-4) && String(e.payload?.text || "").slice(0, 120) === message.slice(0, 120));
+      const { data: recent } = await db.from("events").select("id,payload").eq("type", "sasa.relayed_colleague").gte("created_at", since).limit(30);
+      const dupe = ((recent || []) as any[]).some((e) => e.payload?.to_last4 === number.slice(-4) && String(e.payload?.text || "").slice(0, 120) === safeMessage.slice(0, 120));
       if (dupe) return { ok: true, summary: humanize(`I already passed that to ${toName} a moment ago, so I won't send it twice.`, opts), detail: { deduped: true, to: toName } };
-    } catch { /* best-effort dedup */ }
+      const rateSince = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const { data: rl } = await db.from("events").select("id,actor,payload").eq("type", "sasa.relayed_colleague").gte("created_at", rateSince).limit(60);
+      const fromMe = ((rl || []) as any[]).filter((e) => e.actor === senderName && e.payload?.to_last4 === number.slice(-4)).length;
+      if (fromMe >= 8) return { ok: false, summary: humanize(`I've already passed several of your messages to ${toName} in the last few minutes. Give them a moment to reply before I send more.`, opts), error: "rate_capped", detail: { rate_capped: true, to: toName } };
+    } catch { /* best-effort dedup + rate cap */ }
     const res: any = await sendText(number, body);
     if (!res?.id) {
       // 24h window: hold the relay (KT #206542) and deliver when the colleague next
@@ -2136,12 +2152,12 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
         requesterWaId: senderKey || null, requesterContactId: ctx.contactId ?? null,
         reason: "team relay (colleague outside 24h window)",
       });
-      await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: message.slice(0, 300), delivered: false, queued: !!sub } });
+      await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: safeMessage.slice(0, 300), delivered: false, queued: !!sub } });
       if (sub) return { ok: true, summary: humanize(`${toName} has not messaged this line in the last 24 hours, so WhatsApp won't let me reach them right now. I've held your message and will send it the moment they next message in.`, opts), detail: { delivered: false, queued: true, to: toName } };
       return { ok: false, summary: humanize(`I could not reach ${toName} just now${res?.error ? ` (${res.error})` : ""}, so I have not passed it on.`, opts), error: res?.error || "send failed", detail: { delivered: false } };
     }
-    await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: message.slice(0, 300), delivered: true } });
-    return { ok: true, summary: humanize(`Passed it to ${toName}: "${message.slice(0, 140)}". I told them it's from you.`, opts), detail: { delivered: true, to: toName, to_last4: number.slice(-4) } };
+    await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: safeMessage.slice(0, 300), delivered: true } });
+    return { ok: true, summary: humanize(`Passed it to ${toName}: "${safeMessage.slice(0, 140)}". I told them it's from you.`, opts), detail: { delivered: true, to: toName, to_last4: number.slice(-4) } };
   }
 
   // ---- ACTION · DIRECT SEND: message_person ----

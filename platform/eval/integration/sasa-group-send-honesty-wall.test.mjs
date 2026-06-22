@@ -66,7 +66,7 @@ const flat = (s) => s.replace(/\s+/g, " ");
 // ---- G3: the guard is actually wired this way in sasa.ts (seam) ----
 {
   const i = SASA.indexOf("function claimsSendWithoutSend");
-  const region = i >= 0 ? SASA.slice(i, i + 1600) : "";
+  const region = i >= 0 ? SASA.slice(i, i + 2100) : "";
   if (!region) fail("G3a claimsSendWithoutSend must exist");
   else ok("G3a claimsSendWithoutSend exists");
   // must gate on a successful send tool BEFORE crediting recipients

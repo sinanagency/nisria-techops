@@ -567,6 +567,11 @@ function claimsSendWithoutSend(reply: string, toolRuns: { name: string; result: 
   for (const t of toolRuns) {
     if (!SEND_TOOLS.has(t.name)) continue;
     if ((t.result as any)?.ok !== true) continue;
+    // A QUEUED/HELD send (off-window relay: detail.delivered === false, queued true) is
+    // ok:true but NOT delivered. It must NOT credit a past-tense "I messaged X" claim, or
+    // a held relay would launder a false delivery (2026-06-22 skeptic D). The honest
+    // queued summary survives; only a paraphrased "Messaged X" over a HELD send is caught.
+    if ((t.result as any)?.detail?.delivered === false) continue;
     // A successful GROUP post contributes the group's distinctive tokens, so a reply
     // that names the group ("Posted to the Finances group") matches and is NOT flagged
     // as an un-sent person (the 2026-06-22 group-send amnesia: HONEST_NO_SEND over a

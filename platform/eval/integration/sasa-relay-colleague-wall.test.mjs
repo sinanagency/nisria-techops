@@ -40,14 +40,14 @@ const flat = (s) => s.replace(/\s+/g, " ");
 // ---- R3: the impl is a SEND in runAction with the team-safety properties ----
 {
   const i = ST.indexOf('if (name === "relay_to_colleague")');
-  const region = i >= 0 ? ST.slice(i, i + 5200) : "";
+  const region = i >= 0 ? ST.slice(i, i + 6400) : "";
   if (!region) fail("R3 relay_to_colleague impl must exist");
   // must run as an ACTION (after the runAction boundary), not a read
   else if (!(i > ST.indexOf("async function runAction"))) fail("R3a relay must live in runAction (it sends), not runRead");
   // resolve TEAM ROSTER ONLY
   else if (!/from\("team_members"\)/.test(region)) fail("R3b must resolve against team_members ONLY (never the contacts book)");
   // attribute the sender
-  else if (!/const body = `From \$\{senderName\}: \$\{message\}`/.test(region)) fail("R3c must attribute the sender ('From <name>: ...')");
+  else if (!/const body = `From \$\{senderName\}: \$\{safeMessage\}`/.test(region)) fail("R3c must attribute the sender ('From <name>: ...')");
   // REFUSE operators -> flag_to_nur
   else if (!/recipRole === "admin" \|\| recipRank === "owner" \|\| recipRank === "founder"/.test(region)) fail("R3d must REFUSE relaying to an operator (Nur/owner)");
   else if (!/suggest: "flag_to_nur"/.test(region)) fail("R3e an operator recipient must be pointed at flag_to_nur");
@@ -65,7 +65,7 @@ const flat = (s) => s.replace(/\s+/g, " ");
 // ---- R4: never claim delivery it did not get (verified) ----
 {
   const i = ST.indexOf('if (name === "relay_to_colleague")');
-  const region = i >= 0 ? ST.slice(i, i + 5200) : "";
+  const region = i >= 0 ? ST.slice(i, i + 6400) : "";
   // the only ok:true 'Passed it to' delivered:true return must be AFTER a successful send
   const passedIdx = region.indexOf("Passed it to");
   const sendIdx = region.indexOf("await sendText(number, body)");
@@ -73,6 +73,33 @@ const flat = (s) => s.replace(/\s+/g, " ");
   else ok("R4a 'Passed it' is only claimed after a real send");
   if (!/queued: true, to: toName/.test(region)) fail("R4b an off-window relay must report queued, not delivered");
   else ok("R4b off-window relay reports queued (honest, not a false 'sent')");
+}
+
+// ---- R5: skeptic hardenings (C injection, E rate cap, D queued-not-delivered) ----
+{
+  const i = ST.indexOf('if (name === "relay_to_colleague")');
+  const region = i >= 0 ? ST.slice(i, i + 6400) : "";
+  // C: the message is sanitized (newlines collapsed, forged 'From X:' neutralized) and the
+  // delivered body uses the SANITIZED text, not the raw input.
+  if (!/const safeMessage = message/.test(region)) fail("R5a message must be sanitized into safeMessage (anti-forgery)");
+  else ok("R5a message is sanitized (safeMessage)");
+  if (!/\[\\r\\n\\t\]\+/.test(region)) fail("R5b sanitizer must collapse newlines (no hidden forged 'From X:' line)");
+  else ok("R5b sanitizer collapses newlines");
+  if (!/const body = `From \$\{senderName\}: \$\{safeMessage\}`/.test(region)) fail("R5c the delivered body must use safeMessage, not the raw message");
+  else ok("R5c delivered body uses the sanitized message");
+  // E: a per-sender->per-recipient rolling rate cap beyond the exact-dup dedup
+  if (!/rate_capped/.test(region)) fail("R5d must enforce a per-sender->per-recipient rate cap");
+  else ok("R5d enforces a relay rate cap (anti-harassment)");
+}
+
+// ---- R6: the honesty guard ignores a QUEUED (undelivered) send (skeptic D) ----
+// A held/queued relay (detail.delivered === false) must NOT credit a 'Messaged X' claim.
+{
+  const i = SASA.indexOf("function claimsSendWithoutSend");
+  const region = i >= 0 ? SASA.slice(i, i + 1900) : "";
+  if (!/if \(\(t\.result as any\)\?\.detail\?\.delivered === false\) continue;/.test(region))
+    fail("R6a claimsSendWithoutSend must skip a queued/held send (detail.delivered === false)");
+  else ok("R6a a queued/held send does not credit a delivered claim");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");
