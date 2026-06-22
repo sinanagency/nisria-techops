@@ -2344,13 +2344,23 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (typeof input.age === "number" && input.age > 0 && input.age < 120) rich.age_at_intake = Math.round(input.age);
     if (input.contact_phone) rich.contact_phone = String(input.contact_phone).slice(0, 40);
     if (Array.isArray(input.tags)) rich.tags = input.tags.map((s: any) => String(s).slice(0, 40)).slice(0, 20);
+    // SAME-NODE FLOOR (2026-06-22 skeptic, Bug 3 / KT #367): a non-founder can NEVER
+    // auto-accept a child into the active, donor-facing roster. add_beneficiary is a
+    // TEAM tool the brain can call DIRECTLY (bypassing the deterministic intake route),
+    // and runSasaOpts does not set casesIntake — so without this floor a team member's
+    // natural-language intake ("we took in Brian, add him") would fall through to the
+    // accepted insert below (status active, intake_stage null = on the donor roster).
+    // The never-auto-accept invariant must live HERE at the primitive where both the
+    // route and the brain converge, not only at the route. ANY team-tier call is forced
+    // to a case (under_review) for Nur to approve on /cases.
+    const casesIntake = ctx.casesIntake || ctx.tier === "team";
     // CASES-INTAKE GROUP (e.g. Rescue & Rehab): a child mentioned here is a
     // POTENTIAL beneficiary, NOT an accepted one. Nur said do not add them as
     // beneficiaries yet, so the row lands as a CASE: intake_stage 'under_review'
     // + status 'inactive' (excluded from every active-beneficiary count and the
     // donor view), tagged with the group it came from, awaiting her approve/decline
     // on /cases. This both auto-logs the case AND enforces the never-auto-accept rule.
-    if (ctx.casesIntake) {
+    if (casesIntake) {
       // DEDUP (idempotency): the group brain re-reads recent history every turn,
       // so without this it re-logs the same child as a new case on every message.
       // If an open case with this name already exists for this group, do nothing.

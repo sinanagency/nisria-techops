@@ -56,6 +56,22 @@ T(asCaseDecision("add a child: Mercy", false), true, "C2c team bare 'child' -> C
   else ok("C4c team intake confirms it's a case for Nur");
 }
 
+// ---- C6: SAME-NODE FLOOR at the primitive (skeptic finding) ----
+// add_beneficiary is a TEAM tool the brain can call directly, bypassing the route guard.
+// The never-auto-accept invariant must live at the primitive (smart-tools.ts) where the
+// route AND the brain converge, forcing a case for ANY team-tier call.
+{
+  const ST = fs.readFileSync(path.resolve(HERE, "..", "..", "lib", "smart-tools.ts"), "utf8");
+  const i = ST.indexOf('name === "add_beneficiary"');
+  const region = i >= 0 ? ST.slice(i, i + 4000) : "";
+  if (!/const casesIntake = ctx\.casesIntake \|\| ctx\.tier === "team"/.test(region))
+    fail("C6a add_beneficiary must FORCE a case for any team-tier call (brain-path leak floor)");
+  else ok("C6a add_beneficiary forces a case for any team-tier call (same-node floor)");
+  if (!/if \(casesIntake\) \{/.test(region))
+    fail("C6b the case branch must key on the FORCED casesIntake, not the raw ctx flag");
+  else ok("C6b case branch keys on the forced casesIntake");
+}
+
 // ---- C5: never auto-accept — the only path to an ACCEPTED record is admin+beneficiary-only ----
 // (belt-and-braces: assert no decision returns false for a team member)
 {
