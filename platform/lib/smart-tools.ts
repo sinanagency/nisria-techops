@@ -42,7 +42,7 @@ import { gatherRecipients, SEND_CAP } from "./outreach";
 import { searchFiles, transferOwnership } from "./drive";
 import { recall, groundingText, remember, rememberUpsert, queryMemory } from "./memory";
 import { knownGroups, isKnownGroup } from "./groups";
-import { ownerContactIds, OWNER_PRIVATE_KIND } from "./privacy";
+import { ownerContactIds, OWNER_PRIVATE_KIND, ownerKeys } from "./privacy";
 import { draftThankYou } from "./agents/steward";
 import { enqueueJob, triggerWorker } from "./jobs";
 import { pushTaskAlert, pushOperatorUpdate, pushCalendarAlert } from "./notify";
@@ -407,6 +407,7 @@ export const SMART_TOOLS = [
   { name: "list_bank_transactions", description: "The bank statement ledger (reconciled transactions) for a date window. Use for 'what came through the bank in May', 'show recent bank transactions', 'any large withdrawals'. Admin only.", input_schema: { type: "object", properties: { from: { type: "string", description: "YYYY-MM-DD" }, to: { type: "string", description: "YYYY-MM-DD" } } } },
   { name: "read_contact_thread", description: "Read the recent message history with a specific contact (what was last said to/from them). Use for 'what did we last say to John', 'show my thread with Mary'. Match by name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "flag_for_clarity", description: "Ask the operator a clarifying question WHEN YOU ARE UNSURE and would otherwise guess or silently act: possible duplicate records, an ambiguous reference you cannot resolve even after a lookup, a task/item with no clear owner, or a merge/delete/reassign you are not certain about. Pass one clear question and the candidate options. Use this INSTEAD of guessing, silently picking, merging, deleting, or reassigning. The operator's answer then tells you what to do.", input_schema: { type: "object", properties: { question: { type: "string", description: "the one clear question to ask the operator" }, options: { type: "array", items: { type: "string" }, description: "the candidate choices, e.g. the two duplicate task titles" }, about: { type: "string", description: "short tag, e.g. 'possible duplicate tasks' or 'missing owner'" } }, required: ["question"] } },
+  { name: "flag_to_nur", description: "Surface something to Nur for a keep-or-flag decision, as a WhatsApp message she can reply to. Use this when a TEAM MEMBER sends you a document, report, intake, or photos that Nur should know about (a case update, a child-reunification report, a beneficiary intake, anything that belongs on her desk). The file is ALREADY saved on file, so you do NOT tell the team member to forward it to Nur themselves: you summarise what came in and flag it to Nur here. Pass a short, specific summary including who sent it and what it is. Nur then replies to decide whether to flag it for follow-up or keep it on file.", input_schema: { type: "object", properties: { summary: { type: "string", description: "short specific summary, e.g. 'Mark sent a child-reunification report for Jazbon (OB 29/05/06/2026) plus 2 photos, saved on file'" } }, required: ["summary"] } },
   { name: "show_outbound_audit", description: "Show what YOU (Sasa) have actually sent to TEAM MEMBERS on WhatsApp in a recent window. This is the audit/receipt view, the ground truth of what really went out, independent of any earlier narration. Use whenever Nur asks 'what did you send today', 'who did you message', 'did you actually text X', 'show me what you sent', 'show your outbound', 'audit your sends', 'what messages went out from you today', 'did Cynthia get the message'. Returns a per-recipient summary with timestamps and the bodies of each message. Excludes messages back to Nur herself. Always also point her to /admin/transcripts for the full filterable view. Admin only.", input_schema: { type: "object", properties: { window_hours: { type: "number", description: "Lookback window in hours, default 24" }, contact: { type: "string", description: "Optional name filter (e.g. 'Mark', 'Violet'); omit for all recipients" } } } },
   { name: "search_inbox", description: "Search the sasa@nisria.co email INBOX (read-only) to check what actually arrived. Use for 'did the SANARA statements come into the sasa email', 'did we get the I&M statement', 'any email from <sender> about <thing>', 'check the inbox for invoices'. Returns sender, subject, date, snippet and attachment filenames. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "What to look for in plain words (e.g. 'SANARA bank statement', 'invoice from Java'). Optionally a sender name/email." }, max: { type: "number", description: "max results, default 10" } }, required: ["query"] } },
   { name: "show_draft", description: "Show the operator an email DRAFT you already made that is waiting in Needs You for her approval. Use whenever she asks to SEE a draft you composed: 'show me the draft', 'show me the draft you made', 'what was the draft', 'read me the draft again', 'pull up that email draft', OR when she swipe-replies to a draft message asking to see or check it. Returns the recipient, subject and FULL body of the pending draft(s). It is still unsent. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional: a recipient name or a few words to pick which draft if there are several" } } } },
@@ -516,7 +517,7 @@ const READ_TOOLS = new Set([
   "search_history", "find_beneficiary", "lookup_contact", "team_detail",
   "search_documents", "list_campaigns", "list_inventory",
   "read_document", "list_assets", "agent_activity", "list_groups",
-  "read_brief", "list_payroll", "list_bank_transactions", "read_contact_thread", "show_outbound_audit", "flag_for_clarity",
+  "read_brief", "list_payroll", "list_bank_transactions", "read_contact_thread", "show_outbound_audit", "flag_for_clarity", "flag_to_nur",
   "list_content", "find_studio_doc", "list_beneficiaries", "summarize_document", "donor_activity",
   "group_activity", "member_activity",
   "query_calendar", "check_conflicts",
@@ -983,6 +984,39 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     }
     const { data: msgs } = await db.from("messages").select("direction,channel,subject,body,created_at").eq("contact_id", chosen.id).order("created_at", { ascending: false }).limit(15);
     return { found: true, contact: chosen.name, count: (msgs || []).length, dup_note: dupNote, messages: ((msgs || []) as any[]).map((m) => ({ dir: m.direction, channel: m.channel, subject: m.subject || null, text: String(m.body || "").slice(0, 300), at: m.created_at })) };
+  }
+  // flag_to_nur (2026-06-22): a team member sent something Nur should decide on (a
+  // document/report/intake). The media is already saved on file (worker media path), so
+  // the bot must NOT tell the team member to forward it — it summarises and flags it to
+  // Nur on WhatsApp (a message she replies to: flag for follow-up, or keep on file).
+  // Reaches Nur via the operator_request template so it survives her 24h window. Nur is
+  // the operator who is not the owner (same resolution as pushApprovalRequest).
+  if (name === "flag_to_nur") {
+    const summary = String(input.summary || "").trim();
+    if (!summary) return { ok: false, summary: "I need a short summary of what to flag to Nur." };
+    const owners = ownerKeys();
+    const ops = (process.env.WHATSAPP_OPERATORS || "").split(",").map((x) => phoneKey(x)).filter(Boolean);
+    // Nur is the operator who is NOT the owner. Refuse rather than fall back to the owner
+    // (skeptic #4) — the message is addressed to Nur and must not silently reach Taona.
+    const nurWa = ops.find((k) => !owners.includes(k)) || null;
+    if (!nurWa) return { ok: false, summary: "I could not work out Nur's number to flag this, so I have not. The document is saved on file." };
+    // DEDUP (skeptic #1): a 3-photo intake must not become 3 pings to Nur. If we already
+    // flagged something about this contact in the last ~3 min, do not ping her again.
+    if (contactId) {
+      try {
+        const since = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+        const { data: recent } = await db.from("events").select("id").eq("type", "sasa.flagged_to_nur").eq("subject_id", contactId).gte("created_at", since).limit(1);
+        if ((recent || []).length) return { ok: true, summary: "Already flagged this to Nur a moment ago, I won't ping her twice, it's saved on file.", detail: { deduped: true } };
+      } catch { /* best-effort dedup */ }
+    }
+    const body = `${summary}${/\b(flag|keep|follow.?up|on file)\b/i.test(summary) ? "" : " Want me to flag it for follow-up, or keep it on file?"}`;
+    const r = await pushOperatorUpdate(db, nurWa, "Nur", body, { needsReply: true });
+    await emit({ type: "sasa.flagged_to_nur", source: "agent:sasa", actor: "team", subject_type: "contact", subject_id: contactId || null, payload: { summary: summary.slice(0, 300), delivered: !!r.ok, deferred: !!r.deferredQuietHours } });
+    // QUIET HOURS (skeptic #3): a deferral is NOT a failure — it is queued for morning.
+    // Telling the team member "I could not flag it" would be a false under-claim (Law 11).
+    if (r.deferredQuietHours) return { ok: true, summary: "Saved on file and queued for Nur, she will see it first thing in the morning (it is quiet hours on her side right now).", detail: { queued: true } };
+    if (!r.ok) return { ok: false, summary: `I could not reach Nur just now${r.error ? ` (${r.error})` : ""}, so I have not flagged it, but the document is saved on file.`, error: r.error };
+    return { ok: true, summary: `Flagged to Nur, she will decide to flag it for follow-up or keep it on file. The document is saved on file.`, detail: { delivered: true, to: "Nur" } };
   }
   // flag_for_clarity (KT #320): the "when unsure, ASK" rail. Logs the request so
   // we can see how often the bot is uncertain, and returns the question for the
