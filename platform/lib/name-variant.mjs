@@ -22,6 +22,32 @@ export function nameTokens(s) {
   return String(s || "").toLowerCase().replace(/[^\p{L}\s]/gu, " ").split(/\s+/).filter((w) => w.length >= 2);
 }
 
+// Distinctive (identity-bearing) tokens of a text: words >=4 chars that are not generic
+// scaffold. Used to TIE a send-claim to the actual sent body, so a stale/unrelated proactive
+// send to the same person cannot suppress a NEW false claim about a different thing.
+const CONTENT_STOP = new Set([
+  "this","that","with","from","your","you","our","the","and","for","have","has","been","will",
+  "would","could","should","about","there","here","what","when","them","they","their","then",
+  "done","sent","message","messaged","please","want","need","into","over","just","also","more",
+  "send","tell","told","note","task","link","here's","heres","reply","yes","now","once","still",
+]);
+export function contentTokens(s, exclude = []) {
+  const ex = new Set(exclude.map((x) => String(x).toLowerCase()));
+  return new Set(
+    String(s || "").toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/)
+      .filter((w) => w.length >= 4 && !CONTENT_STOP.has(w) && !ex.has(w)),
+  );
+}
+// TOPIC overlap, excluding the recipient name(s) — the person's name appears in both the
+// claim and the send body, so it must NOT count as a topic match (else any claim about the
+// right person ties regardless of subject). Pass the claimed + matched names to exclude.
+export function sharesDistinctiveToken(a, b, exclude = []) {
+  const A = contentTokens(a, exclude); if (!A.size) return false;
+  const B = contentTokens(b, exclude);
+  for (const t of B) if (A.has(t)) return true;
+  return false;
+}
+
 // Given the names actually messaged recently and the names the operator/model referenced
 // (or, if none, the "to <Name>" in the command), return the matched recent name or null.
 export function recallMatch(recentNames, claimedNames, command = "") {

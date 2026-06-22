@@ -34,7 +34,7 @@ import {
 // (eval/unit/intent.test.mjs) imports from the same source — no regex drift.
 import { isReadIntent } from "../intent.mjs";
 import { groupTokens } from "../group-tokens.mjs";
-import { recallMatch } from "../name-variant.mjs";
+import { recallMatch, sharesDistinctiveToken } from "../name-variant.mjs";
 // OpenAI verifier removed (owner directive 2026-06-04): no gpt-4o-mini in the reply path.
 // OpenAI fallback removed (owner directive 2026-06-18): never silently answer as gpt-4o.
 import { pushIncident } from "../notify";
@@ -821,20 +821,33 @@ async function answerSendStateFromLog(
 // (messages.direction=out by contact ∪ events.whatsapp.message_out.to_name) within `mins`,
 // VARIANT-matched so a claim about "Malek" finds a send logged under "Malieng". Returns the
 // matched recipient name (the claim is TRUE → suppress the lie + the re-offer) or null.
-async function recentlySentTo(db: any, claimedNames: string[], command: string, mins: number): Promise<string | null> {
+async function recentlySentTo(db: any, claimedNames: string[], command: string, claimText: string, mins: number): Promise<string | null> {
   try {
     const since = new Date(Date.now() - mins * 60 * 1000).toISOString();
-    const names: string[] = [];
-    const { data: outs } = await db.from("messages").select("contact_id").eq("direction", "out").not("contact_id", "is", null).gte("created_at", since).limit(500);
-    const ids = [...new Set(((outs || []) as any[]).map((m) => String(m.contact_id)).filter(Boolean))];
-    if (ids.length) {
-      const { data: cs } = await db.from("contacts").select("name").in("id", ids);
-      for (const c of (cs || []) as any[]) if (c?.name) names.push(String(c.name));
-    }
-    const { data: ev } = await db.from("events").select("payload").eq("type", "whatsapp.message_out").gte("created_at", since).limit(300);
-    for (const e of (ev || []) as any[]) if (e?.payload?.to_name) names.push(String(e.payload.to_name));
-    if (!names.length) return null;
-    return recallMatch(names, claimedNames, command);
+    // PROACTIVE sends ONLY (events), NEVER the messages table. A conversational REPLY to the
+    // operator writes a direction='out' messages row but is NOT a relay — using it to SUPPRESS
+    // an honesty guard let the bot launder a lie ("I messaged Mark" just because it replied to
+    // Mark) (skeptic 2026-06-22, KT #372 v2). whatsapp.message_out / sasa.relayed_colleague are
+    // emitted ONLY by message_person / relay at real send time, carrying to_name + the sent text.
+    const [mo, rc] = await Promise.all([
+      db.from("events").select("payload").eq("type", "whatsapp.message_out").gte("created_at", since).limit(200),
+      db.from("events").select("payload").eq("type", "sasa.relayed_colleague").gte("created_at", since).limit(200),
+    ]);
+    const sends = [...((mo?.data || []) as any[]), ...((rc?.data || []) as any[])]
+      .map((e) => ({ to: String(e?.payload?.to_name || ""), text: String(e?.payload?.text || ""), delivered: e?.payload?.delivered }))
+      .filter((s) => s.to && s.delivered !== false);
+    if (!sends.length) return null;
+    const matchedName = recallMatch(sends.map((s) => s.to), claimedNames, command);
+    if (!matchedName) return null;
+    // CONTENT TIE: the matched send's body must share a distinctive word with the CLAIM, so a
+    // stale or prefix-colliding proactive send to a different topic/person cannot suppress a
+    // NEW false claim. If the claim has no distinctive content to tie, we DO NOT suppress (the
+    // honest no-send path runs — a loud redo beats a silent lie).
+    const send = sends.find((s) => s.to === matchedName);
+    // exclude the recipient name(s) from the topic comparison (the name is in both texts)
+    const exclude = [...claimedNames, ...matchedName.split(/\s+/)].map((x) => String(x).toLowerCase());
+    if (!send || !sharesDistinctiveToken(claimText, send.text, exclude)) return null;
+    return matchedName;
   } catch { return null; }
 }
 
@@ -1930,7 +1943,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         // 11:40pm: sent to Malieng, then 6s later "haven't messaged them", then re-sent).
         // Check the real outbound log first: if we DID message the claimed recipient
         // recently, the claim is TRUE — keep the model's reply, never lie or re-offer.
-        const alreadySent = await recentlySentTo(db, extractClaimedRecipients(reply), opts.command || "", 30);
+        const alreadySent = await recentlySentTo(db, extractClaimedRecipients(reply), opts.command || "", `${reply} ${opts.command || ""}`, 8);
         if (alreadySent) {
           void import("../events").then(({ emit }) => emit({ type: "sasa.send_claim_confirmed_from_log", source: "agent:sasa", actor: opts.operatorName || "Nur", subject_type: "contact", subject_id: opts.contactId || null, payload: { recipient: alreadySent } })).catch(() => {});
           // claim verified against the outbound log — no substitution, no re-offer.
