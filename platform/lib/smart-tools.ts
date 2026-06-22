@@ -959,12 +959,30 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (tier === "team") return { error: "not available here" };
     const cn = String(input.name || "").trim();
     if (!cn) return { error: "give a contact name" };
-    const { data: contacts } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: contacts } = await db.from("contacts").select("id,name,phone").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(8);
     const list = (contacts || []) as any[];
     if (!list.length) return { found: false, note: `No contact matching "${cn}".` };
-    if (list.length > 1) return { found: false, note: `A few match: ${list.map((c) => c.name).join(", ")}. Which one?` };
-    const { data: msgs } = await db.from("messages").select("direction,channel,subject,body,created_at").eq("contact_id", list[0].id).order("created_at", { ascending: false }).limit(15);
-    return { found: true, contact: list[0].name, count: (msgs || []).length, messages: ((msgs || []) as any[]).map((m) => ({ dir: m.direction, channel: m.channel, subject: m.subject || null, text: String(m.body || "").slice(0, 300), at: m.created_at })) };
+    // DUP-TOLERANT (2026-06-22): never dead-end on our own messy data ("which Cynthia?").
+    // When a name matches several records, RANK by real activity (message count, then
+    // recency) and PROCEED with the most-active one, surfacing a light heads-up so the
+    // operator can correct it. Only ask when NO candidate has a thread at all. We never
+    // merge here — a read is reversible; cleanup is a separate explicit write.
+    let chosen = list[0];
+    let dupNote: string | null = null;
+    if (list.length > 1) {
+      const scored = await Promise.all(list.map(async (c: any) => {
+        const { count } = await db.from("messages").select("id", { count: "exact", head: true }).eq("contact_id", c.id);
+        const { data: last } = await db.from("messages").select("created_at").eq("contact_id", c.id).order("created_at", { ascending: false }).limit(1);
+        return { c, n: count || 0, last: String((last as any[])?.[0]?.created_at || "") };
+      }));
+      scored.sort((a, b) => (b.n - a.n) || (a.last < b.last ? 1 : -1));
+      if (scored[0].n === 0) return { found: false, note: `A few match "${cn}": ${list.slice(0, 4).map((c: any) => c.name).join(", ")}, and none has a conversation yet. Which one, or give me the number?` };
+      chosen = scored[0].c;
+      const last4 = String(chosen.phone || "").replace(/\D/g, "").slice(-4);
+      dupNote = `Heads up, there are ${list.length} records under that name; I'm showing the most active one${last4 ? ` (ending ${last4})` : ""}. Tell me if you meant a different one.`;
+    }
+    const { data: msgs } = await db.from("messages").select("direction,channel,subject,body,created_at").eq("contact_id", chosen.id).order("created_at", { ascending: false }).limit(15);
+    return { found: true, contact: chosen.name, count: (msgs || []).length, dup_note: dupNote, messages: ((msgs || []) as any[]).map((m) => ({ dir: m.direction, channel: m.channel, subject: m.subject || null, text: String(m.body || "").slice(0, 300), at: m.created_at })) };
   }
   // flag_for_clarity (KT #320): the "when unsure, ASK" rail. Logs the request so
   // we can see how often the bot is uncertain, and returns the question for the
