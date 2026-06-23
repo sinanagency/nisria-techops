@@ -32,3 +32,22 @@ export function isAllDuplicates(cands, getKey = (c) => c && c.title) {
   if (!Array.isArray(cands) || cands.length <= 1) return false;
   return new Set(cands.map((c) => normalizeKey(getKey(c)))).size === 1;
 }
+
+// OPEN-DUPLICATE detection for create_task (KT #378, the multiplicity cell from the 727
+// cartography: "Write the weekly newsletter" landed ×3, "Follow up with Mamoun" ×2). A new
+// task must NOT duplicate an already-OPEN one for the SAME assignee. Keyed on normalized
+// title (case/space-insensitive) AND assignee — two people can hold a same-titled task
+// (the identity-before-collapse lesson, [[match-dedup]] / KT #375). Recurrence-safe by
+// construction: the caller passes only NON-done rows, so a completed copy still allows a
+// fresh instance. assignee null/"" compare equal (both unassigned).
+export function isSameOpenTask(rowTitle, rowAssignee, title, assigneeId) {
+  return normalizeKey(rowTitle) === normalizeKey(title) &&
+    String(rowAssignee || "") === String(assigneeId || "");
+}
+
+// Given the OPEN task rows ({title, assignee_id}), return the one that duplicates
+// (title, assigneeId), or null. Caller MUST pass only non-done rows (recurrence-safe).
+export function findOpenDuplicate(openRows, title, assigneeId) {
+  if (!Array.isArray(openRows)) return null;
+  return openRows.find((r) => r && isSameOpenTask(r.title, r.assignee_id, title, assigneeId)) || null;
+}

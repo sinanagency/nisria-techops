@@ -25,6 +25,7 @@ import { withSandbox, isHarnessMessageId } from "../../../../lib/sandbox";
 import { pushIncident } from "../../../../lib/notify";
 import { commitPaymentRow, runSmartTool } from "../../../../lib/smart-tools";
 import { dispatchWindowOpenFor } from "../../../../lib/pending-intents";
+import { findOpenDuplicate } from "../../../../lib/match-dedup.mjs";
 import { humanize } from "../../../../lib/humanize";
 import { readMedia, claudeJSON, HAIKU } from "../../../../lib/anthropic";
 import { transcribeAudio } from "../../../../lib/transcribe";
@@ -899,6 +900,20 @@ async function processJob(db: any, job: any): Promise<void> {
           if (existing && existing[0]) {
             stamped.push({ id: existing[0].id, title: t.title, assignee_name: t.assignee_name });
             continue;
+          }
+          // OPEN-DUPLICATE dedup (KT #378, 727-cartography multiplicity cell). The unique
+          // index below only stops the SAME message duplicating; two DIFFERENT inbound
+          // messages saying "write the weekly newsletter" have different source_id and
+          // leaked ×3 in prod. Block a new task identical to an already-OPEN one for the
+          // SAME assignee (normalized title + assignee — KT #375 identity; only non-done
+          // rows fetched so a completed copy still allows a fresh instance, recurrence-safe).
+          {
+            const { data: openRows } = await db.from("tasks").select("id,title,assignee_id").neq("status", "done");
+            const odup = findOpenDuplicate(openRows || [], t.title, t.assignee_id || null);
+            if (odup) {
+              stamped.push({ id: odup.id, title: t.title, assignee_name: t.assignee_name });
+              continue;
+            }
           }
           // The UNIQUE INDEX idx_tasks_parsed_task_dedup on
           // (source_kind, source_id, title) is the dedup truth: a duplicate

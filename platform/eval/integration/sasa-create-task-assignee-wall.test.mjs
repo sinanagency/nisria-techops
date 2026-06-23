@@ -25,10 +25,11 @@ const SMART = fs.readFileSync(path.resolve(HERE, "..", "..", "lib", "smart-tools
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
 
-// Isolate the create_task region: from its dedup guard ("Already tracked") to the
-// task insert ("assignee_id:").
-const start = SMART.indexOf("Already tracked");
-const region = start >= 0 ? SMART.slice(start, start + 2200) : "";
+// Isolate the create_task region: from the tool head through assignee resolution.
+// (Re-anchored 2026-06-23 KT #378: the open-dup guard moved BELOW assignee resolution,
+// so anchor on the tool head, not the dedup message.)
+const start = SMART.indexOf('if (name === "create_task")');
+const region = start >= 0 ? SMART.slice(start, start + 3000) : "";
 
 if (!region) { fail("could not locate create_task region"); }
 else {

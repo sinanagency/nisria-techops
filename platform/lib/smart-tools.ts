@@ -49,7 +49,7 @@ import { enqueueJob, triggerWorker } from "./jobs";
 import { pushTaskAlert, pushOperatorUpdate, pushCalendarAlert } from "./notify";
 import { registerIntent } from "./pending-intents";
 import { commandReferencesGroup } from "./group-tokens.mjs";
-import { pickFromMatches, isAllDuplicates } from "./match-dedup.mjs";
+import { pickFromMatches, isAllDuplicates, findOpenDuplicate } from "./match-dedup.mjs";
 import { getCalendar, holidayOn, type CalEvent } from "./calendar";
 import { searchInbox, readEmail } from "./gmail";
 import { createEvent as gcalCreate, patchEvent as gcalPatch, deleteEvent as gcalDelete, gcalConfigured } from "./gcal";
@@ -1360,14 +1360,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "create_task") {
     const title = String(input.title || "").trim();
     if (!title) return { ok: false, summary: "I need a title for the task.", error: "no title" };
-    // dedup: if an open task with the same title already exists, do not create a
-    // second one (stops the bot re-creating the same task across a burst of messages).
-    // DOCTRINE-6 (2026-06-15 audit): use .eq, not .ilike, on a model-supplied
-    // string. ilike treats `%` and `_` as wildcards, so a title like "30%
-    // discount" would match unrelated rows. Exact match is what dedup actually
-    // wants here.
-    const { data: dupe } = await db.from("tasks").select("id,title").neq("status", "done").eq("title", title).limit(1);
-    if (dupe?.[0]) return { ok: true, summary: humanize(`Already tracked: "${dupe[0].title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: dupe[0].id, deduped: true } };
+    // NOTE: open-duplicate dedup moved BELOW, to AFTER assignee resolution (KT #378).
+    // The old check keyed on title ALONE and was case-sensitive (.eq), so it both
+    // (a) missed case/space variants ("Write the weekly newsletter" vs "write...") and
+    // (b) wrongly deduped two DIFFERENT people's same-titled tasks ("Call the bank" for
+    // Mark vs Eliza). The replacement keys on normalized title + the RESOLVED assignee.
     // KT #261: speaker-pronoun "Me"/"myself"/"I" must resolve via senderPhone,
     // never via findMember (which would happily fuzzy-match "me" against any
     // name containing "me" — Mehmet, Mediha, etc).
@@ -1401,6 +1398,17 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!member && ctx.senderPhone) {
       const speaker = await findMemberByPhone(db, ctx.senderPhone);
       if (speaker) member = speaker;
+    }
+    // OPEN-DUPLICATE dedup (KT #378, the 727-cartography multiplicity cell). Block creating
+    // a task identical to an already-OPEN one FOR THE SAME ASSIGNEE. Normalized title (so
+    // "Write the weekly newsletter" == "write the weekly newsletter") + the resolved
+    // assignee (so Mark's and Eliza's same-titled tasks stay separate — KT #375 identity).
+    // Only non-done rows are fetched, so a completed copy still allows a fresh instance
+    // (recurrence-safe). The shared findOpenDuplicate is the same fn the wall asserts.
+    {
+      const { data: openRows } = await db.from("tasks").select("id,title,assignee_id").neq("status", "done");
+      const dupe = findOpenDuplicate(openRows || [], title, member?.id || null);
+      if (dupe) return { ok: true, summary: humanize(`Already on the list: "${dupe.title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { task_id: dupe.id, deduped: true } };
     }
     // ACCESS CONTROL (P0): a team-tier caller may only create a task FOR THEMSELVES.
     // If they named someone else -> refuse. (No-assignee already defaulted to the

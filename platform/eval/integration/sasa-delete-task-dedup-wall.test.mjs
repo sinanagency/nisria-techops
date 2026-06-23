@@ -64,7 +64,7 @@ const key = (c) => `${c.title}|${c.assignee_id || ""}`;
   if (!/do NOT collapse by title/.test(ST)) fail("D4c delete_document must NOT collapse by title (versions)");
   else ok("D4c delete_document does NOT collapse by title");
   // the helper is imported
-  if (!/import \{ pickFromMatches, isAllDuplicates \} from "\.\/match-dedup\.mjs";/.test(ST)) fail("D4d smart-tools must import the shared helper");
+  if (!/import \{[^}]*pickFromMatches[^}]*isAllDuplicates[^}]*\} from "\.\/match-dedup\.mjs";/.test(ST)) fail("D4d smart-tools must import the shared helper");
   else ok("D4d smart-tools imports the shared dedup helper");
 }
 

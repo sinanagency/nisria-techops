@@ -29,7 +29,9 @@ const ok = (m) => console.log("PASS:", m);
 
 // Region: from the assignee resolution to the task insert.
 const start = SMART.indexOf("ACCESS CONTROL (P0)");
-const region = start >= 0 ? SMART.slice(start - 900, start + 900) : "";
+// back-window widened 900 -> 2200 (KT #378): the open-dup guard now sits between the
+// creator-default block and ACCESS CONTROL, pushing the block further back.
+const region = start >= 0 ? SMART.slice(start - 2200, start + 900) : "";
 
 // ---- S1: creator-default exists ----
 if (!/CREATOR-DEFAULT|you own what you create|owns? what (you|they) create/i.test(region)) fail("S1 create_task must have a creator-default (assign self when no assignee)");
