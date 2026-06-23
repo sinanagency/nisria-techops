@@ -1313,7 +1313,9 @@ async function processJob(db: any, job: any): Promise<void> {
       }
       if (pickedTask) {
         await db.from("tasks").update({ status: "done", updated_at: new Date().toISOString() }).eq("id", pickedTask.id);
-        await emit({ type: "task.completed", source: "agent:sasa-reaction", actor: opName || name || "Nur", subject_type: "task", subject_id: pickedTask.id, correlation_id: traceId, payload: { title: pickedTask.title, via: "reaction", reaction: trimmedCmd } });
+        // operator_task drives Nur's team-digest (KT #383): a reaction-done from a TEAM member
+        // must show in her wrap-up; her OWN reaction must not. Set from the reactor's rank.
+        await emit({ type: "task.completed", source: "agent:sasa-reaction", actor: opName || name || "Nur", subject_type: "task", subject_id: pickedTask.id, correlation_id: traceId, payload: { title: pickedTask.title, via: "reaction", reaction: trimmedCmd, operator_task: opRank === "owner" || opRank === "founder" } });
         const msg = `Marked "${pickedTask.title}" done.`;
         const r = await sendText(from, msg);
         await db.from("messages").insert({ channel: "whatsapp", direction: "out", body: msg, handled_by: "sasa", status: r.id ? "sent" : "failed", account: "whatsapp", external_id: r.id || null, contact_id: contactId, trace_id: traceId });

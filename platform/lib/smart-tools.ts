@@ -1741,7 +1741,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { error: completeErr } = await db.from("tasks").update(completeUpdate).eq("id", task.id);
     // VERIFIED WRITE (KT #336): never say "Marked done" unless the update landed.
     if (completeErr) return { ok: false, summary: humanize(`I could not mark "${task.title}" done just now, so it is still open. Want me to try again?`, opts), error: (completeErr as any).message || "task complete failed" };
-    await emit({ type: "task.completed", source: "agent:sasa", actor: member?.name || "team", subject_type: "task", subject_id: task.id, payload: { title: task.title, group: task.source_group, reason: reason || null } });
+    // operator_task drives Nur's daily team-digest (cron filters operator_task===false to show
+    // TEAM completions). KT #383: this group/WhatsApp "done" omitted the field → undefined !==
+    // false → team completions silently vanished from the wrap-up. Set it from the COMPLETER's
+    // rank: a team member's completion is non-operator (shows in digest); an owner/founder's is.
+    await emit({ type: "task.completed", source: "agent:sasa", actor: member?.name || "team", subject_type: "task", subject_id: task.id, payload: { title: task.title, group: task.source_group, reason: reason || null, operator_task: ctx.rank === "owner" || ctx.rank === "founder" } });
     // PROFILE CREDIT: stamp the person OWN timeline so a completion shows up on
     // them, not just on the task. Credit the task owner (assignee) when present,
     // else whoever reported it. subject_type team_member is what /team/[id] reads.
@@ -3829,7 +3833,9 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     let cands = (data || []) as any[];
     if (input.payee) cands = cands.filter((p) => String(p.payee || "").toLowerCase().includes(String(input.payee).toLowerCase()));
     if (input.amount) { const a = Number(String(input.amount).replace(/[^0-9.]/g, "")); cands = cands.filter((p) => Number(p.amount) === a); }
-    if (!input.payee && !input.amount) cands = cands.slice(0, 1);
+    // MONEY WRONG-RECORD (KT #382, 727 cartography — same class as update_payment #381).
+    // No silent newest-pick: "delete that payment" with no payee/amount must NOT slice to the
+    // newest bot-logged row. The ambiguity guard below handles it (0 refuse / >1 ask / 1 act).
     if (!cands.length) return { ok: false, summary: humanize("I could not find a payment I logged that matches, so there is nothing to remove.", opts) };
     if (cands.length > 1) return { ok: false, summary: humanize(`Which one should I remove: ${cands.slice(0, 5).map((p) => `${p.currency} ${Number(p.amount).toLocaleString()} to ${p.payee}`).join("; ")}?`, opts), detail: { ambiguous: true } };
     const p = cands[0];
