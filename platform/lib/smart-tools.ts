@@ -3844,7 +3844,12 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     let cands = (data || []) as any[];
     if (input.match_payee) cands = cands.filter((p) => String(p.payee || "").toLowerCase().includes(String(input.match_payee).toLowerCase()));
     if (input.match_amount) { const a = Number(String(input.match_amount).replace(/[^0-9.]/g, "")); cands = cands.filter((p) => Number(p.amount) === a); }
-    if (!input.match_payee && !input.match_amount) cands = cands.slice(0, 1);
+    // MONEY WRONG-RECORD (KT #381, 727 cartography). Do NOT silently fall through to the
+    // NEWEST bot-logged payment when the model gave NO match criteria (the old slice(0,1)).
+    // "Change that payment to 5000" with no payee/amount anchor must NOT edit whatever was
+    // logged last — it might be the wrong one. Mirrors delete_task's "too generic to act"
+    // discipline (KT #274). The ambiguity guard below now handles it: 0 → refuse, >1 → ask,
+    // exactly 1 → unambiguous (a sole logged payment is safe to edit without a match anchor).
     if (!cands.length) return { ok: false, summary: humanize("I could not find a payment I logged to correct.", opts) };
     if (cands.length > 1) return { ok: false, summary: humanize(`Which payment: ${cands.slice(0, 5).map((p) => `${p.currency} ${Number(p.amount).toLocaleString()} to ${p.payee}`).join("; ")}?`, opts), detail: { ambiguous: true } };
     const p = cands[0];
