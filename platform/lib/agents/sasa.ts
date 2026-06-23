@@ -2312,6 +2312,20 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
           { now: { long: n.long, today: n.today } },
         );
       }
+      // RELEVANCE GATE (KT #391, the canned-template loop). The model sometimes PARROTS a guard
+      // line (HONEST_NO_SEND "I logged that, but I have not actually messaged them...") as raw
+      // output to an UNRELATED turn ("Yo" / "Who is them?" / "cool sure") — a non-sequitur that
+      // recurred ~15x in the 48h transcript and which the hedge-loop breaker structurally skips
+      // (it ignores guard-marked lines). If WE did not substitute it (alreadySubstituted=false, so
+      // the model produced it itself) AND the command is not a send / task / send-state request,
+      // the canned line is irrelevant: replace it with a neutral re-ask, never repeat the template.
+      if (!alreadySubstituted && guardOutputMark().test(String(reply || ""))
+        && !SEND_STATE_QUESTION.test(String(opts.command || ""))
+        && !/\b(?:messag|text|sen[dt]|tell|told|notif|relay|post|email|remind|follow ?up|assign|task|draft|flag)\b/i.test(String(opts.command || ""))) {
+        reply = humanize(HONEST_NO_ACTION_REASK, { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
+        try { const { emit } = await import("../events"); await emit({ type: "sasa.canned_nonsequitur_replaced", source: "agent:sasa", actor: opts.operatorName || "?", subject_type: "contact", subject_id: opts.contactId || null, payload: { command: String(opts.command || "").slice(0, 160) } }); } catch {}
+      }
     }
     return { reply, actions: serialize(actions), toolsRan: toolRuns.map((t) => t.name) };
   }
