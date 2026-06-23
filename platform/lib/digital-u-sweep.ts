@@ -159,15 +159,25 @@ export async function sweepNurInbox(): Promise<SweepResult> {
         continue;
       }
       const scheduledAt = new Date(joinAt - 30_000).toISOString();
+      // RESERVE-BEFORE-DISPATCH (KT #387, 727 cartography). The ledger row used to be written
+      // AFTER dispatch in a swallowed catch — so a ledger failure post-dispatch let the next
+      // 5-min tick re-dispatch the same meeting (two bots join, Nur pinged twice). Claim the
+      // gmail_id FIRST (outcome "dispatching"); the next tick then sees it and skips. On a
+      // dispatch FAILURE we RELEASE the claim so a later tick can retry (no silent never-join).
+      const { error: reserveErr } = await db.from("digital_u_latched").insert({ gmail_id: hit.id, outcome: "dispatching" });
+      if (reserveErr) { errors.push(`reserve ${hit.id}: ${(reserveErr as any).message || "claim failed"}`); continue; }
       const r = await dispatchMeetingBot({
         link: ext.link,
         title: ext.title || hit.subject || "Meeting",
         scheduledAt,
         displayName: "Digital Nur",
       });
-      if (!r.ok) { failed++; errors.push(`dispatch ${hit.id}: ${r.error}`); continue; }
-
-      try { await db.from("digital_u_latched").insert({ gmail_id: hit.id, outcome: "dispatched", meeting_id: r.eventId || r.botId || null }); } catch {}
+      if (!r.ok) {
+        failed++; errors.push(`dispatch ${hit.id}: ${r.error}`);
+        try { await db.from("digital_u_latched").delete().eq("gmail_id", hit.id).eq("outcome", "dispatching"); } catch {}
+        continue;
+      }
+      try { await db.from("digital_u_latched").update({ outcome: "dispatched", meeting_id: r.eventId || r.botId || null }).eq("gmail_id", hit.id); } catch {}
       latchedCount++;
 
       // Heads-up to Nur in Sasa's voice. Best-effort; never blocks the latch.

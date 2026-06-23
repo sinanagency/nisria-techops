@@ -50,7 +50,7 @@ import { pushTaskAlert, pushOperatorUpdate, pushCalendarAlert } from "./notify";
 import { registerIntent } from "./pending-intents";
 import { commandReferencesGroup } from "./group-tokens.mjs";
 import { pickFromMatches, isAllDuplicates, findOpenDuplicate } from "./match-dedup.mjs";
-import { classifyNameMatch, isBareFirstName } from "./resolve-name.mjs";
+import { classifyNameMatch, isBareFirstName, preferExact } from "./resolve-name.mjs";
 import { getCalendar, holidayOn, type CalEvent } from "./calendar";
 import { searchInbox, readEmail } from "./gmail";
 import { createEvent as gcalCreate, patchEvent as gcalPatch, deleteEvent as gcalDelete, gcalConfigured } from "./gcal";
@@ -2617,7 +2617,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!qn) return { ok: false, summary: "Which beneficiary?", error: "no name" };
     const esc = qn.replace(/[,()*%]/g, "");
     const { data: matches } = await db.from("beneficiaries").select("id,full_name,public_name").or(`full_name.ilike.%${esc}%,public_name.ilike.%${esc}%`).limit(5);
-    const list = (matches || []) as any[];
+    const list: any[] = preferExact((matches || []) as any[], qn, "full_name"); // exact-name preference (KT #386)
     if (!list.length) return { ok: false, summary: humanize(`I could not find a beneficiary called ${qn}.`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`There are a few that match: ${list.map((b) => b.full_name || b.public_name).join(", ")}. Which one?`, opts) };
     const b = list[0];
@@ -2654,7 +2654,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!qn) return { ok: false, summary: "Which beneficiary?", error: "no name" };
     const esc = qn.replace(/[,()*%]/g, "");
     const { data: matches } = await db.from("beneficiaries").select("id,full_name,public_name,ref_code,status").is("intake_stage", null).or(`full_name.ilike.%${esc}%,public_name.ilike.%${esc}%`).limit(5);
-    const list = (matches || []) as any[];
+    const list: any[] = preferExact((matches || []) as any[], qn, "full_name"); // exact-name preference (KT #386)
     if (!list.length) return { ok: false, summary: humanize(`I could not find an accepted beneficiary called ${qn}. (A case in intake is removed with delete_case.)`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`There are a few that match: ${list.map((b) => b.full_name || b.public_name).join(", ")}. Which one?`, opts) };
     const b = list[0];
@@ -2791,7 +2791,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!nm) return { ok: false, summary: "Which case?", error: "no name" };
     const like = `%${nm.replace(/[,()*%]/g, "")}%`;
     const { data: cases } = await db.from("beneficiaries").select("id,full_name,ref_code,triage_notes,photo_asset_id,intake_stage").not("intake_stage", "is", null).ilike("full_name", like).limit(5);
-    const list = (cases || []) as any[];
+    const list: any[] = preferExact((cases || []) as any[], nm, "full_name"); // exact-name preference (KT #386)
     if (!list.length) return { ok: false, summary: humanize(`I do not see a case for ${nm}.`, opts) };
     // NB (KT #375): do NOT collapse "duplicates" by name here — a case is a PERSON, and two
     // children can genuinely share a name. Name ≠ identity, so collapsing would risk acting on
@@ -3155,7 +3155,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const cname = String(input.name || "").trim();
     if (!cname) return { ok: false, summary: "Which contact?", error: "no name" };
     const { data: matches } = await db.from("contacts").select("id,name").ilike("name", `%${cname.replace(/[,()*%]/g, "")}%`).limit(5);
-    const list = (matches || []) as any[];
+    const list: any[] = preferExact((matches || []) as any[], cname, "name"); // exact-name preference (KT #386)
     if (!list.length) return { ok: false, summary: humanize(`I could not find a contact called ${cname}.`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
     const patch: any = {}; const changed: string[] = [];
@@ -3506,7 +3506,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const iname = String(input.name || "").trim();
     if (!iname) return { ok: false, summary: "Which item?", error: "no name" };
     const { data: matches } = await db.from("inventory").select("id,name").ilike("name", `%${iname.replace(/[,()*%]/g, "")}%`).limit(5);
-    const list = (matches || []) as any[];
+    const list: any[] = preferExact((matches || []) as any[], iname, "name"); // exact-name preference (KT #386)
     if (!list.length) return { ok: false, summary: humanize(`I could not find an inventory item matching "${iname}".`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few items match: ${list.map((i) => i.name).join(", ")}. Which one?`, opts) };
     const patch: any = { updated_at: new Date().toISOString() }; const changed: string[] = [];

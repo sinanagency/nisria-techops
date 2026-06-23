@@ -20,6 +20,16 @@ export function isBareFirstName(query) {
 //   { kind:"fuzzy-one",  pick } — no exact match, a sole substring hit
 //   { kind:"fuzzy-many", ask  } — no exact match, several substring hits, ask
 //   { kind:"none" }             — nothing matched
+// Narrow a fuzzy candidate list to a UNIQUE exact-name match when one exists; otherwise
+// return the list unchanged (never worse). Lets a resolver prefer the person the operator
+// EXACTLY named over a longer-substring sibling ("Ahmed" over "Ahmed Khan"), instead of
+// asking or shadowing. Used by the MED/LOW intake-edit resolvers (KT #386).
+export function preferExact(list, query, field = "full_name") {
+  const ls = (list || []).filter(Boolean);
+  const ex = ls.filter((r) => normName(r[field]) === normName(query));
+  return ex.length === 1 ? ex : ls;
+}
+
 export function classifyNameMatch(candidates, query, field = "full_name") {
   const cands = (candidates || []).filter(Boolean);
   if (!cands.length) return { kind: "none" };

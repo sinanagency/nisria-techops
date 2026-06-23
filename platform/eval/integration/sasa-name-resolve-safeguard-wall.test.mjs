@@ -53,7 +53,7 @@ const ok = (m) => console.log("PASS:", m);
 
 // ---- N5: the safeguarding resolver is wired to the shared decision + the floor ----
 {
-  if (!/import \{ classifyNameMatch, isBareFirstName \} from "\.\/resolve-name\.mjs";/.test(ST))
+  if (!/import \{[^}]*classifyNameMatch[^}]*isBareFirstName[^}]*\} from "\.\/resolve-name\.mjs";/.test(ST))
     fail("N5a smart-tools must import the shared name resolver");
   else ok("N5a smart-tools imports resolve-name");
   const i = ST.indexOf("CHILD-SAFEGUARDING resolver (KT #385");
