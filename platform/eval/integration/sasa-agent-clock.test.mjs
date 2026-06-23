@@ -72,7 +72,7 @@ check("seam: lib/now.ts keeps the legacy formatters byte-stable", () => {
 
 check("seam: sasa.ts imports clockBlock from ../now", () => {
   const src = read("lib/agents/sasa.ts");
-  if (!/import \{ now, clockBlock \} from "\.\.\/now"/.test(src)) {
+  if (!/import \{[^}]*\bnow\b[^}]*\bclockBlock\b[^}]*\} from "\.\.\/now"/.test(src)) {
     return "clockBlock import missing from lib/agents/sasa.ts";
   }
   return null;

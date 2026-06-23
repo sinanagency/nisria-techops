@@ -146,7 +146,7 @@ export async function pushTaskAlert(
       }
       await emit({
         type: "task.alert_sent", source: "notify", actor: "system", subject_type: "task", subject_id: task.id,
-        payload: { kind, title, priority: task.priority || null, due_on: task.due_on || null, to: pinged.map((p) => p.slice(-4)) },
+        payload: { kind, title, priority: task.priority || null, due_on: task.due_on || null, to: pinged.map((p) => p.slice(-4)), to_names: pinged.map((p) => roster.find((m) => phoneKey(m.phone) === p)?.name).filter(Boolean) },
       });
       return { pinged };
     }
@@ -161,7 +161,7 @@ export async function pushTaskAlert(
     }
     await emit({
       type: "task.alert_sent", source: "notify", actor: "system", subject_type: "task", subject_id: task.id,
-      payload: { kind, title, priority: task.priority || null, due_on: task.due_on || null, to: pinged.map((p) => p.slice(-4)) },
+      payload: { kind, title, priority: task.priority || null, due_on: task.due_on || null, to: pinged.map((p) => p.slice(-4)), to_names: pinged.map((p) => roster.find((m) => phoneKey(m.phone) === p)?.name).filter(Boolean) },
     });
     return { pinged };
   } catch (err) {
@@ -262,7 +262,7 @@ export async function pushTaskDigest(
     for (const t of list) {
       await emit({
         type: "task.alert_sent", source: "notify", actor: "system", subject_type: "task", subject_id: t.id,
-        payload: { kind: "new", digest: true, count: list.length, title: t.title, priority: t.priority || null, due_on: t.due_on || null, to: pinged.map((p) => p.slice(-4)) },
+        payload: { kind: "new", digest: true, count: list.length, title: t.title, priority: t.priority || null, due_on: t.due_on || null, to: pinged.map((p) => p.slice(-4)), to_names: pinged.map((p) => roster.find((m) => phoneKey(m.phone) === p)?.name).filter(Boolean) },
       });
     }
     return { pinged };

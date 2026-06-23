@@ -30,7 +30,7 @@ const ok = (m) => console.log("PASS:", m);
 
 // Isolate the send() primitive body for ordering checks.
 const sendStart = WA.indexOf("async function send(");
-const sendEnd = WA.indexOf("export function sendText(");
+const sendEnd = WA.indexOf("export async function sendText(");
 const SEND = sendStart >= 0 && sendEnd > sendStart ? WA.slice(sendStart, sendEnd) : "";
 
 // ---- A1: mirror dispatched AFTER the fetch resolves with a real id ----

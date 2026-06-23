@@ -37,7 +37,8 @@ const ok = (m) => console.log("PASS:", m);
 {
   const i = SASA.indexOf("claimsSendWithoutSend(reply, toolRuns)");
   // the arm body runs from the `else if (claimsSendWithoutSend...` to the next `} else if`
-  const region = i >= 0 ? SASA.slice(i, i + 1600) : "";
+  // (widened 2026-06-22 KT #372: the cross-turn self-recall block precedes the stage arm)
+  const region = i >= 0 ? SASA.slice(i, i + 2600) : "";
   if (!region) fail("S1 the claimsSendWithoutSend arm must still exist");
   else if (!/extractSendTarget\(/.test(region)) fail("S1 the arm must derive the intended send target (extractSendTarget)");
   else if (!/kind:\s*"send_message"/.test(region)) fail("S1 the arm must stage a send_message pending_action so 'yes' can commit it");
@@ -99,7 +100,7 @@ const ok = (m) => console.log("PASS:", m);
 // ---- S3: confirm gate commits the send for real ----
 {
   const i = W.indexOf('p.kind === "send_message"');
-  const region = i >= 0 ? W.slice(i - 40, i + 2400) : "";
+  const region = i >= 0 ? W.slice(i - 40, i + 2900) : "";
   if (!region) fail("S3 the confirm gate must handle kind==='send_message'");
   else if (!/runSmartTool\("message_person"/.test(region)) fail("S3 send commit must reuse message_person (single send path, idempotency), not a forked sender");
   else if (!/detail\?\.unresolved/.test(region) || !/detail\?\.ambiguous/.test(region)) fail("S3 the send result must be VERIFIED (a non-resolved/ambiguous result is NOT a send)");
@@ -139,7 +140,7 @@ const ok = (m) => console.log("PASS:", m);
 // ---- S5: deduped is NOT a fresh 'Sent' (skeptic #2 honesty) ----
 {
   const i = W.indexOf('p.kind === "send_message"');
-  const region = i >= 0 ? W.slice(i - 40, i + 2400) : "";
+  const region = i >= 0 ? W.slice(i - 40, i + 2900) : "";
   if (!/detail\?\.deduped/.test(region)) fail("S5 the gate must special-case a deduped result (it means nothing NEW went out)");
   else if (!/already sent to \$\{to\}/.test(region)) fail("S5 a deduped send must be reported honestly as already-sent, never a fresh 'Sent to X'");
   else ok("S5 a deduped (nothing-new-sent) result is reported honestly, not as a fresh send");
@@ -148,7 +149,7 @@ const ok = (m) => console.log("PASS:", m);
 // ---- S6: the gate re-checks the LIVE operator rank (skeptic #3 authz) ----
 {
   const i = W.indexOf('p.kind === "send_message"');
-  const region = i >= 0 ? W.slice(i - 40, i + 2400) : "";
+  const region = i >= 0 ? W.slice(i - 40, i + 2900) : "";
   if (!/opRank === "owner" \|\| opRank === "founder"/.test(region)) fail("S6 the send branch must re-derive authority from the LIVE operator (opRank), not trust payload.rank");
   else if (!/Only Nur or Taona can send/.test(region)) fail("S6 a non-owner/founder confirming must be refused honestly, not silently sent");
   else if (!/rank:\s*\(opRank as any\)/.test(region)) fail("S6 the message_person call must pass the LIVE opRank, not the staged payload.rank");

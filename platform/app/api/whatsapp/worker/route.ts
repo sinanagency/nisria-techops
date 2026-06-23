@@ -24,12 +24,14 @@ import { autoCapture } from "../../../../lib/memory-extract";
 import { withSandbox, isHarnessMessageId } from "../../../../lib/sandbox";
 import { pushIncident } from "../../../../lib/notify";
 import { commitPaymentRow, runSmartTool } from "../../../../lib/smart-tools";
+import { dispatchWindowOpenFor } from "../../../../lib/pending-intents";
 import { humanize } from "../../../../lib/humanize";
 import { readMedia, claudeJSON, HAIKU } from "../../../../lib/anthropic";
 import { transcribeAudio } from "../../../../lib/transcribe";
 import { createBatch } from "../../../../lib/ingest";
 import { storeMedia } from "../../../../lib/media-store";
 import { extractTextFromBuffer } from "../../../../lib/extract-text";
+import { intakeIsCase } from "../../../../lib/intake-class.mjs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -177,11 +179,14 @@ async function processJob(db: any, job: any): Promise<void> {
           await pushIncident("notetaker", `Dispatch failed: ${String(dispatch.error || "unknown").slice(0, 300)}`);
         } catch (e: any) { console.error("[worker:notetaker_fail]", e?.message || e); }
       }
-      const reply = dispatch.ok
-        ? scheduledAt
-          ? `On it. Digital Nur will join that meeting when it starts and send you the notes here.`
-          : `On it. I'm sending the notetaker to that meeting now as ${displayName}. I will message you here with the summary and your action items when the room closes.`
-        : `I could not get the notetaker into that meeting just now, so I have not, and I have flagged it to the team to fix. I've saved the link so you can ask me to retry, or take the notes yourself and send them to me to file.`;
+      // KT #361 (Law 11): /api/dispatch 200 means QUEUED, not joined (engine joins
+      // in a detached IIFE after the 200). Reply claims only the dispatch + tells
+      // Nur to admit the bot from the Zoom waiting room (the usual no-join cause).
+      const reply = !dispatch.ok
+        ? `I could not get the notetaker into that meeting just now, so I have not, and I have flagged it to the team to fix. I've saved the link so you can ask me to retry, or take the notes yourself and send them to me to file.`
+        : scheduledAt
+          ? `On it. ${displayName} will join that meeting when it starts. One thing: if your Zoom has a waiting room, admit "${displayName}" when it asks to join, otherwise it cannot get in. I will send the notes here once the room closes, and tell you here if it could not get in.`
+          : `On it. I'm dispatching ${displayName} to that meeting now. One thing: if your Zoom has a waiting room, admit "${displayName}" when you see it ask to join, otherwise it cannot get in. Once it is in I will send the summary and your action items here when the room closes, and if it cannot get in I will tell you here so you are never left wondering.`;
       // KT #345: dev:true must come from a genuine harness/test message id, NOT from
       // owner RANK. Coupling dev-mode to opRank meant every REAL owner notetaker/cancel
       // reply was treated as Law-12 test traffic — rerouted + the messages insert
@@ -283,7 +288,13 @@ async function processJob(db: any, job: any): Promise<void> {
         }
         if (extracted) {
           const kind = isDoc ? "document" : "image/screenshot";
-          command = `${text ? text + "\n\n" : ""}[${kind} attachment, here is what it shows]\n${extracted}\n\nIf the above shows payments Nur made, record each one with record_payment. Otherwise act on it appropriately.`;
+          command = role === "team"
+            // A TEAM MEMBER sent a document/photo. It is ALREADY saved on file (ingest below).
+            // Do NOT tell them to forward it to Nur themselves — summarise it and, if it is
+            // something Nur should know about (a case update, report, intake, photos), use
+            // flag_to_nur so she gets it on WhatsApp and decides to flag or keep.
+            ? `${text ? text + "\n\n" : ""}[${kind} attachment from a team member, here is what it shows]\n${extracted}\n\nThis is already saved on file. If it is something Nur should see (a case update, report, intake, or photos), use flag_to_nur with a short summary of who sent it and what it is. Do NOT ask the sender to forward it to Nur themselves. Then thank them briefly.`
+            : `${text ? text + "\n\n" : ""}[${kind} attachment, here is what it shows]\n${extracted}\n\nIf the above shows payments Nur made, record each one with record_payment. Otherwise act on it appropriately.`;
           // POPULATE ACCORDINGLY (one-brain + local-first laws): a document Nur
           // sends is not just chat. Write its content back onto the inbound message
           // (so the thread stops reading as a bare "[document]") and route it
@@ -402,6 +413,20 @@ async function processJob(db: any, job: any): Promise<void> {
   }
 
   // ──────────────────────────────────────────────────────────────────────
+  // PENDING-INTENTS FLUSH (window_open) — KT #206542. This inbound just (re)opened
+  // `from`'s 24h WhatsApp window, so any relay we HELD for this person while they
+  // were unreachable can go out now. Runs after the coalescer (once per burst, on
+  // the winner) and does NOT return: the normal turn still runs after. `isLive`
+  // gates out harness + maintenance so a TEST message can never fire a held send at
+  // a real user (guardrail 5). Best-effort + fail-open inside the helper; dark until
+  // the pending_intents table exists (it no-ops if absent), so deploying this before
+  // the migration changes nothing.
+  try {
+    const isLive = !!(text || mediaId) && !isHarnessMessageId(waMsgId) && process.env.MAINTENANCE_MODE !== "1";
+    await dispatchWindowOpenFor(db, from, { isLive, senderContactId: contactId, traceId });
+  } catch { /* a flush fault must never block the turn */ }
+
+  // ──────────────────────────────────────────────────────────────────────
   // COMPLETE-TASK NOTE SLOT (2026-06-20, KT #324). When a team-tier member is
   // mid-completion (complete_task resolved exactly one task, then asked "what was
   // the outcome?"), it staged a pending_actions slot kind='complete_task_awaiting_note'
@@ -493,7 +518,15 @@ async function processJob(db: any, job: any): Promise<void> {
       // Confirmations must be unambiguous; gratitude must not commit money.
       const yes = /^(?:👍|✅|💯)|^(?:please\s+|ok(?:ay)?\s+|yes\s+|yeah\s+|sure\s+)?(?:y|yes|yep+|yeah|yup|yebo|confirm(?:ed)?|verif(?:y|ied)|correct|that'?s right|go ahead|go for it|do it|do that|make it so|proceed|send(?: it)?|post it|log it|save it|please do|approved?|ok(?:ay)?|sounds good|looks good|lgtm|perfect|great|absolutely|sure|fine|sawa(?:\s+sawa)?|ndio|ndiyo|haya|poa)\b/.test(t);
       const no = /^(?:👎|🚫)|^(?:n|no|nope|nah|cancel|don'?t|do not|stop|wrong|hold(?:\s+on)?|wait|not yet|later|scrap|hapana|la)\b/.test(t);
-      if (yes) {
+      // C2 (KT #374, skeptic E): an irreversible MONEY/destructive action (kind confirm_action)
+      // must NEVER commit on a soft conversational affirmative ("perfect", "great", "ok", "sure",
+      // "sounds good") — the team already paid for that class once (🙏 auto-logged a payment,
+      // see above). When the pending set holds a confirm_action, require a STRICT, unambiguous
+      // yes (yes/confirm/do it/log it/go ahead + explicit ✅👍), excluding the praise words.
+      const hasIrreversible = (pend || []).some((p: any) => p.kind === "confirm_action");
+      const strictYes = /^(?:✅|👍)\s*$|^(?:please\s+|ok(?:ay)?\s+)?(?:yes|yeah|yep+|yup|confirm(?:ed)?|do it|do that|log it|send it|go ahead|go for it|approved?|correct|ndio|ndiyo)\b/.test(t);
+      const effectiveYes = hasIrreversible ? strictYes : yes;
+      if (effectiveYes) {
         // The resolver now serves more than one kind. Payments commit to a row
         // and read back as "Logged X"; a bank_import reads its ledger and hands
         // back a Nur draft for the owner to review. Keep the two streams apart
@@ -549,17 +582,51 @@ async function processJob(db: any, job: any): Promise<void> {
             if (!liveAdmin) {
               okItem = false; notes.push("Only Nur or Taona can send messages from this line, so I did not send it.");
             } else if (to && text) {
-              const r: any = await runSmartTool("message_person", { to, text }, { contactId, tier: "admin", rank: (opRank as any) || "owner", operatorName: "Nur", traceId: traceId || undefined });
+              // KT #206542: during a harness run, wrap the confirm-gate send so an
+              // off-window relay enqueued here is tagged origin='harness' (via
+              // isSandbox()), never 'live', so a test "yes" can never plant a row that
+              // later fires at a real user.
+              const _sendCall = () => runSmartTool("message_person", { to, text }, { contactId, tier: "admin", rank: (opRank as any) || "owner", operatorName: "Nur", traceId: traceId || undefined });
+              const r: any = isHarnessMessageId(waMsgId) ? await withSandbox(_sendCall) : await _sendCall();
               // KT #357 honesty (skeptic #2): a deduped result means NOTHING new went
               // out this turn, so it must NOT be reported as a fresh "Sent". Report it
               // honestly as already-sent (and commit so it does not linger).
               if (r?.ok === true && r?.detail?.deduped) { notes.push(`That was already sent to ${to}, so I did not send a duplicate.`); }
+              else if (r?.ok === true && r?.detail?.queued) {
+                // KT #206542: the recipient was outside their 24h window at confirm
+                // time, so message_person HELD the relay as a window_open intent. It is
+                // NOT sent yet, so it must NEVER be reported as "Sent". Report the honest
+                // held line; okItem stays true so the staged action commits (the durable
+                // intent now owns delivery, it fires when they next message in).
+                notes.push(r?.summary ? String(r.summary) : `${to} is outside the 24-hour window, so I've held your message and will send it the moment they next message in.`);
+              }
               else {
-                const reallySent = r?.ok === true && !r?.detail?.unresolved && !r?.detail?.ambiguous;
+                const reallySent = r?.ok === true && !r?.detail?.unresolved && !r?.detail?.ambiguous && !r?.detail?.queued;
                 if (reallySent) sent.push(to);
                 else { okItem = false; failed.push(`message to ${to}`); if (r?.summary) notes.push(String(r.summary)); }
               }
             } else { okItem = false; failed.push("message"); }
+          }
+          else if (p.kind === "confirm_action") {
+            // C2 (KT #374): a staged HIGH-side-effect tool the operator just confirmed.
+            // Re-derive authority from the LIVE operator replying "yes" (never trust the
+            // staged payload) — these are privileged, irreversible acts (payout/delete/...).
+            // Owner/founder only. Run the REAL tool now with confirmWrites OFF so it EXECUTES
+            // (not re-stages), and report its OWN verified summary (never a fabricated "done").
+            const liveAdmin = opRank === "owner" || opRank === "founder";
+            const tool = String(p.payload?.tool || "");
+            const args = (p.payload?.args || {}) as any;
+            // C2 (skeptic C): the gate is a generic dispatcher, so a tool may run ONLY if it is
+            // on the confirm-able allowlist — a stale/edited payload can never make "yes" fire an
+            // unintended tool. Grows by code as we gate more tools (no migration).
+            const CONFIRMABLE_TOOLS = new Set(["log_payout", "delete_event", "delete_contact", "delete_case", "delete_document", "delete_payment"]);
+            if (!liveAdmin) { okItem = false; notes.push("Only Nur or Taona can confirm that action, so I have not."); }
+            else if (!tool || !CONFIRMABLE_TOOLS.has(tool)) { okItem = false; failed.push(p.summary || "action"); }
+            else {
+              const r: any = await runSmartTool(tool, args, { contactId, tier: "admin", rank: (opRank as any) || "owner", operatorName: opName || "Nur", traceId: traceId || undefined });
+              if (r?.ok === true) { notes.push(r?.summary ? String(r.summary) : `Done: ${p.summary || tool}.`); }
+              else { okItem = false; failed.push(p.summary || tool); if (r?.summary) notes.push(String(r.summary)); }
+            }
           }
           else { done.push(p.summary || "item"); }
           if (okItem) await db.from("pending_actions").update({ status: "committed", resolved_at: new Date().toISOString() }).eq("id", p.id);
@@ -1528,14 +1595,28 @@ async function processJob(db: any, job: any): Promise<void> {
   // writes DETERMINISTICALLY and we confirm the REAL row. Owner/founder only. "case" →
   // intake (casesIntake → intake_stage under_review); "beneficiary" → accepted record.
   // No name extracted → ask (never drop). Falls through to the brain on no match.
-  if (contactId && command && (opRank === "owner" || opRank === "founder")) {
+  // INTAKE is open to owner/founder AND to a team member with a 727 line (bot_access):
+  // the team tier doctrine explicitly allows "beneficiary intakes", with decisions
+  // routed to Nur. A team member can ONLY ever open a CASE (intake/under_review,
+  // never an accepted beneficiary), so a stranger off the street can never be
+  // auto-accepted into the active roster by a non-founder. (Bug 3, KT #367.)
+  const isAdminIntake = opRank === "owner" || opRank === "founder";
+  const canIntake = isAdminIntake || (role === "team" && botAccess === true);
+  if (contactId && command && canIntake) {
     const intakeIntent =
       (/\b(?:new|add(?:\s+a)?|register|intake|create(?:\s+a)?|log(?:\s+a)?|onboard)\s+(?:a\s+)?(?:case|beneficiar(?:y|ies)|child|family)\b/i.test(command)
         || /\bthis\s+is\s+a\s+new\s+(?:case|beneficiary|child|family)\b/i.test(command))
       && !/\b(?:list|show|find|search|how\s+many|status|update|edit|set|delete|remove|merge|approve|decline|move)\b/i.test(command);
     if (intakeIntent) {
       try {
-        const asCase = /\bcase\b/i.test(command) && !/\bbeneficiar/i.test(command);
+        // DEFAULT TO A CASE (intake / under_review) — never auto-accept. The old
+        // `case && !beneficiar` was defeated by "new case, not a beneficiary" (the word
+        // "beneficiary" anywhere flipped it to an accepted record). Now: a record is an
+        // ACCEPTED beneficiary ONLY when an admin EXPLICITLY says "beneficiary" and does
+        // NOT say "case". Everything else (bare "child"/"family", any "case", any team
+        // intake) lands as a CASE for Nur to approve on /cases.
+        const asCase = intakeIsCase(command, isAdminIntake);
+        const intakeName = opName || "Nur";
         const SYS = "You extract child/family intake fields for an NGO from ONE message. Return STRICT JSON with keys: full_name (string), age (number or null), region (string or null), program (one of safe_house|education|rescue|nutrition|other or null), gender (male|female|other or null), guardian_status (string or null), story (string or null). Use ONLY facts EXPLICITLY stated in the message. NEVER invent, guess, or infer a value that is not written. If the name is not stated, set full_name to null.";
         const ex: any = await claudeJSON(SYS, command, 400, HAIKU);
         if (ex && typeof ex.full_name === "string" && ex.full_name.trim()) {
@@ -1547,10 +1628,11 @@ async function processJob(db: any, job: any): Promise<void> {
             gender: ex.gender || undefined,
             guardian_status: ex.guardian_status || undefined,
             story: ex.story || undefined,
-          }, { contactId, tier: "admin", rank: opRank, operatorName: "Nur", casesIntake: asCase, traceId: traceId || undefined });
+          }, { contactId, tier: isAdminIntake ? "admin" : "team", rank: opRank, operatorName: intakeName, casesIntake: asCase, traceId: traceId || undefined });
           if (r?.ok) {
-            await sendTextAndLog(db, from, r.summary || `Added ${ex.full_name.trim()}${asCase ? " as a new case (in intake)" : ""}.`, { contactId, handledBy: "sasa", trace_id: traceId });
-            await emit({ type: "sasa.intake_added", source: "agent:sasa", actor: "Nur", subject_type: "beneficiary", subject_id: contactId, correlation_id: traceId, payload: { name: ex.full_name.trim(), as_case: asCase } }).catch(() => {});
+            const teamNote = isAdminIntake ? "" : " I've opened it as a case for Nur to review.";
+            await sendTextAndLog(db, from, (r.summary || `Added ${ex.full_name.trim()}${asCase ? " as a new case (in intake)" : ""}.`) + teamNote, { contactId, handledBy: "sasa", trace_id: traceId });
+            await emit({ type: "sasa.intake_added", source: "agent:sasa", actor: intakeName, subject_type: "beneficiary", subject_id: contactId, correlation_id: traceId, payload: { name: ex.full_name.trim(), as_case: asCase, by_role: role || "admin" } }).catch(() => {});
             await markJobDone(job.id); return;
           }
           // tool returned not-ok -> fall through to the brain (it answers honestly)

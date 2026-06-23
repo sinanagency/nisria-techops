@@ -8,6 +8,9 @@
 // Credentials live in env (set in Vercel):
 //   WHATSAPP_TOKEN            - access token with whatsapp_business_messaging
 //   WHATSAPP_PHONE_NUMBER_ID  - the sending number's Phone Number ID (NOT the WABA id)
+import { formatWhatsApp, splitForWhatsApp } from "./whatsapp-format.mjs";
+import { sameNumber } from "./phone.mjs";
+
 const GRAPH = "https://graph.facebook.com/v21.0";
 const PHONE_ID = () => process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 const TOKEN = () => process.env.WHATSAPP_TOKEN || "";
@@ -166,8 +169,42 @@ async function send(payload: Record<string, any>): Promise<{ id: string | null; 
 }
 
 // Free-form text reply (24h window). `to` is the recipient's wa_id (digits, no +).
-export function sendText(to: string, body: string) {
-  return send({ to, type: "text", text: { body: String(body).slice(0, 4096), preview_url: false } });
+//
+// The format seam (2026-06-21). The body is run through formatWhatsApp first so the
+// model's Markdown becomes real WhatsApp formatting (no literal **stars** or ###),
+// then splitForWhatsApp guarantees long answers arrive in ordered bubbles instead of
+// the old SILENT 4096-char truncation that dropped the rest of a reply. This is the
+// one text chokepoint every path funnels through (sendTextAndLog, reminders, fanouts,
+// smart-tools all call sendText), so the guarantee cannot be bypassed. A chunk that
+// fails to send stops the rest (no half-garbled spill) and surfaces the error.
+export async function sendText(to: string, body: string): Promise<{ id: string | null; error?: string }> {
+  const chunks = splitForWhatsApp(formatWhatsApp(String(body)));
+  if (chunks.length <= 1) {
+    return send({ to, type: "text", text: { body: (chunks[0] ?? "").slice(0, 4096), preview_url: false } });
+  }
+  let first: { id: string | null; error?: string } | null = null;
+  for (let i = 0; i < chunks.length; i++) {
+    const r = await send({ to, type: "text", text: { body: chunks[i].slice(0, 4096), preview_url: false } });
+    if (i === 0) first = r;
+    if (!r.id) {
+      // A chunk failed mid-sequence. Do NOT report chunk-1 success here: the user
+      // received only a fragment and the brain's log must not record the whole
+      // reply as delivered (that would be the silent-loss bug this seam exists to
+      // kill, just one layer up). Surface the drop honestly so sendTextAndLog logs
+      // status="failed", and emit an event for the soak watch.
+      const delivered = i; // chunks 0..i-1 actually went out
+      void import("./events").then(({ emit }) => emit({
+        type: "sasa.partial_chunk_send",
+        source: "lib:whatsapp.sendText",
+        actor: "system",
+        subject_type: "contact",
+        subject_id: null,
+        payload: { to_last4: phoneKey(to).slice(-4), delivered, total: chunks.length, error: String(r.error || "").slice(0, 200) },
+      })).catch(() => {});
+      return { id: null, error: `partial_send: ${delivered}/${chunks.length} delivered then failed: ${r.error || "unknown"}` };
+    }
+  }
+  return first ?? { id: null, error: "no body" };
 }
 
 // Send a MEDIA message (24h window) BY LINK. WhatsApp fetches the URL itself, so
@@ -176,10 +213,12 @@ export function sendText(to: string, body: string) {
 // session cookie). `to` is the recipient's wa_id. Use sendImage for photos and
 // sendDocument for PDFs/files (filename is shown to the recipient).
 export function sendImage(to: string, link: string, caption?: string) {
-  return send({ to, type: "image", image: { link, ...(caption ? { caption: String(caption).slice(0, 1024) } : {}) } });
+  const cap = caption ? formatWhatsApp(String(caption)).slice(0, 1024) : "";
+  return send({ to, type: "image", image: { link, ...(cap ? { caption: cap } : {}) } });
 }
 export function sendDocument(to: string, link: string, filename: string, caption?: string) {
-  return send({ to, type: "document", document: { link, filename: String(filename || "file").slice(0, 240), ...(caption ? { caption: String(caption).slice(0, 1024) } : {}) } });
+  const cap = caption ? formatWhatsApp(String(caption)).slice(0, 1024) : "";
+  return send({ to, type: "document", document: { link, filename: String(filename || "file").slice(0, 240), ...(cap ? { caption: cap } : {}) } });
 }
 
 // Template message (works outside the 24h window, AND inside it). This is the
@@ -344,6 +383,15 @@ export async function resolveContact(db: any, waId: string, name?: string | null
   const { data: found } = await db.from("contacts").select("id,phone").eq("channel", "whatsapp").ilike("phone", `%${digits}%`).limit(5);
   const hit = (found || []).find((c: any) => String(c.phone || "").replace(/\D/g, "").replace(/^00/, "") === digits);
   if (hit) return hit.id;
+  // Mark-dup fix (2026-06-22): the cheap substring match misses a LOCAL-form record
+  // (an inbound wa_id is always international "254703.." but the contact may be saved
+  // as "0703.."). Before creating a new row, do a country-aware sameNumber scan so an
+  // existing local-format contact is reused instead of duplicated.
+  const ccs = (process.env.ORG_COUNTRY_CODES || "254,971").split(",").map((c) => c.replace(/\D/g, "")).filter(Boolean);
+  const suffix = digits.length >= 7 ? digits.slice(-7) : digits;
+  const { data: all } = await db.from("contacts").select("id,phone").not("phone", "is", null).ilike("phone", `%${suffix}%`).order("phone", { ascending: true }).limit(200);
+  const same = (all || []).find((c: any) => sameNumber(digits, String(c.phone || ""), ccs));
+  if (same) return same.id;
   const stored = toE164(digits);
   const { data: made } = await db
     .from("contacts")

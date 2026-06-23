@@ -82,6 +82,11 @@ export async function dispatchMeetingBot(opts: {
     callbackUrl,
     callbackKey: ingestKey || undefined,
     displayName: opts.displayName || "Digital Nur",
+    // KT #362: opt in to lifecycle pings. The engine calls back {event:"joined"}
+    // when the bot is admitted and {event:"waiting"} if it is stuck in the Zoom
+    // waiting room. The ingest handler handles both; flag + handler ship together
+    // so a ping can never reach a driver that has not been taught to handle it.
+    lifecycle: true,
   });
   // Walk the nodes; the first HEALTHY one that accepts the dispatch wins. We only
   // POST to a node that passed its health probe, so a dead/404 tunnel is never

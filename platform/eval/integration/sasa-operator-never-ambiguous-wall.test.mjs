@@ -31,7 +31,7 @@ else ok("S1 operator-prefer helpers present");
 // ---- S2 ----
 {
   const i = SMART.indexOf('if (name === "message_person")');
-  const region = i >= 0 ? SMART.slice(i, i + 2400) : "";
+  const region = i >= 0 ? SMART.slice(i, i + 3800) : "";
   if (!/preferOperatorMatch\(uniq\)/.test(region)) fail("S2 message_person must call preferOperatorMatch before refusing as ambiguous");
   else if (!/uniq\.length > 1 && !opPick/.test(region)) fail("S2 the ambiguous refusal must be skipped when an operator match exists");
   else ok("S2 message_person prefers the operator before asking");
@@ -40,7 +40,7 @@ else ok("S1 operator-prefer helpers present");
 // ---- S3 ----
 {
   const i = SMART.indexOf('if (name === "send_file_to_person")');
-  const region = i >= 0 ? SMART.slice(i, i + 2400) : "";
+  const region = i >= 0 ? SMART.slice(i, i + 3800) : "";
   if (!/preferOperatorMatch\(uniq\)/.test(region)) fail("S3 send_file_to_person must call preferOperatorMatch before refusing as ambiguous");
   else if (!/uniq\.length > 1 && !opPick/.test(region)) fail("S3 the ambiguous refusal must be skipped when an operator match exists");
   else ok("S3 send_file_to_person prefers the operator before asking");

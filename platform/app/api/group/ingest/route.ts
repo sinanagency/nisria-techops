@@ -8,7 +8,7 @@
 // Auth: a shared secret in the x-group-secret header (GROUP_BOT_SECRET). The
 // userbot is the only caller. Service-role only, never client-exposed.
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { admin } from "../../../../lib/supabase-admin";
 import { emit } from "../../../../lib/events";
 import { runSasa } from "../../../../lib/agents/sasa";
@@ -133,6 +133,7 @@ export async function POST(req: NextRequest) {
   const reactionEmoji = String(body.reaction_emoji || "");
   const reactionTargetId = String(body.reaction_target_id || "");
   const quotedText = String(body.quoted_text || "").trim();
+  const quotedId = String(body.quoted_id || "").trim(); // S9: exact reply anchor (the quoted message's wa id)
   const mentionedPhones: string[] = Array.isArray(body.mentioned_phones) ? body.mentioned_phones.map((p: any) => digits(String(p))).filter(Boolean) : [];
   const link = body.link && typeof body.link === "object" && body.link.url ? {
     url: String(body.link.url).slice(0, 1000),
@@ -159,9 +160,22 @@ export async function POST(req: NextRequest) {
   // is passed (match by the task's words, not by who reacted). Reuses the existing
   // tool, so this adds a signal with zero new tool surface. Always silent.
   if (reactionTargetId && reactionEmoji) {
+    // IDEMPOTENCY (KT #366 F3, 2026-06-22): the message-level dedup above keys on the
+    // reaction event's OWN id and writes no row for a reaction, so it does not cover
+    // reactions. WhatsApp re-delivers reaction events on reconnect/backfill, so without
+    // this a re-fired reaction re-runs complete_task on an ALREADY-CLOSED task ("the
+    // group bot doesnt have to hallucinate especially when it has already done"). Dedup
+    // on (target message, emoji) within a durable window before doing any work.
+    const rSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: seenR } = await db.from("events").select("id").eq("type", "group.reaction_processed")
+      .eq("payload->>target", reactionTargetId).eq("payload->>emoji", reactionEmoji).gte("created_at", rSince).limit(1);
+    if (seenR?.[0]) return NextResponse.json({ ok: true, reply: "", reaction: "deduped" });
     const { data: tgt } = await db.from("messages").select("body").eq("external_id", reactionTargetId).limit(1);
     const targetBody = tgt?.[0]?.body ? String(tgt[0].body) : "";
     if (!targetBody) return NextResponse.json({ ok: true, reply: "", reaction: "no_target" });
+    // Mark this reaction processed BEFORE running, so a re-delivery that races in cannot
+    // double-fire (the marker is the gate, not the side effect).
+    await emit({ type: "group.reaction_processed", source: "group-bot", actor: senderName || senderPhone, subject_type: "message", subject_id: null, correlation_id: traceId, payload: { target: reactionTargetId, emoji: reactionEmoji, group } }).catch(() => {});
     await runSasa({
       surface: "group",
       groupName: group,
@@ -210,6 +224,18 @@ export async function POST(req: NextRequest) {
   if (mediaB64 && mediaMime) {
     const buf = Buffer.from(mediaB64, "base64");
     if (buf.length > 0 && buf.length <= 15_000_000) {
+      // CONTENT DEDUP (KT #366 F4, 2026-06-22): the message-level dedup (line ~150) only
+      // runs when messageId is present. A media drop with NO id re-delivered on reconnect
+      // would re-upload (path carries Date.now() → a SECOND assets row) AND re-ingest the
+      // SAME PDF ("especially when it has already done"). Gate id-less drops on a content
+      // hash recorded in the prior whatsapp.group_media_in event.
+      const contentKey = `${buf.length}:${createHash("sha1").update(buf).digest("hex").slice(0, 16)}`;
+      if (!messageId) {
+        const mSince = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        const { data: seenM } = await db.from("events").select("id").eq("type", "whatsapp.group_media_in")
+          .eq("payload->>content_key", contentKey).gte("created_at", mSince).limit(1);
+        if (seenM?.[0]) return NextResponse.json({ ok: true, reply: "", deduped: true });
+      }
       const contactId = await resolveContact(db, senderPhone, senderName);
       learnMemberPhone(db, senderPhone, senderName).catch(() => {});
       const safeName = (mediaName || `file-${messageId || "drop"}`).replace(/[^\w.\-]+/g, "_").slice(0, 80);
@@ -234,7 +260,7 @@ export async function POST(req: NextRequest) {
           attribution: senderName || senderPhone,
           inputs: [{ channel: "whatsapp", attribution: senderName || senderPhone, filename: mediaName || safeName, mime: mediaMime, storage_path: path, text: text || null }],
         });
-        await emit({ type: "whatsapp.group_media_in", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { group, from: senderPhone, mime: mediaMime, name: mediaName } });
+        await emit({ type: "whatsapp.group_media_in", source: "whatsapp", actor: senderName || senderPhone, subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: { group, from: senderPhone, mime: mediaMime, name: mediaName, content_key: contentKey } });
       } catch (e: any) {
         // best-effort: never crash the bot loop on an ingest hiccup, but LOG it.
         // A team member dropping a PDF that silently fails to file is the same
@@ -457,18 +483,44 @@ export async function POST(req: NextRequest) {
   // who is speaking (for the prompt + so the brain knows the team member)
   const { name: opName } = await operatorOf(db, senderPhone).catch(() => ({ name: null as any }));
 
-  // recent group context for threading
+  // recent group context for threading — SPEAKER-TAGGED (S13). An anonymous 8-line
+  // window left the brain unable to tell who said which line (the "stay sane" blind
+  // spot: it could not attribute work or route parallel threads). Resolve each
+  // INBOUND line's sender via the contacts FK and prefix it "Name: "; outbound
+  // (assistant) lines stay unprefixed. Additive: same window + limit, names added.
   const { data: hist } = await db
-    .from("messages").select("body,direction,created_at")
+    .from("messages").select("body,direction,created_at,contact_id")
     .eq("account", group).eq("channel", "whatsapp")
     .order("created_at", { ascending: false }).limit(8);
-  const history = (hist || []).reverse().map((m: any) => ({ role: m.direction === "out" ? "assistant" : "user", content: String(m.body || "") } as const));
+  const histRows = ((hist || []) as any[]).reverse();
+  const histContactIds = [...new Set(histRows.filter((m) => m.direction !== "out" && m.contact_id).map((m) => m.contact_id as string))];
+  const nameById = new Map<string, string>();
+  if (histContactIds.length) {
+    const { data: hc } = await db.from("contacts").select("id,name").in("id", histContactIds);
+    for (const c of ((hc || []) as any[])) if (c?.name) nameById.set(c.id, String(c.name));
+  }
+  const history = histRows.map((m) => {
+    const isOut = m.direction === "out";
+    const speaker = !isOut && m.contact_id ? nameById.get(m.contact_id) : null;
+    const content = String(m.body || "");
+    return { role: isOut ? "assistant" : "user", content: speaker ? `${speaker}: ${content}` : content } as const;
+  });
 
   // enrich the command with precise context: what a reply is quoting (so "done"
   // hits the right task) and who was @mentioned, resolved to real member names (so
   // an assignment lands on the right person). Both reuse the existing brain.
   let command = text;
-  if (quotedText) command = `[replying to: "${quotedText.slice(0, 240)}"]\n${command}`;
+  // S9 (read side): prefer an EXACT, server-resolved quote anchor (by the quoted
+  // message's wa id) over the client-supplied fuzzy fragment, so a swipe-"done"
+  // anchors to the REAL logged message (the reaction path already resolves by
+  // external_id the same way). Falls back to quotedText when the id doesn't resolve
+  // (older userbot, or the quoted message isn't in our log).
+  let quoteAnchor = quotedText ? `[replying to: "${quotedText.slice(0, 240)}"]` : "";
+  if (quotedId) {
+    const { data: qmsg } = await db.from("messages").select("body").eq("external_id", quotedId).limit(1);
+    if (qmsg?.[0]?.body) quoteAnchor = `[replying to message ${quotedId}: "${String(qmsg[0].body).slice(0, 400)}"]`;
+  }
+  if (quoteAnchor) command = `${quoteAnchor}\n${command}`;
   if (mentionedPhones.length) {
     const { data: mem } = await db.from("team_members").select("name,phone").in("phone", mentionedPhones);
     const names = ((mem || []) as any[]).map((x) => x.name).filter(Boolean);
@@ -486,6 +538,14 @@ export async function POST(req: NextRequest) {
     history: isCaseGroup(group) ? [] : history,
     command,
     casesIntake: isCaseGroup(group), // Rescue & Rehab etc.: intakes become cases, not beneficiaries
+    // S4 NOTE (group-bot Phase 0, skeptic-corrected): parseTasksFired is deliberately
+    // NOT wired here. With group parseTasks OFF by default the brain is already the
+    // SOLE task writer (no live duplicate to fix). And the DM flag means "a task ROW
+    // was already written" — but the group parseTasks block only STAGES a proposal
+    // for Nur's approval, it never writes a tasks row. So passing the flag would make
+    // the brain falsely claim "Done, logged X" for a task that was only proposed (a
+    // Law-11 honesty break). The honest parse-on dedup (propose + Nur confirm, with a
+    // staged-not-written narration) is Phase 1 consent-flow work, not Phase 0.
     traceId,
   });
   const reply = sasaRes.reply;

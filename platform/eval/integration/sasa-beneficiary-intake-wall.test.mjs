@@ -25,16 +25,16 @@ const ok = (m) => console.log("PASS:", m);
 // ---- E1: route present, grounded, deterministic ----
 {
   const i = W.indexOf("DETERMINISTIC BENEFICIARY/CASE INTAKE (KT #359)");
-  const region = i >= 0 ? W.slice(i, i + 4200) : "";
+  const region = i >= 0 ? W.slice(i, i + 6200) : "";
   if (!region) fail("E1 the intake route must exist");
   else if (!(i < W.indexOf("let reply: string | undefined;"))) fail("E1 the intake route must run BEFORE the brain");
-  else if (!/opRank === "owner" \|\| opRank === "founder"/.test(region)) fail("E1 intake must be owner/founder only (child-safeguarding data)");
+  else if (!/const canIntake = isAdminIntake \|\| \(role === "team" && botAccess === true\)/.test(region)) fail("E1 intake gate must be owner/founder OR a team member with bot_access (Bug 3, KT #367)");
   else if (!/claudeJSON\(/.test(region) || !/HAIKU/.test(region)) fail("E1 must use a grounded Haiku extractor (claudeJSON)");
   else if (!/NEVER invent, guess, or infer/.test(region)) fail("E1 the extractor prompt must forbid inventing fields (no hallucination)");
   else if (!/runSmartTool\("add_beneficiary"/.test(region)) fail("E1 the WRITE must be deterministic via add_beneficiary, not left to the model");
   else if (!/markJobDone\(job\.id\);\s*return;/.test(region)) fail("E1 a handled intake must markJobDone + return");
   else if (!/intake_needs_name|What's the person or family name/.test(region)) fail("E1 an intake with no extractable name must ASK, never drop it");
-  else ok("E1 intake route: before brain, admin-only, grounded extractor → deterministic add_beneficiary → confirm/ask");
+  else ok("E1 intake route: before brain, owner/founder-or-team-with-bot_access, grounded extractor → deterministic add_beneficiary → confirm/ask");
 }
 
 // ---- E2: intent mirror (fires on intakes, not on reads/edits/counts) ----
@@ -60,14 +60,21 @@ const ok = (m) => console.log("PASS:", m);
   else ok("E2 intent mirror: real intakes fire; reads, counts, and edits all yield");
 }
 
-// ---- E3: case vs beneficiary routing ----
+// ---- E3: case vs beneficiary routing — DEFAULT TO CASE (Bug 3, KT #367) ----
+// (Old wall encoded the bug: "naming both defaults to beneficiary". FLIPPED. Full
+// matrix lives in sasa-cases-intake-default-wall; this keeps the seam honest.)
 {
-  const asCase = (command) => /\bcase\b/i.test(command) && !/\bbeneficiar/i.test(command);
+  const asCase = (command, isAdmin = true) => {
+    const saysCase = /\bcase\b/i.test(command);
+    const saysBeneficiaryOnly = /\bbeneficiar(?:y|ies)\b/i.test(command) && !saysCase;
+    return isAdmin ? !saysBeneficiaryOnly : true;
+  };
   if (!asCase("new case: Brian, 13, Uganda")) fail("E3 'new case' must route to intake (casesIntake true)");
-  else if (asCase("add a beneficiary named Amani")) fail("E3 'beneficiary' must NOT be a case (accepted record)");
-  else if (asCase("add a case beneficiary")) fail("E3 a message naming both must default to beneficiary (not a case) to avoid mis-intake");
-  else if (!/casesIntake: asCase/.test(W)) fail("E3 the add call must pass casesIntake from the case/beneficiary word");
-  else ok("E3 'case' → intake_stage; 'beneficiary' → accepted; the write passes casesIntake");
+  else if (asCase("add a beneficiary named Amani")) fail("E3 admin 'beneficiary' (no case) must NOT be a case (accepted record)");
+  else if (!asCase("new case, not a beneficiary: Brian")) fail("E3 'new case, not a beneficiary' must stay a CASE (the bug this flips)");
+  else if (!asCase("add a case beneficiary")) fail("E3 a message naming both must default to a CASE (intake is the safe side, never auto-accept)");
+  else if (!/casesIntake: asCase/.test(W)) fail("E3 the add call must pass casesIntake from the decision");
+  else ok("E3 'case'/both/bare → intake_stage; admin 'beneficiary'-only → accepted; team → always case");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");

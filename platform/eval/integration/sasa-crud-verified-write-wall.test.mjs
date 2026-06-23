@@ -101,7 +101,7 @@ function assertRefusalGuard(region, label) {
 
 // ---- create_event ----
 {
-  const r = regionOf('name === "create_event"', 2600);
+  const r = regionOf('name === "create_event"', 3700);
   assertErrorDestructured(r, "create_event");
   assertRefusalGuard(r, "create_event");
 }

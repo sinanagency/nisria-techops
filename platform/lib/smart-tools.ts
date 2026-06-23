@@ -24,8 +24,15 @@
 import { admin, money } from "./supabase-admin";
 import { formatPersonName } from "./names";
 import { sendText, sendImage, sendDocument, phoneKey, toE164, operatorOf } from "./whatsapp";
+import { sameNumber, distinctLines, isLocalForm, suffixKey } from "./phone.mjs";
+// The country codes the org actually uses, for local↔international number matching.
+// Nisria operates in Kenya (+254) and Dubai (+971); override via ORG_COUNTRY_CODES.
+// Gating the match to these kills cross-country tail collisions (a Kenyan local
+// number can no longer match a +1 number that happens to share the last digits).
+const orgCCs = (): string[] => (process.env.ORG_COUNTRY_CODES || "254,971").split(",").map((c) => c.replace(/\D/g, "")).filter(Boolean);
 import { emit } from "./events";
-import { now, formatClock } from "./now";
+import { now, formatClock, DEFAULT_TZ } from "./now";
+import { convertWallClock } from "./tzconvert.mjs";
 import { randomUUID, createHash } from "node:crypto";
 import { humanize, withHumanSystem } from "./humanize";
 import { claudeJSON } from "./anthropic";
@@ -36,10 +43,13 @@ import { gatherRecipients, SEND_CAP } from "./outreach";
 import { searchFiles, transferOwnership } from "./drive";
 import { recall, groundingText, remember, rememberUpsert, queryMemory } from "./memory";
 import { knownGroups, isKnownGroup } from "./groups";
-import { ownerContactIds, OWNER_PRIVATE_KIND } from "./privacy";
+import { ownerContactIds, OWNER_PRIVATE_KIND, ownerKeys } from "./privacy";
 import { draftThankYou } from "./agents/steward";
 import { enqueueJob, triggerWorker } from "./jobs";
 import { pushTaskAlert, pushOperatorUpdate, pushCalendarAlert } from "./notify";
+import { registerIntent } from "./pending-intents";
+import { commandReferencesGroup } from "./group-tokens.mjs";
+import { pickFromMatches, isAllDuplicates } from "./match-dedup.mjs";
 import { getCalendar, holidayOn, type CalEvent } from "./calendar";
 import { searchInbox, readEmail } from "./gmail";
 import { createEvent as gcalCreate, patchEvent as gcalPatch, deleteEvent as gcalDelete, gcalConfigured } from "./gcal";
@@ -400,6 +410,8 @@ export const SMART_TOOLS = [
   { name: "list_bank_transactions", description: "The bank statement ledger (reconciled transactions) for a date window. Use for 'what came through the bank in May', 'show recent bank transactions', 'any large withdrawals'. Admin only.", input_schema: { type: "object", properties: { from: { type: "string", description: "YYYY-MM-DD" }, to: { type: "string", description: "YYYY-MM-DD" } } } },
   { name: "read_contact_thread", description: "Read the recent message history with a specific contact (what was last said to/from them). Use for 'what did we last say to John', 'show my thread with Mary'. Match by name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "flag_for_clarity", description: "Ask the operator a clarifying question WHEN YOU ARE UNSURE and would otherwise guess or silently act: possible duplicate records, an ambiguous reference you cannot resolve even after a lookup, a task/item with no clear owner, or a merge/delete/reassign you are not certain about. Pass one clear question and the candidate options. Use this INSTEAD of guessing, silently picking, merging, deleting, or reassigning. The operator's answer then tells you what to do.", input_schema: { type: "object", properties: { question: { type: "string", description: "the one clear question to ask the operator" }, options: { type: "array", items: { type: "string" }, description: "the candidate choices, e.g. the two duplicate task titles" }, about: { type: "string", description: "short tag, e.g. 'possible duplicate tasks' or 'missing owner'" } }, required: ["question"] } },
+  { name: "flag_to_nur", description: "Surface something to Nur for a keep-or-flag decision, as a WhatsApp message she can reply to. Use this when a TEAM MEMBER sends you a document, report, intake, or photos that Nur should know about (a case update, a child-reunification report, a beneficiary intake, anything that belongs on her desk). The file is ALREADY saved on file, so you do NOT tell the team member to forward it to Nur themselves: you summarise what came in and flag it to Nur here. Pass a short, specific summary including who sent it and what it is. Nur then replies to decide whether to flag it for follow-up or keep it on file.", input_schema: { type: "object", properties: { summary: { type: "string", description: "short specific summary, e.g. 'Mark sent a child-reunification report for Jazbon (OB 29/05/06/2026) plus 2 photos, saved on file'" } }, required: ["summary"] } },
+  { name: "relay_to_colleague", description: "Pass a message from THIS team member to ANOTHER team member (colleague-to-colleague), delivered on WhatsApp with clear attribution ('From <sender>: ...'). Use when a team member asks you to tell, message, update, or pass something to a NAMED colleague on the team (e.g. 'tell Mark the visit is moved to Thursday', 'let Grace know I dropped the forms at the office', 'ask Violet to call me'). This is ONLY for teammates on the roster. It is NOT for Nur or the owner: anything that needs Nur's decision goes through flag_to_nur instead. It is NOT for outside contacts, donors, or beneficiaries. Pass the colleague's name (or number) and the exact message to relay.", input_schema: { type: "object", properties: { to: { type: "string", description: "the colleague's name as the team knows them (e.g. 'Mark', 'Grace'), or their full international number" }, message: { type: "string", description: "the exact message to relay to the colleague, in the sender's own words" } }, required: ["to", "message"] } },
   { name: "show_outbound_audit", description: "Show what YOU (Sasa) have actually sent to TEAM MEMBERS on WhatsApp in a recent window. This is the audit/receipt view, the ground truth of what really went out, independent of any earlier narration. Use whenever Nur asks 'what did you send today', 'who did you message', 'did you actually text X', 'show me what you sent', 'show your outbound', 'audit your sends', 'what messages went out from you today', 'did Cynthia get the message'. Returns a per-recipient summary with timestamps and the bodies of each message. Excludes messages back to Nur herself. Always also point her to /admin/transcripts for the full filterable view. Admin only.", input_schema: { type: "object", properties: { window_hours: { type: "number", description: "Lookback window in hours, default 24" }, contact: { type: "string", description: "Optional name filter (e.g. 'Mark', 'Violet'); omit for all recipients" } } } },
   { name: "search_inbox", description: "Search the sasa@nisria.co email INBOX (read-only) to check what actually arrived. Use for 'did the SANARA statements come into the sasa email', 'did we get the I&M statement', 'any email from <sender> about <thing>', 'check the inbox for invoices'. Returns sender, subject, date, snippet and attachment filenames. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "What to look for in plain words (e.g. 'SANARA bank statement', 'invoice from Java'). Optionally a sender name/email." }, max: { type: "number", description: "max results, default 10" } }, required: ["query"] } },
   { name: "show_draft", description: "Show the operator an email DRAFT you already made that is waiting in Needs You for her approval. Use whenever she asks to SEE a draft you composed: 'show me the draft', 'show me the draft you made', 'what was the draft', 'read me the draft again', 'pull up that email draft', OR when she swipe-replies to a draft message asking to see or check it. Returns the recipient, subject and FULL body of the pending draft(s). It is still unsent. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional: a recipient name or a few words to pick which draft if there are several" } } } },
@@ -435,12 +447,12 @@ export const SMART_TOOLS = [
   { name: "remember_fact", description: "Save a durable fact about Nisria to your long-term memory (the Brain) so you recall it in every future conversation. Use ONLY when Nur tells you to remember, note, or record a fact about the org, people, accounts, policy, or how things work ('remember our EIN is 92-2509133', 'note that Linda is no longer a vendor', 'the team meets on Mondays'). Also use to CORRECT a fact you have wrong: pass the same short topic and the new fact replaces the old one in place. Do NOT use this for one-off tasks, payments, or anything she did not ask you to remember.", input_schema: { type: "object", properties: { fact: { type: "string", description: "the fact to remember, in one clear sentence" }, topic: { type: "string", description: "a short label like 'EIN', 'Linda', 'meeting schedule', so a later correction updates this same fact instead of duplicating" }, private: { type: "boolean", description: "Set TRUE only when Taona (the owner) tells you to keep something PRIVATE / 'between us' / not to tell Nur. A private note is owner-only: Nur and the team never see it. Default false (a normal shared org fact). Only the owner can make a note private." } }, required: ["fact"] } },
   { name: "post_to_group", description: "Post a message into a team WhatsApp GROUP via the group bot. SAFE: queues the send (the group bot delivers it). Use when Nur asks to tell a group something, or to follow up with a person in their group. Provide the group name and the exact text to post. The text may @mention a person.", input_schema: { type: "object", properties: { group: { type: "string", description: "the group name, e.g. 'Maisha Operations'" }, text: { type: "string", description: "the message to post" } }, required: ["group", "text"] } },
 
-  { name: "message_person", description: "Send a WhatsApp message to ONE specific person (Nur, a team member, or a known contact) directly from this line. Use ONLY when the operator EXPLICITLY tells you to message / tell / send / let someone know something, e.g. 'tell Nur the meeting moved to 3', 'message Mark to bring the receipts', 'let Grace know the funds are in'. The exact words to send come from the operator's instruction, never invented. Resolve the recipient by name (or a number if given). If you cannot find a number, ASK for it. If more than one person matches the name, ASK which one. WhatsApp can only reach someone who has messaged this line in the last 24 hours; if it cannot be delivered, say so plainly. Do NOT use this for posting into a group (that is post_to_group) or for email (that is draft_email).", input_schema: { type: "object", properties: { to: { type: "string", description: "the person's name (e.g. 'Nur') or a phone number" }, text: { type: "string", description: "the exact message to send, in the operator's intended words" } }, required: ["to", "text"] } },
+  { name: "message_person", description: "Send a WhatsApp message to ONE specific person (Nur, a team member, or a known contact) directly from this line. Use ONLY when the operator EXPLICITLY tells you to message / tell / send / let someone know something, e.g. 'tell Nur the meeting moved to 3', 'message Mark to bring the receipts', 'let Grace know the funds are in'. The exact words to send come from the operator's instruction, never invented. Resolve the recipient by name (or a number if given). If you cannot find a number, ASK for it. If more than one person matches the name, ASK which one. WhatsApp can only reach someone who has messaged this line in the last 24 hours; if it cannot be delivered, say so plainly. Do NOT use this for posting into a group (that is post_to_group) or for email (that is draft_email). If the operator tells you a message did NOT arrive, was not received, or asks you to send it AGAIN / resend, set resend:true so the duplicate-guard does not block the genuine retry.", input_schema: { type: "object", properties: { to: { type: "string", description: "the person's name (e.g. 'Nur') or a phone number" }, text: { type: "string", description: "the exact message to send, in the operator's intended words" }, resend: { type: "boolean", description: "set true ONLY when the operator says it wasn't received or asks to send again; bypasses the 'already sent' duplicate guard for this one genuine retry" } }, required: ["to", "text"] } },
   { name: "send_file_to_person", description: "Send a FILED document or photo from the portal to ONE person's WhatsApp. Use when asked to send/forward a file to someone, e.g. 'send me the I&M statement', 'forward me the lease PDF', 'send Nur that photo Mark posted', 'whatsapp me the registration certificate'. Finds the file by a word from its title/topic in the filed Library, then delivers the ACTUAL file to the person's WhatsApp. If the operator asks for it themselves ('send me ...'), the recipient is them. Resolve the file by a distinctive word; if more than one matches, ASK which. Admin only. The recipient must have messaged this line in the last 24 hours (WhatsApp window); if not, say so.", input_schema: { type: "object", properties: { to: { type: "string", description: "the recipient's name (e.g. 'Nur') or a phone number; for 'send me ...' use the operator asking" }, query: { type: "string", description: "a word or two from the document/photo title or topic (e.g. 'I&M statement', 'lease', 'registration')" } }, required: ["to", "query"] } },
 
   // ---- ACTION · CALENDAR (manage the operator's Google Calendar / events) ----
-  { name: "create_event", description: "Put something on the calendar: a meeting, team travel, a site visit, a reminder, a one-off event. SAFE: lands on the calendar immediately and syncs to the Google Calendar so it shows on her phone. Use for 'put the donor meeting on Tuesday at 3', 'block Thursday for the Kibera visit', 'add a team day on the 14th', 'I am traveling Friday'. Provide a clear title and date. Add a time for a timed event, leave it off for an all-day one. Before scheduling team travel, you may check_conflicts first so you can flag a holiday.", input_schema: { type: "object", properties: { title: { type: "string" }, date: { type: "string", description: "YYYY-MM-DD" }, end_date: { type: "string", description: "YYYY-MM-DD for a multi-day event, optional" }, time: { type: "string", description: "HH:MM 24h start time, omit for all-day" }, end_time: { type: "string", description: "HH:MM 24h end time, optional" }, location: { type: "string" }, notes: { type: "string" }, kind: { type: "string", enum: ["event", "meeting", "travel", "visit", "reminder"] }, recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly"], description: "set for a repeating event; the next instance is created automatically once this one passes" } }, required: ["title", "date"] } },
-  { name: "move_event", description: "Reschedule a calendar event you previously added (a meeting, visit, travel, reminder) to a new date and/or time. SAFE: updates it on the calendar and on Google. Use for 'move the donor meeting to Friday', 'push the Kibera visit to next week', 'shift it to 4pm'. Match the event by a fragment of its title. If several match, ask which. This is for calendar EVENTS; to move a task due date use create_task, to move a payment use update_payment.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the event title to match" }, new_date: { type: "string", description: "YYYY-MM-DD" }, new_time: { type: "string", description: "HH:MM 24h, optional" } }, required: ["title"] } },
+  { name: "create_event", description: "Put something on the calendar: a meeting, team travel, a site visit, a reminder, a one-off event. SAFE: lands on the calendar immediately and syncs to the Google Calendar so it shows on her phone. Use for 'put the donor meeting on Tuesday at 3', 'block Thursday for the Kibera visit', 'add a team day on the 14th', 'I am traveling Friday'. Provide a clear title and date. Add a time for a timed event, leave it off for an all-day one. Before scheduling team travel, you may check_conflicts first so you can flag a holiday.", input_schema: { type: "object", properties: { title: { type: "string" }, date: { type: "string", description: "YYYY-MM-DD" }, end_date: { type: "string", description: "YYYY-MM-DD for a multi-day event, optional" }, time: { type: "string", description: "HH:MM 24h start time, omit for all-day. Pass the time EXACTLY as the user stated it; if they named a different timezone (e.g. 'Nairobi time'), do NOT convert it yourself, pass it as said and set source_timezone." }, end_time: { type: "string", description: "HH:MM 24h end time, optional, in the same source_timezone as start" }, source_timezone: { type: "string", description: "ONLY if the user stated the time in a zone other than the operator's (Dubai). The zone of the time as the user said it, e.g. 'Nairobi', 'Africa/Nairobi', 'EAT', 'UTC'. The system converts to the operator's zone deterministically, you must NOT do timezone math yourself. Omit if the time is already in the operator's local zone." }, location: { type: "string" }, notes: { type: "string" }, kind: { type: "string", enum: ["event", "meeting", "travel", "visit", "reminder"] }, recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly"], description: "set for a repeating event; the next instance is created automatically once this one passes" } }, required: ["title", "date"] } },
+  { name: "move_event", description: "Reschedule a calendar event you previously added (a meeting, visit, travel, reminder) to a new date and/or time. SAFE: updates it on the calendar and on Google. Use for 'move the donor meeting to Friday', 'push the Kibera visit to next week', 'shift it to 4pm'. Match the event by a fragment of its title. If several match, ask which. This is for calendar EVENTS; to move a task due date use create_task, to move a payment use update_payment.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the event title to match" }, new_date: { type: "string", description: "YYYY-MM-DD" }, new_time: { type: "string", description: "HH:MM 24h, optional. Pass it EXACTLY as the user said it; if they named another timezone, set source_timezone and do NOT convert it yourself." }, source_timezone: { type: "string", description: "ONLY if the new time is stated in a zone other than the operator's (Dubai), e.g. 'Nairobi', 'EAT', 'UTC'. The system converts to the operator zone; you must NOT do timezone math yourself." } }, required: ["title"] } },
   { name: "delete_event", description: "Remove a calendar event you previously added (meeting, visit, travel, reminder). SAFE and recoverable. Use for 'cancel the donor meeting', 'drop the Thursday visit', 'remove that event'. Match by a fragment of the title. If several match, ask which. Only affects calendar EVENTS, never tasks, payments, grants, or holidays.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the event title to match" } }, required: ["title"] } },
   { name: "complete_calendar_event", description: "Mark a calendar EVENT (meeting, visit, travel) as completed. SAFE: stamps the event's notes with a completion marker; no row deletion. Use when someone reports a meeting actually happened: 'meeting with Taona is done', 'I met Bashir', 'the donor visit happened'. Resolve the event by a fragment of its title. If more than one upcoming or today event matches, ask which. THIS IS FOR CALENDAR EVENTS ONLY — for to-do TASKS use complete_task. If the user's frag matches both a calendar event AND a task, prefer the calendar event when the user says 'meeting/visit/call/event done'; prefer the task when they say 'task done' or 'finished it'.", input_schema: { type: "object", properties: { title: { type: "string", description: "a fragment of the event title to match" }, note: { type: "string", description: "optional one-line note on how it went" } }, required: ["title"] } },
   { name: "dispatch_meeting_bot", description: "Send the Digital Nur meeting bot to join a Google Meet, Zoom, or Teams meeting. Use when Nur shares a meeting link and asks you to have the bot join and take notes. The bot joins as 'Digital Nur', captures the transcript, generates a summary with action items, and WhatsApps the summary to Nur automatically when the meeting ends. Pass the full URL including https://. The bot supports Meet, Zoom, and Teams.", input_schema: { type: "object", properties: { link: { type: "string", description: "the full meeting URL, e.g. https://meet.google.com/abc-defg-hij or https://zoom.us/j/123456789" }, title: { type: "string", description: "optional meeting title or topic, detected automatically if omitted" }, scheduled_at: { type: "string", description: "optional ISO timestamp for a future meeting; omit to join immediately" } }, required: ["link"] } },
@@ -489,6 +501,7 @@ export const SMART_TOOLS = [
   { name: "decline_case", description: "Decline a case (potential beneficiary). Admin only. Keeps the record for audit. Use for 'decline the X case'. Optionally give a reason.", input_schema: { type: "object", properties: { name: { type: "string" }, reason: { type: "string" } }, required: ["name"] } },
   { name: "move_case", description: "Move a CASE (potential beneficiary still in intake) to a different stage: prospect, under_review, pending_funds, or declined. Admin only. Use for 'move Tony to pending funds', 'put the Mwangi case back to review'. Match by name. To ACCEPT a case use approve_case instead.", input_schema: { type: "object", properties: { name: { type: "string" }, stage: { type: "string", enum: ["prospect", "under_review", "pending_funds", "declined"] } }, required: ["name", "stage"] } },
   { name: "edit_case", description: "Edit a CASE: rename it, set its dependents (the children/family on the case), or change its needs, region, or program. Admin only. Use for 'rename the Mercy case to Mercy Wanjiku', 'Princess and Tony are Mercy's dependents', 'update the needs on the X case'. Match by name. For an ACCEPTED beneficiary use update_beneficiary.", input_schema: { type: "object", properties: { name: { type: "string", description: "current case name, to find it" }, new_name: { type: "string" }, dependents: { type: "array", items: { type: "string" }, description: "names of dependents on this case" }, needs: { type: "string" }, region: { type: "string" }, program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] } }, required: ["name"] } },
+  { name: "merge_contact", description: "Fold a DUPLICATE contact into another record of the same person, then remove the duplicate. The conversation history and email move to the record you keep, and the canonical international phone number is kept. Use for 'merge the two Mark Njambi contacts', 'these are the same person, merge them'. Give the duplicate's name (or number) and the one to keep. Admin only. If you only have ONE name and the duplicates are pure number-format variants of the same line, you can pass just that name and I will collapse them.", input_schema: { type: "object", properties: { name: { type: "string", description: "the DUPLICATE contact to fold in and remove (name or number)" }, into: { type: "string", description: "the contact record to KEEP (name or number); optional if the dupes are format variants of one line" } }, required: ["name"] } },
   { name: "merge_case", description: "Merge one CASE into another as a dependent, then remove the duplicate. The fix when a child was logged as their own case but belongs to a family. Admin only. Use for 'merge Princess into Mercy Wanjiku', 'Tony is part of the Mercy case'. Both matched by name.", input_schema: { type: "object", properties: { name: { type: "string", description: "the case to fold in and remove" }, into: { type: "string", description: "the parent case it belongs to" } }, required: ["name", "into"] } },
   { name: "delete_case", description: "Permanently delete a CASE (potential beneficiary in intake). Admin only. Use for a duplicate or mistaken intake: 'delete the duplicate Tony case'. Match by name. Only ever removes a case, never an accepted beneficiary. If more than one matches, ask which.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "set_public_profile", description: "Set a beneficiary's DONOR-FACING public name (alias) and sanitized public story. Admin only. This does NOT publish them (consent stays as-is); it prepares the public profile for Nur to review/publish.", input_schema: { type: "object", properties: { name: { type: "string" }, public_name: { type: "string" }, public_story: { type: "string" } }, required: ["name"] } },
@@ -508,7 +521,7 @@ const READ_TOOLS = new Set([
   "search_history", "find_beneficiary", "lookup_contact", "team_detail",
   "search_documents", "list_campaigns", "list_inventory",
   "read_document", "list_assets", "agent_activity", "list_groups",
-  "read_brief", "list_payroll", "list_bank_transactions", "read_contact_thread", "show_outbound_audit", "flag_for_clarity",
+  "read_brief", "list_payroll", "list_bank_transactions", "read_contact_thread", "show_outbound_audit", "flag_for_clarity", "flag_to_nur",
   "list_content", "find_studio_doc", "list_beneficiaries", "summarize_document", "donor_activity",
   "group_activity", "member_activity",
   "query_calendar", "check_conflicts",
@@ -951,12 +964,86 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (tier === "team") return { error: "not available here" };
     const cn = String(input.name || "").trim();
     if (!cn) return { error: "give a contact name" };
-    const { data: contacts } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: contacts } = await db.from("contacts").select("id,name,phone").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(8);
     const list = (contacts || []) as any[];
     if (!list.length) return { found: false, note: `No contact matching "${cn}".` };
-    if (list.length > 1) return { found: false, note: `A few match: ${list.map((c) => c.name).join(", ")}. Which one?` };
-    const { data: msgs } = await db.from("messages").select("direction,channel,subject,body,created_at").eq("contact_id", list[0].id).order("created_at", { ascending: false }).limit(15);
-    return { found: true, contact: list[0].name, count: (msgs || []).length, messages: ((msgs || []) as any[]).map((m) => ({ dir: m.direction, channel: m.channel, subject: m.subject || null, text: String(m.body || "").slice(0, 300), at: m.created_at })) };
+    // DUP-TOLERANT (2026-06-22): never dead-end on our own messy data ("which Cynthia?").
+    // When a name matches several records, RANK by real activity (message count, then
+    // recency) and PROCEED with the most-active one, surfacing a light heads-up so the
+    // operator can correct it. Only ask when NO candidate has a thread at all. We never
+    // merge here — a read is reversible; cleanup is a separate explicit write.
+    let chosen = list[0];
+    let dupNote: string | null = null;
+    if (list.length > 1) {
+      const scored = await Promise.all(list.map(async (c: any) => {
+        const { count } = await db.from("messages").select("id", { count: "exact", head: true }).eq("contact_id", c.id);
+        const { data: last } = await db.from("messages").select("created_at").eq("contact_id", c.id).order("created_at", { ascending: false }).limit(1);
+        return { c, n: count || 0, last: String((last as any[])?.[0]?.created_at || "") };
+      }));
+      scored.sort((a, b) => (b.n - a.n) || (a.last < b.last ? 1 : -1));
+      if (scored[0].n === 0) return { found: false, note: `A few match "${cn}": ${list.slice(0, 4).map((c: any) => c.name).join(", ")}, and none has a conversation yet. Which one, or give me the number?` };
+      chosen = scored[0].c;
+      const last4 = String(chosen.phone || "").replace(/\D/g, "").slice(-4);
+      dupNote = `Heads up, there are ${list.length} records under that name; I'm showing the most active one${last4 ? ` (ending ${last4})` : ""}. Tell me if you meant a different one.`;
+    }
+    const { data: msgs } = await db.from("messages").select("direction,channel,subject,body,created_at").eq("contact_id", chosen.id).order("created_at", { ascending: false }).limit(15);
+    return { found: true, contact: chosen.name, count: (msgs || []).length, dup_note: dupNote, messages: ((msgs || []) as any[]).map((m) => ({ dir: m.direction, channel: m.channel, subject: m.subject || null, text: String(m.body || "").slice(0, 300), at: m.created_at })) };
+  }
+  // flag_to_nur (2026-06-22): a team member sent something Nur should decide on (a
+  // document/report/intake). The media is already saved on file (worker media path), so
+  // the bot must NOT tell the team member to forward it — it summarises and flags it to
+  // Nur on WhatsApp (a message she replies to: flag for follow-up, or keep on file).
+  // Reaches Nur via the operator_request template so it survives her 24h window. Nur is
+  // the operator who is not the owner (same resolution as pushApprovalRequest).
+  if (name === "flag_to_nur") {
+    const summary = String(input.summary || "").trim();
+    if (!summary) return { ok: false, summary: "I need a short summary of what to flag to Nur." };
+    const owners = ownerKeys();
+    const ops = (process.env.WHATSAPP_OPERATORS || "").split(",").map((x) => phoneKey(x)).filter(Boolean);
+    // Nur is the operator who is NOT the owner. Refuse rather than fall back to the owner
+    // (skeptic #4) — the message is addressed to Nur and must not silently reach Taona.
+    const nurWa = ops.find((k) => !owners.includes(k)) || null;
+    if (!nurWa) return { ok: false, summary: "I could not work out Nur's number to flag this, so I have not. The document is saved on file." };
+    // DEDUP (skeptic #1): a 3-photo intake must not become 3 pings to Nur. If we already
+    // flagged something about this contact in the last ~3 min, do not ping her again.
+    if (contactId) {
+      try {
+        const since = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+        const { data: recent } = await db.from("events").select("id").eq("type", "sasa.flagged_to_nur").eq("subject_id", contactId).gte("created_at", since).limit(1);
+        if ((recent || []).length) return { ok: true, summary: "Already flagged this to Nur a moment ago, I won't ping her twice, it's saved on file.", detail: { deduped: true } };
+      } catch { /* best-effort dedup */ }
+    }
+    const body = `${summary}${/\b(flag|keep|follow.?up|on file)\b/i.test(summary) ? "" : " Want me to flag it for follow-up, or keep it on file?"}`;
+    const r = await pushOperatorUpdate(db, nurWa, "Nur", body, { needsReply: true });
+    await emit({ type: "sasa.flagged_to_nur", source: "agent:sasa", actor: "team", subject_type: "contact", subject_id: contactId || null, payload: { summary: summary.slice(0, 300), delivered: !!r.ok, deferred: !!r.deferredQuietHours } });
+    // QUIET HOURS (skeptic #3): a deferral is NOT a failure — it is queued for morning.
+    // Telling the team member "I could not flag it" would be a false under-claim (Law 11).
+    if (r.deferredQuietHours) return { ok: true, summary: "Saved on file and queued for Nur, she will see it first thing in the morning (it is quiet hours on her side right now).", detail: { queued: true } };
+    if (!r.ok) return { ok: false, summary: `I could not reach Nur just now${r.error ? ` (${r.error})` : ""}, so I have not flagged it, but the document is saved on file.`, error: r.error };
+    // DELIVER THE ACTUAL FILE(S) to Nur, not just the summary (Taona 2026-06-22): so she
+    // can open the document in her own chat. Pulls the asset(s) linked to this contact's
+    // recent inbound (messages.asset_id, last 10 min), signs a 1h URL, and sends each via
+    // WhatsApp. Best-effort: a failed file send never undoes the flag (she still has the
+    // summary + the Library copy). Only runs when the summary actually landed (not quiet hours).
+    let filesSent = 0;
+    if (contactId) {
+      try {
+        const sinceF = new Date(Date.now() - 3 * 60 * 1000).toISOString(); // match the 3-min flag dedup so a later intake never re-sends an earlier one's files
+        const { data: rm } = await db.from("messages").select("asset_id,created_at").eq("contact_id", contactId).not("asset_id", "is", null).gte("created_at", sinceF).order("created_at", { ascending: false }).limit(6);
+        const assetIds = [...new Set(((rm || []) as any[]).map((m) => m.asset_id).filter(Boolean))];
+        if (assetIds.length) {
+          const { data: assets } = await db.from("assets").select("id,storage_path,mime,title").in("id", assetIds);
+          for (const a of ((assets || []) as any[])) {
+            if (!a.storage_path) continue;
+            const { data: signed } = await db.storage.from("assets").createSignedUrl(a.storage_path, 3600);
+            if (!signed?.signedUrl) continue;
+            const fr: any = String(a.mime || "").startsWith("image/") ? await sendImage(nurWa, signed.signedUrl, a.title || undefined) : await sendDocument(nurWa, signed.signedUrl, a.title || "file");
+            if (fr?.id) filesSent++;
+          }
+        }
+      } catch { /* best-effort file delivery */ }
+    }
+    return { ok: true, summary: `Flagged to Nur${filesSent ? ` and sent her the ${filesSent === 1 ? "document" : filesSent + " files"} on WhatsApp` : ""}, she will decide to flag it for follow-up or keep it on file.${filesSent ? "" : " The document is saved on file."}`, detail: { delivered: true, to: "Nur", files: filesSent } };
   }
   // flag_for_clarity (KT #320): the "when unsure, ASK" rail. Logs the request so
   // we can see how often the bot is uncertain, and returns the question for the
@@ -1247,9 +1334,27 @@ export async function commitPaymentRow(db: any, args: any): Promise<{ id: string
   return { id: row?.id ?? null };
 }
 
-async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?: string; senderPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string; tier?: "admin" | "team"; rank?: "owner" | "founder" | "member" | null; operatorName?: string; casesIntake?: boolean } = {}): Promise<ToolResult> {
+async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?: string; senderPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string; tier?: "admin" | "team"; rank?: "owner" | "founder" | "member" | null; operatorName?: string; casesIntake?: boolean; forceResend?: boolean; userText?: string } = {}): Promise<ToolResult> {
   const n = await now();
   const opts = { now: { long: n.long, today: n.today } };
+
+  // C2 STAGE-THEN-CONFIRM for the DELETE family (KT #374). Permanent data loss must NEVER fire
+  // on the model's judgment (class C2). On WhatsApp (confirmWrites), a delete_* tool STAGES a
+  // confirm_action and asks "reply yes"; the confirm gate re-runs this tool with confirmWrites
+  // OFF (so this guard is skipped and the delete executes). ONE interceptor gates all five
+  // without touching their internals. Web console (no confirmWrites = a human clicked it) is
+  // direct. Graceful: if staging fails (kind not migrated) fall through — never worse than today.
+  const DELETE_TOOLS = new Set(["delete_event", "delete_contact", "delete_case", "delete_document", "delete_payment"]);
+  if (ctx.confirmWrites && ctx.contactId && DELETE_TOOLS.has(name)) {
+    const what = String(input.title || input.name || input.payee || input.query || input.case || input.event || "").trim();
+    const noun = name.replace("delete_", "");
+    const { error: stErr } = await db.from("pending_actions").insert({
+      contact_id: ctx.contactId, kind: "confirm_action", status: "awaiting_confirm",
+      summary: `${name}${what ? ` ${what}` : ""}`,
+      payload: { tool: name, args: input, preview: `delete the ${noun}${what ? ` "${what.slice(0, 60)}"` : ""}` },
+    });
+    if (!stErr) return { ok: true, summary: humanize(`That permanently deletes the ${noun}${what ? ` "${what.slice(0, 60)}"` : ""}, which cannot be undone. Reply yes to confirm, or tell me to cancel.`, opts), detail: { staged: true } };
+  }
 
   // ---- SAFE: create_task ----
   if (name === "create_task") {
@@ -1568,7 +1673,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       if (owned.length === 1) {
         list = owned;
       } else {
-        return { ok: false, summary: humanize(`There is more than one open task that could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) };
+        // AMBIGUITY-LOOP (KT #375): all-duplicate matches are the SAME task → act on one
+        // instead of an unbreakable "which one?" loop; only genuinely different tasks ask.
+        const picked = pickFromMatches(list, (t: any) => `${t.title}|${t.assignee_id || ""}`);
+        if (picked) list = [picked];
+        else return { ok: false, summary: humanize(`There is more than one open task that could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) };
       }
     }
     const task = list[0];
@@ -1723,7 +1832,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (list.length > 1) {
       const owned = member?.id ? list.filter((t) => t.assignee_id === member.id) : [];
       if (owned.length === 1) list = owned;
-      else return { ok: false, summary: humanize(`More than one completed task could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) };
+      else { const picked = pickFromMatches(list, (t: any) => `${t.title}|${t.assignee_id || ""}`); if (picked) list = [picked]; // KT #375 all-dupes → act on one
+        else return { ok: false, summary: humanize(`More than one completed task could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) }; }
     }
     const task = list[0];
     // ACCESS CONTROL (P0): a team-tier caller may only reopen THEIR OWN task.
@@ -1865,6 +1975,26 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const group = String(input.group || "").trim();
     const text = String(input.text || "").trim();
     if (!group || !text) return { ok: false, summary: "I need a group name and the message text.", error: "missing group or text" };
+    // DETERMINISTIC GROUP VETO (2026-06-22, KT #370): the model must not fan a PERSON-send
+    // out to a GROUP. LIVE 10:27pm: "Send it to Malek" (a person) caused a STRAY post to
+    // the Rescue group. A post_to_group is legit only when the operator's OWN message
+    // referenced a group — a distinctive token of THIS group, or an explicit group word
+    // ("group"/"channel"/"broadcast"/"everyone"). The deterministic gate decides the
+    // high-side-effect action; the model only proposes (KT #206540). Read the originating
+    // message self-contained (ctx.userText, else the latest inbound), like the notetaker
+    // veto. Fail OPEN if we cannot read the command (never block a legit post on a blank).
+    let gtext = String(ctx.userText || "");
+    if (!gtext && ctx.contactId) {
+      const { data: lastIn } = await db.from("messages").select("body").eq("contact_id", ctx.contactId).eq("direction", "in").order("created_at", { ascending: false }).limit(1).maybeSingle();
+      gtext = String(lastIn?.body || "");
+    }
+    if (gtext && !ctx.sourceGroup) {
+      const refsGroup = commandReferencesGroup(gtext, group);
+      if (!refsGroup) {
+        await emit({ type: "sasa.group_post_vetoed", source: "agent:sasa", actor: ctx.operatorName || "Nur", subject_type: "job", subject_id: null, payload: { group, reason: "no_group_reference", text: gtext.slice(0, 200) } }).catch(() => null);
+        return { ok: false, summary: humanize(`I held off, your message did not mention the ${group} group, so I did not want to post there by mistake. If you did mean to post to ${group}, say "post to the ${group} group", otherwise tell me which person to message.`, opts), error: "no_group_reference", detail: { vetoed: true } };
+      }
+    }
     // HONESTY (real-action law): only queue a post to a group the bot is actually in.
     // Validating here means Sasa tells Nur the truth in the conversation ("I'm not in
     // that group") instead of queuing a doomed send that silently fails later. If we
@@ -1897,8 +2027,18 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!toRaw || !query) return { ok: false, summary: humanize("Tell me who to send it to and which file (a word from its title).", opts), error: "missing to/query" };
     // resolve the recipient's wa_id (same matching as message_person)
     let number: string | null = null, toName = toRaw;
-    if (phoneKey(toRaw).length >= 9) { number = phoneKey(toRaw); }
-    else {
+    if (phoneKey(toRaw).length >= 9 && !isLocalForm(toRaw)) { number = phoneKey(toRaw); }
+    else if (isLocalForm(toRaw)) {
+      // Mark-dup fix (2026-06-22): a bare local number resolves to its canonical
+      // international contact (mirror message_person), so a file send to "0703.." lands.
+      const { data: cands } = await db.from("contacts").select("name,phone").not("phone", "is", null).ilike("phone", `%${suffixKey(toRaw)}%`).order("phone", { ascending: true }).limit(200);
+      const ccsF = orgCCs();
+      const hitsF = distinctLines(((cands || []) as any[]).filter((m) => sameNumber(toRaw, String(m.phone || ""), ccsF)), ccsF);
+      if (hitsF.length === 1) { number = phoneKey(hitsF[0].phone); toName = hitsF[0].name || toRaw; }
+      else if (hitsF.length > 1) return { ok: false, summary: humanize(`The number ${toRaw} could match more than one person: ${hitsF.slice(0, 4).map((m: any) => m.name).join(", ")}. Which one, or give me the full international number?`, opts), detail: { ambiguous: true } };
+      else { number = phoneKey(toRaw); }
+    }
+    if (!number) {
       const likeP = `%${toRaw.replace(/[,()*%]/g, "")}%`;
       const [t, c] = await Promise.all([
         db.from("team_members").select("name,phone,status").ilike("name", likeP).not("phone", "is", null).limit(6),
@@ -1908,8 +2048,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
         ...((t.data || []) as any[]).filter((m) => m.status === "active" || !m.status).map((m) => ({ name: m.name, phone: m.phone })),
         ...((c.data || []) as any[]).map((m) => ({ name: m.name, phone: m.phone })),
       ].filter((m) => phoneKey(m.phone).length >= 9);
-      const seen = new Set<string>();
-      const uniq = matches.filter((m) => { const k = phoneKey(m.phone); if (seen.has(k)) return false; seen.add(k); return true; });
+      // collapse format-variant duplicates of one line (mirror message_person)
+      const uniq = distinctLines(matches, orgCCs());
       if (!uniq.length) return { ok: false, summary: humanize(`I do not have a WhatsApp number for ${toRaw}. What is the number?`, opts), detail: { unresolved: true } };
       // KT #341: prefer a known operator match so a stray duplicate never blocks.
       const opPick = preferOperatorMatch(uniq);
@@ -1940,7 +2080,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       ? await sendImage(number!, link, doc.title || undefined)
       : await sendDocument(number!, link, doc.title || "file");
     if (!res?.id) return { ok: false, summary: humanize(`I could not deliver "${doc.title}" to ${toName} (${res?.error || "send failed"}). They may need to message this line first (24h window).`, opts), error: res?.error || "send failed" };
-    await emit({ type: "whatsapp.file_sent", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: null, payload: { to_last4: number!.slice(-4), title: doc.title, mime } });
+    // KT #373: carry to_name so the canonical proactive-send record (proactiveSendsSince) can
+    // include this delivery by name — a file send IS a proactive person-send the honesty layer
+    // must know about ("did you send X the lease?"). Additive field, no behaviour change.
+    await emit({ type: "whatsapp.file_sent", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: null, payload: { to_name: toName, to_last4: number!.slice(-4), title: doc.title, mime } });
     return { ok: true, summary: humanize(`Sent "${doc.title}" to ${toName} on WhatsApp.`, opts), detail: { title: doc.title, to: toName } };
   }
 
@@ -1990,6 +2133,81 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     return { ok: true, summary: humanize(filed.length === 1 ? `Filed ${filed[0]} under ${folder}.` : `Filed ${filed.length} documents under ${folder}: ${filed.join(", ")}.`, opts), affordance: { kind: "open", label: "Open library", href: "/library" }, detail: { filed: filed.length, folder, brand } };
   }
 
+  // ---- ACTION · TEAM-TO-TEAM RELAY: relay_to_colleague ----
+  // (2026-06-22, Bug 4 / KT #368) A team member could reach Nur (flag_to_nur) but had
+  // NO way to pass a message to a COLLEAGUE (message_person is admin-only). This is the
+  // walled team equivalent: resolve a TEAMMATE only, attribute the sender ("From <name>:
+  // ..."), honor the 24h window with a held relay (KT #206542), dedup, verified send.
+  // Operators (Nur/owner) are REFUSED here and pointed at flag_to_nur, so a decision
+  // never masquerades as a peer ping; outside contacts/donors/beneficiaries are never
+  // reachable from a team tool (it only ever resolves against team_members).
+  if (name === "relay_to_colleague") {
+    const toRaw = String(input.to || "").trim();
+    const message = String(input.message || "").trim();
+    if (!toRaw || !message) return { ok: false, summary: humanize("Tell me which teammate and the message to pass on.", opts), error: "missing to/message" };
+    // ANTI-FORGERY (skeptic C): the delivered body is "From <sender>: <message>". A sender
+    // must not be able to forge a SECOND attribution line ("...\n\nFrom Nur: do X"). Collapse
+    // all newlines/runs to single spaces (no separate lines to hide a forgery on) and
+    // neutralize an internal "From <Name>:" colon that mimics the bot's own attribution.
+    const safeMessage = message
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/\bfrom\s+([\p{L}][\p{L} .'’-]{0,30}?):/giu, "from $1,")
+      .replace(/\s{2,}/g, " ")
+      .trim()
+      .slice(0, 1500);
+    const senderName = (ctx.operatorName || "").trim() || "a teammate";
+    const senderKey = ctx.senderPhone ? phoneKey(ctx.senderPhone) : "";
+    // Resolve against the TEAM ROSTER ONLY (active members). Never the contacts book.
+    const likeT = `%${toRaw.replace(/[,()*%]/g, "")}%`;
+    const byNumber = phoneKey(toRaw).length >= 9 && !/^0/.test(toRaw.replace(/\D/g, ""));
+    const { data: teamRows } = await db.from("team_members").select("name,phone,status").not("phone", "is", null)
+      .or(byNumber ? `phone.ilike.%${phoneKey(toRaw).slice(-9)}%` : `name.ilike.${likeT}`).limit(8);
+    const active = ((teamRows || []) as any[]).filter((m) => (m.status === "active" || !m.status) && phoneKey(m.phone).length >= 9);
+    // collapse format-variant duplicates of one line
+    const uniq = distinctLines(active.map((m) => ({ name: m.name, phone: m.phone })), orgCCs());
+    if (uniq.length === 0) return { ok: false, summary: humanize(`I do not have a teammate called ${toRaw} on the roster, so I have not sent anything. Who do you mean, or give me their number?`, opts), detail: { unresolved: true } };
+    if (uniq.length > 1) return { ok: false, summary: humanize(`More than one teammate matches ${toRaw}: ${uniq.slice(0, 4).map((m) => m.name).join(", ")}. Which one?`, opts), detail: { ambiguous: true } };
+    const colleague = uniq[0];
+    const number = phoneKey(colleague.phone);
+    const toName = colleague.name || toRaw;
+    // REFUSE relaying to self or to an OPERATOR (Nur / owner): those route via flag_to_nur.
+    if (senderKey && number === senderKey) return { ok: false, summary: humanize("That is your own number, so there is nothing to relay. Tell me which teammate to pass it to.", opts), detail: { self: true } };
+    const { role: recipRole, rank: recipRank } = await operatorOf(db, number);
+    if (recipRole === "admin" || recipRank === "owner" || recipRank === "founder") {
+      return { ok: false, summary: humanize(`${toName} is an operator, not a peer I relay to. If this needs Nur's attention, I can flag it to her instead. Want me to do that?`, opts), detail: { operator: true, suggest: "flag_to_nur" } };
+    }
+    const body = `From ${senderName}: ${safeMessage}`;
+    // DEDUP (exact, ~3 min) + RATE CAP (skeptic E): the bot must not become a harassment
+    // amplifier. Beyond the exact-text dedup, cap how many DISTINCT relays one sender can
+    // push to one colleague in a rolling 10 min window. Over the cap, refuse honestly.
+    try {
+      const since = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+      const { data: recent } = await db.from("events").select("id,payload").eq("type", "sasa.relayed_colleague").gte("created_at", since).limit(30);
+      const dupe = ((recent || []) as any[]).some((e) => e.payload?.to_last4 === number.slice(-4) && String(e.payload?.text || "").slice(0, 120) === safeMessage.slice(0, 120));
+      if (dupe) return { ok: true, summary: humanize(`I already passed that to ${toName} a moment ago, so I won't send it twice.`, opts), detail: { deduped: true, to: toName } };
+      const rateSince = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const { data: rl } = await db.from("events").select("id,actor,payload").eq("type", "sasa.relayed_colleague").gte("created_at", rateSince).limit(60);
+      const fromMe = ((rl || []) as any[]).filter((e) => e.actor === senderName && e.payload?.to_last4 === number.slice(-4)).length;
+      if (fromMe >= 8) return { ok: false, summary: humanize(`I've already passed several of your messages to ${toName} in the last few minutes. Give them a moment to reply before I send more.`, opts), error: "rate_capped", detail: { rate_capped: true, to: toName } };
+    } catch { /* best-effort dedup + rate cap */ }
+    const res: any = await sendText(number, body);
+    if (!res?.id) {
+      // 24h window: hold the relay (KT #206542) and deliver when the colleague next
+      // messages in. Verified: only claim queued if the subscription actually landed.
+      const sub = await registerIntent(db, {
+        triggerType: "window_open", triggerKey: number, actionType: "send_text",
+        payload: { body }, toName,
+        requesterWaId: senderKey || null, requesterContactId: ctx.contactId ?? null,
+        reason: "team relay (colleague outside 24h window)",
+      });
+      await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: safeMessage.slice(0, 300), delivered: false, queued: !!sub } });
+      if (sub) return { ok: true, summary: humanize(`${toName} has not messaged this line in the last 24 hours, so WhatsApp won't let me reach them right now. I've held your message and will send it the moment they next message in.`, opts), detail: { delivered: false, queued: true, to: toName } };
+      return { ok: false, summary: humanize(`I could not reach ${toName} just now${res?.error ? ` (${res.error})` : ""}, so I have not passed it on.`, opts), error: res?.error || "send failed", detail: { delivered: false } };
+    }
+    await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: safeMessage.slice(0, 300), delivered: true } });
+    return { ok: true, summary: humanize(`Passed it to ${toName}: "${safeMessage.slice(0, 140)}". I told them it's from you.`, opts), detail: { delivered: true, to: toName, to_last4: number.slice(-4) } };
+  }
+
   // ---- ACTION · DIRECT SEND: message_person ----
   // An explicit operator command ("tell Nur ...") is human-authorized, so it
   // sends straight away (like the daily reminder cron, not the approvals lane).
@@ -1998,14 +2216,34 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "message_person") {
     const toRaw = String(input.to || "").trim();
     const text = String(input.text || "").trim();
+    // Mark-dup fix (2026-06-22): an EXPLICIT operator retry ("he didn't get it",
+    // "send it again") must not be swallowed by the duplicate guard. The model sets
+    // input.resend; AND a DETERMINISTIC ctx.forceResend (the worker detects the
+    // operator's "didn't receive / resend" phrasing) backstops the model in case it
+    // forgets the flag — deterministic route for the action, per KT #206540.
+    const resend = input.resend === true || ctx.forceResend === true;
     if (!toRaw || !text) return { ok: false, summary: humanize("Tell me who to message and what to say.", opts), error: "missing to/text" };
 
     // Resolve a wa_id. A number given outright wins; otherwise match a name
     // across the team and the contacts book (people we actually correspond with).
     let number: string | null = null;
     let toName = toRaw;
-    if (phoneKey(toRaw).length >= 9) {
+    if (phoneKey(toRaw).length >= 9 && !isLocalForm(toRaw)) {
+      // An explicit INTERNATIONAL number wins outright.
       number = phoneKey(toRaw);
+    } else if (isLocalForm(toRaw)) {
+      // A bare LOCAL number (e.g. 0703119486 / 0501168462). Resolve it to a stored
+      // contact's canonical international form so it actually delivers. Mark-dup fix
+      // (2026-06-22, derive-from-contacts rule): match against the contact base by
+      // sameNumber. Exactly one distinct line → use it; two distinct lines → ask
+      // (never guess a country); none → keep the raw local and let the send fail
+      // honestly rather than invent a country code.
+      const { data: cands } = await db.from("contacts").select("name,phone").not("phone", "is", null).ilike("phone", `%${suffixKey(toRaw)}%`).order("phone", { ascending: true }).limit(200);
+      const ccs = orgCCs();
+      const hits = distinctLines(((cands || []) as any[]).filter((m) => sameNumber(toRaw, String(m.phone || ""), ccs)), ccs);
+      if (hits.length === 1) { number = phoneKey(hits[0].phone); toName = hits[0].name || toRaw; }
+      else if (hits.length > 1) return { ok: false, summary: humanize(`The number ${toRaw} could match more than one person: ${hits.slice(0, 4).map((m: any) => m.name).join(", ")}. Which one, or give me the full international number?`, opts), detail: { ambiguous: true } };
+      else { number = phoneKey(toRaw); }
     } else {
       const like = `%${toRaw.replace(/[,()*%]/g, "")}%`;
       const [t, c] = await Promise.all([
@@ -2016,9 +2254,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
         ...((t.data || []) as any[]).filter((m) => m.status === "active" || !m.status).map((m) => ({ name: m.name, phone: m.phone })),
         ...((c.data || []) as any[]).map((m) => ({ name: m.name, phone: m.phone })),
       ].filter((m) => phoneKey(m.phone).length >= 9);
-      // de-dup people who appear in both the team and the contacts book
-      const seen = new Set<string>();
-      const uniq = matches.filter((m) => { const k = phoneKey(m.phone); if (seen.has(k)) return false; seen.add(k); return true; });
+      // Collapse BOTH people who appear in two books AND format-variant duplicates
+      // of the same line (+254703.. and 0703.. → one line, international preferred),
+      // so a pure format split never produces a spurious "which one?" (Mark-dup).
+      const uniq = distinctLines(matches, orgCCs());
       if (uniq.length === 0) return { ok: false, summary: humanize(`I do not have a WhatsApp number for ${toRaw}. What is the number?`, opts), detail: { unresolved: true } };
       // KT #341: a stray duplicate row must never block reaching an operator (Nur).
       const opPick = preferOperatorMatch(uniq);
@@ -2054,22 +2293,36 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const last4 = number!.slice(-4);
     const since2m = new Date(Date.now() - 120000).toISOString();
     const since10m = new Date(Date.now() - 600000).toISOString();
-    const { data: recent } = await db.from("events").select("id,created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since10m).limit(40);
-    const sameRecipient = (recent || []).filter((e: any) => e?.payload?.to_last4 === last4);
-    const exactDupe = sameRecipient.some((e: any) => String(e?.created_at || "") >= since2m && e?.payload?.text === text.slice(0, 300));
-    if (exactDupe) return { ok: true, summary: humanize(`Already sent that to ${toName}.`, opts), detail: { deduped: true, mode: "exact", to: toName, to_last4: last4 } };
-    const tok = (s: string) => new Set(String(s).toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length >= 3));
-    const aT = tok(text);
-    const fuzzyDupe = aT.size > 0 ? sameRecipient.some((e: any) => {
-      const prior = String(e?.payload?.text || "");
-      if (!prior) return false;
-      const bT = tok(prior);
-      if (bT.size === 0) return false;
-      let inter = 0; for (const w of aT) if (bT.has(w)) inter++;
-      const j = inter / (aT.size + bT.size - inter);
-      return j >= 0.7;
-    }) : false;
-    if (fuzzyDupe) return { ok: true, summary: humanize(`Already sent something very similar to ${toName} in the last 10 minutes. Tell me what changed if I should still send it.`, opts), detail: { deduped: true, mode: "fuzzy", to: toName, to_last4: last4 } };
+    // The intent-dedup (exact + fuzzy) is SKIPPED on an explicit operator resend, so
+    // "he didn't receive it" actually re-delivers instead of being held as a dupe.
+    // The atomic claim below still runs (it guards parallel-worker double-fire) but
+    // is made resend-unique so it never blocks the genuine retry.
+    if (resend) {
+      // BACKSTOP (skeptic C): resend bypasses the intent dedup, but a model that sets
+      // it over-eagerly must not reopen the rapid-duplicate hole (Violet: 3 sends in
+      // 8 min). Allow ONE genuine retry, then hold an identical resend inside 2 min.
+      const { data: r2 } = await db.from("events").select("created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since2m).limit(40);
+      const alreadyResent = (r2 || []).some((e: any) => e?.payload?.to_last4 === last4 && e?.payload?.text === text.slice(0, 300));
+      if (alreadyResent) return { ok: true, summary: humanize(`I already re-sent that to ${toName} a moment ago, so I won't send it a third time. Give it a minute, or change the message if it still hasn't landed.`, opts), detail: { deduped: true, mode: "resend_capped", to: toName, to_last4: last4 } };
+    }
+    if (!resend) {
+      const { data: recent } = await db.from("events").select("id,created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since10m).limit(40);
+      const sameRecipient = (recent || []).filter((e: any) => e?.payload?.to_last4 === last4);
+      const exactDupe = sameRecipient.some((e: any) => String(e?.created_at || "") >= since2m && e?.payload?.text === text.slice(0, 300));
+      if (exactDupe) return { ok: true, summary: humanize(`Already sent that to ${toName}.`, opts), detail: { deduped: true, mode: "exact", to: toName, to_last4: last4 } };
+      const tok = (s: string) => new Set(String(s).toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length >= 3));
+      const aT = tok(text);
+      const fuzzyDupe = aT.size > 0 ? sameRecipient.some((e: any) => {
+        const prior = String(e?.payload?.text || "");
+        if (!prior) return false;
+        const bT = tok(prior);
+        if (bT.size === 0) return false;
+        let inter = 0; for (const w of aT) if (bT.has(w)) inter++;
+        const j = inter / (aT.size + bT.size - inter);
+        return j >= 0.7;
+      }) : false;
+      if (fuzzyDupe) return { ok: true, summary: humanize(`Already sent something very similar to ${toName} in the last 10 minutes. Tell me what changed if I should still send it.`, opts), detail: { deduped: true, mode: "fuzzy", to: toName, to_last4: last4 } };
+    }
 
     // RACE-1 (2026-06-15 audit): the SELECT-then-INSERT dedup above is not
     // atomic across parallel workers, so two concurrent calls with the same
@@ -2090,7 +2343,9 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const claimId = randomUUID();
     const textHash = createHash("sha256").update(text.slice(0, 300)).digest("hex").slice(0, 16);
     const minuteBucket = new Date().toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
-    const claimKey = `${last4}:${textHash}:${minuteBucket}`;
+    // On a resend, salt the claim key with our unique claim_id so this genuine retry
+    // always "wins" (never collides with the original send's same-minute claim).
+    const claimKey = resend ? `${last4}:${textHash}:${minuteBucket}:resend:${claimId}` : `${last4}:${textHash}:${minuteBucket}`;
     await emit({ type: "whatsapp.message_out_claim", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: ctx.contactId || null, payload: { claim_id: claimId, claim_key: claimKey, to_last4: last4 } }).catch(() => null);
     // Recheck: did anyone else stake a claim with the same key first?
     const sinceClaim = new Date(Date.now() - 65000).toISOString();
@@ -2127,7 +2382,28 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
           return { ok: true, summary: humanize(`${toName} is outside the 24-hour window, so I delivered it as an update notification instead. Sent.`, opts), detail: { delivered: true, to: toName, to_last4: number.slice(-4), via: "template" } };
         }
       }
-      const why = /re-?engag|24|window|outside/i.test(String(res?.error || "")) ? `${toName} has not messaged us in the last 24 hours, so WhatsApp will not let me reach them directly right now.` : `I could not deliver that to ${toName}.${res?.error ? ` (${res.error})` : ""}`;
+      const outsideWindow = /re-?engag|24|window|outside/i.test(String(res?.error || ""));
+      if (outsideWindow) {
+        // KT #206542: do NOT drop the relay. Register a durable window_open intent
+        // keyed on the recipient's number; the worker delivers it the moment they
+        // next message this line (which reopens the 24h window). Best-effort: if the
+        // subscription store is unavailable (table not yet migrated), fall through to
+        // the honest can't-reach line below, exactly today's behavior.
+        const sub = await registerIntent(db, {
+          triggerType: "window_open",
+          triggerKey: number,
+          actionType: "send_text",
+          payload: { body: text },
+          toName,
+          requesterWaId: ctx.senderPhone ? phoneKey(ctx.senderPhone) : null,
+          requesterContactId: ctx.contactId ?? null,
+          reason: "deferred relay (recipient outside 24h window)",
+        });
+        if (sub) {
+          return { ok: true, summary: humanize(`${toName} has not messaged this line in the last 24 hours, so WhatsApp won't let me reach them right now. I've held your message and will send it the moment they next message in.`, opts), detail: { delivered: false, queued: true, subscribed: true, to: toName, to_last4: number.slice(-4), deduped: sub.deduped } };
+        }
+      }
+      const why = outsideWindow ? `${toName} has not messaged us in the last 24 hours, so WhatsApp will not let me reach them directly right now.` : `I could not deliver that to ${toName}.${res?.error ? ` (${res.error})` : ""}`;
       return { ok: false, summary: humanize(why, opts), error: res?.error || "send failed", detail: { delivered: false } };
     }
     // SCHEMA-4 (2026-06-15 audit): payload.via canonicalized to "whatsapp" so
@@ -2192,13 +2468,23 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (typeof input.age === "number" && input.age > 0 && input.age < 120) rich.age_at_intake = Math.round(input.age);
     if (input.contact_phone) rich.contact_phone = String(input.contact_phone).slice(0, 40);
     if (Array.isArray(input.tags)) rich.tags = input.tags.map((s: any) => String(s).slice(0, 40)).slice(0, 20);
+    // SAME-NODE FLOOR (2026-06-22 skeptic, Bug 3 / KT #367): a non-founder can NEVER
+    // auto-accept a child into the active, donor-facing roster. add_beneficiary is a
+    // TEAM tool the brain can call DIRECTLY (bypassing the deterministic intake route),
+    // and runSasaOpts does not set casesIntake — so without this floor a team member's
+    // natural-language intake ("we took in Brian, add him") would fall through to the
+    // accepted insert below (status active, intake_stage null = on the donor roster).
+    // The never-auto-accept invariant must live HERE at the primitive where both the
+    // route and the brain converge, not only at the route. ANY team-tier call is forced
+    // to a case (under_review) for Nur to approve on /cases.
+    const casesIntake = ctx.casesIntake || ctx.tier === "team";
     // CASES-INTAKE GROUP (e.g. Rescue & Rehab): a child mentioned here is a
     // POTENTIAL beneficiary, NOT an accepted one. Nur said do not add them as
     // beneficiaries yet, so the row lands as a CASE: intake_stage 'under_review'
     // + status 'inactive' (excluded from every active-beneficiary count and the
     // donor view), tagged with the group it came from, awaiting her approve/decline
     // on /cases. This both auto-logs the case AND enforces the never-auto-accept rule.
-    if (ctx.casesIntake) {
+    if (casesIntake) {
       // DEDUP (idempotency): the group brain re-reads recent history every turn,
       // so without this it re-logs the same child as a new case on every message.
       // If an open case with this name already exists for this group, do nothing.
@@ -2383,6 +2669,86 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     return { ok: true, summary: humanize(`Merged ${dup.full_name} into ${keep.full_name}. Funding, photo and notes moved across, and the duplicate is archived (recoverable).`, opts), affordance: { kind: "open", label: "Open beneficiaries", href: "/beneficiaries" }, detail: { kept: keep.id, archived: dup.id } };
   }
 
+  // ---- merge_contact (dedup the contacts book, admin only) ----
+  // Mark-dup fix (2026-06-22). Fold a duplicate contact into the one to keep:
+  // repoint the conversation thread (messages.contact_id) and any task link, carry
+  // over phone/email, keep the canonical international phone, then delete the dupe.
+  if (name === "merge_contact") {
+    if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
+    const dupRaw = String(input.name || "").trim();
+    const keepRaw = String(input.into || "").trim();
+    if (!dupRaw) return { ok: false, summary: "Tell me which contact to fold in.", error: "missing name" };
+    const findC = async (q: string): Promise<any[]> => {
+      const esc = q.replace(/[,()*%]/g, "");
+      if (phoneKey(q).length >= 9 || isLocalForm(q)) {
+        const { data } = await db.from("contacts").select("id,name,phone,email").not("phone", "is", null).ilike("phone", `%${suffixKey(q)}%`).order("phone", { ascending: true }).limit(200);
+        return ((data || []) as any[]).filter((c) => sameNumber(q, String(c.phone || ""), orgCCs()));
+      }
+      const { data } = await db.from("contacts").select("id,name,phone,email").ilike("name", `%${esc}%`).limit(8);
+      return (data || []) as any[];
+    };
+    const doMerge = async (keep: any, dup: any): Promise<{ ok: boolean; error?: string }> => {
+      if (keep.id === dup.id) return { ok: true };
+      const patch: any = {};
+      if (!keep.email && dup.email) patch.email = dup.email;
+      // keep the canonical (longer / international) phone form on the survivor
+      if (phoneKey(String(dup.phone || "")).length > phoneKey(String(keep.phone || "")).length) patch.phone = dup.phone;
+      if (Object.keys(patch).length) { const { error } = await db.from("contacts").update(patch).eq("id", keep.id); if (error) return { ok: false, error: (error as any).message }; }
+      // VERIFIED REPOINT (skeptic E + DB-integrity panel): every contact-keyed column
+      // must move to the survivor BEFORE the delete, and a hard failure ABORTS the
+      // delete (no silent swallow, no orphaned rows). Real columns:
+      //   messages.contact_id              (FK, ON DELETE SET NULL)
+      //   approvals.related_contact_id     (NOT tasks — tasks has no contact column)
+      //   pending_actions.contact_id       (the confirm/payment queue — orphaning this
+      //                                     silently drops a staged send/payment)
+      //   pending_intents.requester_contact_id
+      // wa_turn_claim is ephemeral (PK, self-heals via TTL) so it is intentionally left.
+      // A MISSING deferred table (42P01) is fail-OPEN (nothing to repoint) so an env
+      // where pending_intents was never migrated can still merge; every OTHER error is
+      // fatal and aborts the delete.
+      const repoint = async (table: string, col: string): Promise<string | null> => {
+        const { error } = await db.from(table).update({ [col]: keep.id }).eq(col, dup.id);
+        if (!error) return null;
+        if ((error as any).code === "42P01") return null; // table not migrated yet — nothing to repoint
+        return `${table}.${col}: ${(error as any).message || "repoint failed"}`;
+      };
+      const errs = (await Promise.all([
+        repoint("messages", "contact_id"),
+        repoint("approvals", "related_contact_id"),
+        repoint("pending_actions", "contact_id"),
+        repoint("pending_intents", "requester_contact_id"),
+      ])).filter(Boolean);
+      if (errs.length) return { ok: false, error: `did not delete (left both records intact): ${errs.join("; ")}` };
+      const { error: delErr } = await db.from("contacts").delete().eq("id", dup.id);
+      if (delErr) return { ok: false, error: (delErr as any).message };
+      await emit({ type: "contact.merged", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: keep.id, payload: { merged_name: dup.name, into_name: keep.name, via: "smart" } });
+      return { ok: true };
+    };
+    // Format-variant collapse: one name given, fold its number-variants into the
+    // canonical (international) record.
+    if (!keepRaw) {
+      const rows = await findC(dupRaw);
+      if (rows.length < 2) return { ok: false, summary: humanize(`I only find one contact for ${dupRaw}, so there is nothing to merge.`, opts), detail: { nothing: true } };
+      const lines = distinctLines(rows, orgCCs());
+      if (lines.length > 1) return { ok: false, summary: humanize(`${dupRaw} has more than one DIFFERENT number on file (${lines.map((l: any) => phoneKey(l.phone).slice(-4)).join(", ")}), so these may be different people. Tell me which to keep, or give me the number.`, opts), detail: { ambiguous: true } };
+      const keep = lines[0];
+      let merged = 0;
+      for (const r of rows) { if (r.id !== keep.id) { const m = await doMerge(keep, r); if (m.ok) merged++; } }
+      if (!merged) return { ok: false, summary: humanize(`I could not merge those just now, so I have not. Want me to try again?`, opts), error: "merge failed" };
+      return { ok: true, summary: humanize(`Merged ${merged + 1} format-variant records for ${keep.name || dupRaw} into one, keeping the international number ending ${phoneKey(keep.phone).slice(-4)}.`, opts), affordance: { kind: "open", label: "View contacts", href: "/contacts" }, detail: { kept: keep.id, merged } };
+    }
+    const dl = await findC(dupRaw), kl = await findC(keepRaw);
+    if (!dl.length) return { ok: false, summary: humanize(`I could not find a contact called ${dupRaw}.`, opts) };
+    if (distinctLines(dl, orgCCs()).length > 1) return { ok: false, summary: humanize(`A few match "${dupRaw}": ${dl.slice(0, 4).map((c) => `${c.name} (…${phoneKey(c.phone).slice(-4)})`).join(", ")}. Which one is the duplicate?`, opts) };
+    if (!kl.length) return { ok: false, summary: humanize(`I could not find a contact called ${keepRaw} to keep.`, opts) };
+    if (distinctLines(kl, orgCCs()).length > 1) return { ok: false, summary: humanize(`A few match "${keepRaw}": ${kl.slice(0, 4).map((c) => `${c.name} (…${phoneKey(c.phone).slice(-4)})`).join(", ")}. Which one should I keep?`, opts) };
+    const dup = dl[0], keep = kl[0];
+    if (dup.id === keep.id) return { ok: false, summary: humanize(`Those are the same record, nothing to merge.`, opts) };
+    const m = await doMerge(keep, dup);
+    if (!m.ok) return { ok: false, summary: humanize(`I could not merge them just now, so I have not. Want me to try again?`, opts), error: m.error || "merge failed" };
+    return { ok: true, summary: humanize(`Merged ${dup.name} into ${keep.name}. The conversation history moved across and the duplicate is removed.`, opts), affordance: { kind: "open", label: "View contacts", href: "/contacts" }, detail: { kept: keep.id, archived: dup.id } };
+  }
+
   // ---- CASE LIFECYCLE + CARE (admin only, confidential) ----
   // ---- CASE CRUD (move / edit / merge / delete), admin only. Mirrors the portal
   // CaseManage controls so Nur can do it from WhatsApp too. Resolve by name and
@@ -2396,7 +2762,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: cases } = await db.from("beneficiaries").select("id,full_name,ref_code,triage_notes,photo_asset_id,intake_stage").not("intake_stage", "is", null).ilike("full_name", like).limit(5);
     const list = (cases || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I do not see a case for ${nm}.`, opts) };
-    if (list.length > 1) return { ok: false, summary: humanize(`A few cases match: ${list.map((c) => c.full_name).join(", ")}. Which one?`, opts) };
+    // NB (KT #375): do NOT collapse "duplicates" by name here — a case is a PERSON, and two
+    // children can genuinely share a name. Name ≠ identity, so collapsing would risk acting on
+    // the wrong child. A name match with >1 hit stays a real "which one?" (the right ask).
+    if (list.length > 1) return { ok: false, summary: humanize(`A few cases match: ${list.map((c) => `${c.full_name}${c.ref_code ? ` (${c.ref_code})` : ""}`).join(", ")}. Which one?`, opts) };
     const c = list[0];
 
     if (name === "move_case") {
@@ -2535,8 +2904,9 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: matches } = await db.from("tasks").select("id,title,assignee_id").neq("status", "done").ilike("title", `%${frag}%`).order("created_at", { ascending: false }).limit(5);
     const list = (matches || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find an open task matching "${frag}".`, opts) };
-    if (list.length > 1) return { ok: false, summary: humanize(`A few tasks match: ${list.map((t) => `"${t.title}"`).join(", ")}. Which one?`, opts) };
-    const t = list[0];
+    // AMBIGUITY-LOOP class (KT #375): all-duplicate matches are the same task → act on one.
+    const t = pickFromMatches(list, (x: any) => `${x.title}|${x.assignee_id || ""}`);
+    if (!t) return { ok: false, summary: humanize(`A few tasks match: ${list.map((x: any) => `"${x.title}"`).join(", ")}. Which one?`, opts) };
     // ACCESS CONTROL (P0): a team-tier caller may only update THEIR OWN task.
     {
       const gate = await assertTaskAccess(ctx, db, { taskAssigneeId: t.assignee_id ?? null });
@@ -2710,6 +3080,28 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       if (acUpdErr) return { ok: false, summary: humanize(`I could not update ${cname}'s contact just now, so I have not. Want me to try again?`, opts), error: (acUpdErr as any).message || "contact update failed" };
       await emit({ type: "contact.updated", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: (existing as any[])[0].id, payload: { name: cname, via: "smart" } });
       return { ok: true, summary: humanize(`Updated ${cname}'s contact details.`, opts), affordance: { kind: "open", label: "View contacts", href: "/contacts" }, detail: { contact_id: (existing as any[])[0].id } };
+    }
+    // Mark-dup fix (2026-06-22): before creating a new row, check whether this phone
+    // already exists in ANY format (+254703.. vs 0703.. vs 00254703..). If it does,
+    // update that record instead of spawning a format-variant duplicate.
+    if (phone) {
+      const { data: byPhone } = await db.from("contacts").select("id,name,phone").not("phone", "is", null).ilike("phone", `%${suffixKey(phone)}%`).order("phone", { ascending: true }).limit(200);
+      const dupe = ((byPhone || []) as any[]).find((c) => sameNumber(phone, String(c.phone || ""), orgCCs()));
+      if (dupe) {
+        const patch: any = {}; if (email) patch.email = email; if (input.channel) patch.channel = String(input.channel).slice(0, 40);
+        // keep the canonical (international, longer) phone form on the record
+        if (phoneKey(phone).length > phoneKey(String(dupe.phone || "")).length) patch.phone = phone;
+        // adopt the given name only if the record has none (never clobber a real name)
+        if (cname && (!dupe.name || String(dupe.name).replace(/\D/g, "") === phoneKey(String(dupe.phone || "")))) patch.name = cname;
+        // HONESTY (skeptic G): only CLAIM an update if one actually landed.
+        if (Object.keys(patch).length) {
+          const { error: dupErr } = await db.from("contacts").update(patch).eq("id", dupe.id);
+          if (dupErr) return { ok: false, summary: humanize(`${dupe.name || cname} is already on file on that number, but I could not update their details just now. Want me to try again?`, opts), error: (dupErr as any).message || "contact dedup update failed" };
+          await emit({ type: "contact.updated", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: dupe.id, payload: { name: dupe.name || cname, via: "smart", reason: "phone already on file (format-variant), updated instead of duplicating" } });
+          return { ok: true, summary: humanize(`${dupe.name || cname} is already in your contacts on that number, so I updated their details instead of adding a duplicate.`, opts), affordance: { kind: "open", label: "View contacts", href: "/contacts" }, detail: { contact_id: dupe.id, deduped: true } };
+        }
+        return { ok: true, summary: humanize(`${dupe.name || cname} is already in your contacts on that number, so I did not add a duplicate. Nothing to change.`, opts), affordance: { kind: "open", label: "View contacts", href: "/contacts" }, detail: { contact_id: dupe.id, deduped: true, unchanged: true } };
+      }
     }
     const { data: row, error: acInsErr } = await db.from("contacts").insert({ name: cname, phone, email, channel: input.channel ? String(input.channel).slice(0, 40) : "whatsapp" }).select("id").single();
     // VERIFIED WRITE (KT #336): never say "Saved" unless the row landed.
@@ -2922,6 +3314,21 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "log_payout") {
     const amount = Number(input.amount);
     if (!Number.isFinite(amount) || amount <= 0) return { ok: false, summary: "How much was the payout?", error: "no amount" };
+    // C2 STAGE-THEN-CONFIRM (KT #374): a payout MOVES money on the ledger, so the MODEL must
+    // not log it on its own judgment (class C2). On WhatsApp (confirmWrites), stage a
+    // confirm_action and ask "reply yes" — the confirm gate runs log_payout for real with a
+    // verified result (mirrors record_payment). The web console (a human clicked it) writes
+    // directly. Graceful: if staging fails (e.g. the confirm_action kind is not migrated yet)
+    // fall through to the direct write — never WORSE than today's behaviour.
+    if (ctx.confirmWrites && ctx.contactId) {
+      const preview = `a Givebutter payout of USD ${money(amount)}${input.note ? ` (${String(input.note).slice(0, 80)})` : ""}`;
+      const { error: stErr } = await db.from("pending_actions").insert({
+        contact_id: ctx.contactId, kind: "confirm_action", status: "awaiting_confirm",
+        summary: `log payout USD ${money(amount)}`,
+        payload: { tool: "log_payout", args: { amount, note: input.note || null }, preview },
+      });
+      if (!stErr) return { ok: true, summary: humanize(`Want me to log ${preview}? Reply yes to confirm.`, opts), detail: { staged: true } };
+    }
     const ref = `GB-PAYOUT-${Date.now().toString(36).toUpperCase()}`;
     const { data: row, error: lpErr } = await db.from("payments").insert({ direction: "in", payee: "Givebutter payout", purpose: input.note ? String(input.note).slice(0, 300) : "Givebutter USD payout to Kenya", amount, currency: "USD", method: "givebutter", status: "paid", paid_at: new Date().toISOString(), category: "payout", ref, created_by: "Sasa" }).select("id").single();
     // VERIFIED WRITE (KT #336): never say "Logged a payout" unless the row landed.
@@ -3084,7 +3491,9 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: docs } = await db.from("documents").select("id,title,folder").ilike("title", `%${q.replace(/[,()*%]/g, "")}%`).order("created_at", { ascending: false }).limit(6);
     const list = (docs || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a document matching "${q}".`, opts) };
-    if (list.length > 1) return { ok: false, summary: humanize(`A few documents match: ${list.map((d) => `"${d.title}"`).join(", ")}. Which one?`, opts) };
+    // NB (KT #375): do NOT collapse by title — two docs with the same title can be different
+    // files/versions. Show the folder to disambiguate; a real >1 match stays a "which one?".
+    if (list.length > 1) return { ok: false, summary: humanize(`A few documents match: ${list.map((d) => `"${d.title}"${d.folder ? ` in ${d.folder}` : ""}`).join(", ")}. Which one?`, opts) };
     const d = list[0];
     const { error: ddErr } = await db.from("documents").delete().eq("id", d.id);
     // VERIFIED WRITE (KT #336): never say "Removed" unless the delete landed.
@@ -3462,8 +3871,14 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     let cands = (data || []) as any[];
     if (!frag) cands = cands.slice(0, 1);
     if (!cands.length) return { ok: false, summary: humanize("I could not find that task to remove.", opts) };
-    if (cands.length > 1) return { ok: false, summary: humanize(`Which task: ${cands.slice(0, 5).map((t) => `"${t.title}"`).join(", ")}?`, opts), detail: { ambiguous: true } };
-    const t = cands[0];
+    // AMBIGUITY-LOOP CLASS (KT #375): all-duplicate matches (same title but for case/space) are
+    // the SAME task → act on one (the shared pickFromMatches helper); only GENUINELY different
+    // tasks still ask "which one?". Without this, two tasks identical-but-for-case looped forever.
+    // true duplicate = same title AND same assignee (two people can have a same-titled task).
+    const taskKey = (c: any) => `${c.title}|${c.assignee_id || ""}`;
+    const wasDuplicate = isAllDuplicates(cands, taskKey);
+    const t = pickFromMatches(cands, taskKey);
+    if (!t) return { ok: false, summary: humanize(`Which task: ${cands.slice(0, 5).map((c: any) => `"${c.title}"`).join(", ")}?`, opts), detail: { ambiguous: true } };
     // ACCESS CONTROL (P0): a team-tier caller may only delete THEIR OWN task.
     {
       const gate = await assertTaskAccess(ctx, db, { taskAssigneeId: t.assignee_id ?? null });
@@ -3480,8 +3895,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // so "Removed the task" was reported even when RLS / a network error blocked the delete.
     const { error: delErr } = await db.from("tasks").delete().eq("id", t.id);
     if (delErr) return { ok: false, summary: humanize(`I could not remove "${t.title}" just now. ${(delErr as any).message || ""}`.trim(), opts), error: (delErr as any).message || "delete_failed" };
-    await emit({ type: "task.deleted", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: t.id, payload: t });
-    return { ok: true, summary: humanize(`Removed the task "${t.title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { deleted_id: t.id } };
+    await emit({ type: "task.deleted", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: t.id, payload: { ...t, was_duplicate: wasDuplicate } });
+    return { ok: true, summary: humanize(wasDuplicate ? `Removed the duplicate "${t.title}" and kept the other copy.` : `Removed the task "${t.title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { deleted_id: t.id, was_duplicate: wasDuplicate } };
   }
 
   // ---- LIVING BRAIN: operator-taught facts (#12 write-back, #13 correction). ----
@@ -3579,16 +3994,28 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const date = String(input.date || "").trim();
     if (!title) return { ok: false, summary: humanize("I need a title for the event.", opts), error: "no title" };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, summary: humanize("I need a date (YYYY-MM-DD) for the event.", opts), error: "no date" };
-    // dedup: if an event with the same title and date already exists, do not duplicate
-    const { data: existingEvent } = await db.from("calendar_events").select("id").eq("title", title).eq("starts_on", date).limit(1);
-    if (existingEvent?.length) {
-      return { ok: true, summary: humanize(`Already on the calendar: "${title}" on ${date}.`, opts), affordance: { kind: "open", label: "Open calendar", href: "/calendar" }, detail: { event_id: existingEvent[0].id, deduped: true } };
+    let time = /^\d{2}:\d{2}$/.test(String(input.time || "")) ? String(input.time) : null;
+    let endTime = /^\d{2}:\d{2}$/.test(String(input.end_time || "")) ? String(input.end_time) : null;
+    let eventDate = date;
+    // DETERMINISTIC TZ CONVERSION (2026-06-22 Nairobi/Dubai bug, KT #206540): when the user
+    // states a time in ANOTHER zone ("12pm Nairobi time"), the model passes the time AS
+    // STATED plus source_timezone, and CODE converts it to the operator's zone (Asia/Dubai),
+    // never the model's arithmetic — it added 2h instead of 1. Converts date too (a late
+    // event can roll to the next day). Fail-safe: a bad/unknown zone leaves the time as-is.
+    if (String(input.source_timezone || "").trim() && time) {
+      const conv = convertWallClock(eventDate, time, String(input.source_timezone), DEFAULT_TZ);
+      eventDate = conv.date; time = conv.time;
+      if (endTime) endTime = convertWallClock(date, endTime, String(input.source_timezone), DEFAULT_TZ).time;
     }
-    const time = /^\d{2}:\d{2}$/.test(String(input.time || "")) ? input.time : null;
+    // dedup: if an event with the same title and date already exists, do not duplicate
+    const { data: existingEvent } = await db.from("calendar_events").select("id").eq("title", title).eq("starts_on", eventDate).limit(1);
+    if (existingEvent?.length) {
+      return { ok: true, summary: humanize(`Already on the calendar: "${title}" on ${eventDate}.`, opts), affordance: { kind: "open", label: "Open calendar", href: "/calendar" }, detail: { event_id: existingEvent[0].id, deduped: true } };
+    }
     const kind = ["event", "meeting", "travel", "visit", "reminder"].includes(input.kind) ? input.kind : "event";
     const row = {
-      title, starts_on: date, ends_on: /^\d{4}-\d{2}-\d{2}$/.test(String(input.end_date || "")) ? input.end_date : null,
-      start_time: time, end_time: /^\d{2}:\d{2}$/.test(String(input.end_time || "")) ? input.end_time : null,
+      title, starts_on: eventDate, ends_on: /^\d{4}-\d{2}-\d{2}$/.test(String(input.end_date || "")) ? input.end_date : null,
+      start_time: time, end_time: endTime,
       all_day: !time, location: input.location || null, notes: input.notes || null, kind,
     };
     // Mirror to Google first so we can store its id (honest sync state, Law 11).
@@ -3628,8 +4055,17 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!list.length) return { ok: false, summary: humanize("I could not find a calendar event matching that.", opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`There are ${list.length} events matching that: ${list.map((e) => `"${e.title}" (${e.starts_on})`).join(", ")}. Which one?`, opts) };
     const e = list[0];
-    const new_date = /^\d{4}-\d{2}-\d{2}$/.test(String(input.new_date || "")) ? input.new_date : e.starts_on;
-    const new_time = /^\d{2}:\d{2}$/.test(String(input.new_time || "")) ? input.new_time : e.start_time;
+    const inputTime = /^\d{2}:\d{2}$/.test(String(input.new_time || "")) ? String(input.new_time) : null;
+    let new_date = /^\d{4}-\d{2}-\d{2}$/.test(String(input.new_date || "")) ? String(input.new_date) : e.starts_on;
+    let new_time = inputTime || e.start_time;
+    // DETERMINISTIC TZ CONVERSION (same as create_event, KT #206540): a NEW time stated in
+    // another zone is converted in code from source_timezone -> operator zone, never the
+    // model's arithmetic. Only the explicitly-provided new time is converted (not the
+    // event's existing stored time).
+    if (inputTime && String(input.source_timezone || "").trim()) {
+      const conv = convertWallClock(new_date, inputTime, String(input.source_timezone), DEFAULT_TZ);
+      new_date = conv.date; new_time = conv.time;
+    }
     const todayISO = new Date().toISOString().slice(0, 10);
     const wasPast = e.starts_on < todayISO;
     const patch = { ...e, starts_on: new_date, start_time: new_time || null, all_day: !new_time, updated_at: new Date().toISOString() };
@@ -3729,6 +4165,37 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "dispatch_meeting_bot") {
     const link = String(input.link || "").trim();
     if (!link) return { ok: false, summary: humanize("I need the meeting link to send the bot.", opts), error: "no link" };
+    // KT #363 deterministic veto. The model sometimes calls this high-side-effect
+    // tool for a REMINDER that merely mentions a meeting link ("Add this reminder
+    // for me: Call Daffi at 3:30 via Zoom <link>"). A reminder is not a notetake
+    // request, and dispatching a bot to that link makes Sasa later report a failed
+    // capture for something Nur never asked the bot to attend. The model proposes;
+    // a deterministic gate decides the action (KT #206540). When the originating
+    // message is clearly a reminder and carries NO explicit notetake intent, refuse
+    // and let the model route to the reminder tools. Legit "send the bot to my
+    // meeting / take notes / join the call" still passes (notetake intent present).
+    // Resolve the originating message self-contained: prefer ctx.userText if a
+    // caller threaded it, else read the latest inbound message for this contact
+    // (that IS the message that triggered this turn). Keeps the veto entirely
+    // inside this file (no dependency on the agent loop wiring).
+    let userText = String(ctx.userText || "");
+    if (!userText && ctx.contactId) {
+      const { data: lastIn } = await db
+        .from("messages")
+        .select("body")
+        .eq("contact_id", ctx.contactId)
+        .eq("direction", "in")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      userText = String(lastIn?.body || "");
+    }
+    const reminderIntent = /\b(remind(er)?|don'?t\s+forget|note\s+to\s+self)\b/i.test(userText);
+    const notetakeIntent = /\b(take\s+notes|notetak|note-?taker|note\s+taker|join\s+(the|this|that)\s+(call|meeting)|send\s+(the\s+)?(notetaker|bot|note\s*taker)|record\s+(the|this|that)|cover\s+(the|this|that)\s+(call|meeting)|sit\s+in|transcrib)\b/i.test(userText);
+    if (reminderIntent && !notetakeIntent) {
+      await emit({ type: "sasa.notetaker_dispatch_vetoed", source: "agent:sasa", actor: ctx.operatorName || "Nur", payload: { reason: "reminder_intent", text: userText.slice(0, 200) } }).catch(() => null);
+      return { ok: false, summary: humanize("That is a reminder, not a request to send the notetaker, so I have not dispatched Digital Nur. I am setting it as a reminder for you instead.", opts), error: "reminder_intent_not_notetake" };
+    }
     const title = String(input.title || "").trim() || undefined;
     const scheduledAt = String(input.scheduled_at || "").trim() || undefined;
     const r = await dispatchMeetingBot({ link, title, scheduledAt, displayName: "Digital Nur" });
@@ -3795,7 +4262,7 @@ async function queueThankYouGated(db: any, gift: any, donor: any, n: { long: str
 
 // THE TOOL RUNNER the route calls. Reads run directly; actions go through the
 // gated/safe runner. Always returns a JSON-serializable object for the next turn.
-export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup?: string; senderPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string; tier?: "admin" | "team"; rank?: "owner" | "founder" | "member" | null; operatorName?: string; casesIntake?: boolean; traceId?: string }): Promise<any> {
+export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup?: string; senderPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string; tier?: "admin" | "team"; rank?: "owner" | "founder" | "member" | null; operatorName?: string; casesIntake?: boolean; traceId?: string; forceResend?: boolean; userText?: string }): Promise<any> {
   const db = admin();
   // PRIVACY WALL: only the owner (Taona) sees the owner's own line on reads. A
   // group caller is never the owner. Defaults to owner-view when no rank is given

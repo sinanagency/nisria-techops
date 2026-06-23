@@ -78,20 +78,38 @@ function matchIsStatus(body) {
 // drops the imperative ("mark X as done AND Y as blocked" -> seg2 is "Y as
 // blocked"). Specific enough not to overmatch ordinary prose: requires the
 // trailing word to be a known status word AND the connector to be "as".
+//
+// HARDENED 2026-06-22 (KT #371): the STATUS segment (m[2]) must be SHORT — essentially
+// the status phrase itself, not a long clause. Without this, a reminder like "...work on
+// it with Malek AS the deadline for proposals is August 17..." matched (an incidental
+// "open"/"to do" lurking in the long tail) and got classified as a state transition.
 function matchTitleAsStatus(body) {
   const re = /^\s*(?:the\s+)?(.+?)\s+as\s+(.+?)\s*$/im;
   const m = body.match(re);
   if (!m) return null;
+  const statusSeg = String(m[2] || "").trim();
+  // a real status phrase is short ("done", "in review", "back to todo") — never a sentence
+  if (statusSeg.split(/\s+/).length > 4) return null;
   const titleFrag = cleanFrag(m[1]);
-  const status = findStatusFromText(m[2]);
+  const status = findStatusFromText(statusSeg);
   if (!titleFrag || titleFrag.length < 3 || !status) return null;
   return { intent: "transition_status", title_fragment: titleFrag, status, reason: null };
 }
+
+// A CREATION / REMINDER / SEND / SHARE intent is NEVER a state transition. A message like
+// "Save this and remind me to work on it with Malek ... Send it to Malek as well" must
+// fall through to parseTasks / the brain to CREATE the reminder, not get matched to an
+// unrelated open task (2026-06-22 live: it matched "work on Kepenzi pitch deck" and said
+// "already todo, no change needed" every time — the hallucination Taona flagged). A link
+// drop is content, not a state op. (KT #371.)
+const CREATE_OR_SEND_INTENT = /\b(remind me|reminder|don'?t forget|note to self|save (this|it|that)|new task|create (a |an )?task|add (a |an )?task|send (it|this|that|him|her|them|to|the)|tell (nur|him|her|them|everyone|the team)|share (it|this|with|to)|forward (it|this|to))\b/i;
 
 // Public: state-transition parser. Returns null if no match.
 export function parseStateTransition(body) {
   const b = String(body || "").trim();
   if (b.length < 5) return null;
+  if (CREATE_OR_SEND_INTENT.test(b)) return null; // a create/remind/send is not a state op
+  if (/https?:\/\//i.test(b)) return null;        // a link drop is content, not a state op
   return matchMarkAs(b) || matchAbandon(b) || matchIsStatus(b) || matchTitleAsStatus(b) || null;
 }
 
@@ -155,27 +173,45 @@ export function parseTaskDependency(body) {
 // Shared: substring-then-word-overlap fuzzy matcher. Lifted from
 // smart-tools.ts complete_task so behavior matches operator expectations.
 // Returns up to N hits, best-match-first. Empty array means no candidate.
+// Scaffold / connector / generic-verb words carry NO identity — matching on them
+// false-links unrelated tasks (2026-06-22 live: "work on it with Malek" matched "work on
+// Kepenzi pitch deck" on the shared "work"+"with", and the bot said "already todo"). Only
+// DISTINCTIVE words (names, nouns) decide a match. (KT #371, the #358 principle on the ops path.)
+const SCAFFOLD_WORDS = new Set([
+  "the","and","for","with","this","that","from","into","your","you","our","its","they","them",
+  "task","tasks","work","working","worked","please","need","want","make","made","get","got","also",
+  "then","now","will","can","could","should","would","about","have","has","had","are","was","were",
+  "been","being","send","sent","tell","told","remind","reminder","save","saved","new","add","added",
+  "create","meet","meeting","call","but","not","all","any","out","let","him","her","his","she",
+  "their","there","here","what","when","where","which","who","how","its","it's","onto","over",
+]);
+function distinctiveWords(f) {
+  return f.split(/\s+/).filter((w) => w.length >= 3 && !SCAFFOLD_WORDS.has(w));
+}
 export function fuzzyMatchTasks(frag, openRows) {
   if (!frag) return [];
   const f = String(frag).toLowerCase().trim();
   if (!f) return [];
   const open = Array.isArray(openRows) ? openRows : [];
-  // 1) substring (case-insensitive)
+  // 1) substring (case-insensitive) — a literal title fragment is a strong signal
   let hits = open.filter((t) => String(t.title || "").toLowerCase().includes(f));
   if (hits.length) return hits;
-  // 2) word-overlap fallback
-  const words = f.split(/\s+/).filter((w) => w.length >= 3);
+  // 2) DISTINCTIVE-word overlap. Scaffold words ("work","with","the") never count, so a
+  // request shares a task only when their identifying words (names/nouns) actually overlap.
+  const words = distinctiveWords(f);
   if (!words.length) return [];
   const scored = open
     .map((t) => {
       const title = String(t.title || "").toLowerCase();
-      const score = words.filter((w) => title.includes(w)).length;
+      const titleWords = new Set(distinctiveWords(title));
+      const score = words.filter((w) => titleWords.has(w)).length;
       return { t, score };
     })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score);
   const best = scored.length ? scored[0].score : 0;
-  // Require real overlap: ≥2 matched words, or all of a single-word phrase.
+  // Require real DISTINCTIVE overlap: ≥2 matched distinctive words, or the only
+  // distinctive word of a single-word fragment.
   if (best >= 2 || (best >= 1 && words.length === 1)) {
     return scored.filter((x) => x.score === best).map((x) => x.t);
   }
