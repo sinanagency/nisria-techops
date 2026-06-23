@@ -42,7 +42,11 @@ const eq = (a, b, m) => (JSON.stringify(a) === JSON.stringify(b) ? ok(m) : fail(
 // ---- T4: tier-gate (no leak) + no over-share fallback (skeptic #5/#6) ----
 {
   if (!/const canAnswerSendState = !inGroup && \(opts\.operatorRank === "owner" \|\| opts\.operatorRank === "founder"\);/.test(SA)) fail("T4a the deterministic answer must be tier-gated to owner/founder on a private line (no team/group leak)");
-  if (!/if \(asked\.length === 0\) return null;/.test(SA)) fail("T4b when the asked person is unresolved it must return null (honest 'let me check'), NOT dump the day's roster");
+  if (!/I have no record of messaging \$\{joinNames\(miss\)\} today, so I should not have said I did/.test(SA)) fail("T4b2 a FALSE/PARTIAL affirmative must rewrite to the honest per-person negative (KT #390)");
+  if (!/const replyDenies = SEND_STATE_DENIAL\.test\(replyStr\);/.test(SA)) fail("T4b3 must compute reply polarity");
+  if (!/if \(!replyDenies && !\/\\bgroup\\b\/i\.test\(replyStr\)\) \{/.test(SA)) fail("T4b4 the per-person branch must skip denials AND group-shaped replies (only judge person affirmatives)");
+  if (!/new RegExp\(`\\\\b\$\{p\.first\}\\\\b`\)\.test\(cmd\) \|\| byName\.has\(p\.first\)/.test(SA)) fail("T4b6 must only judge people NAMED in the command or actually sent-to (skeptic hole B — no stray-noun fabrication)");
+  if (!/if \(miss\.length === 0\) return null;/.test(SA)) fail("T4b5 a fully-TRUE affirmation (all named really messaged) is left intact (null)");
   if (/today I have messaged \$\{joinNames\(all\)\}/.test(SA)) fail("T4c the over-share 'today I have messaged <everyone>' branch must be removed");
   // tz-correct 'today' (skeptic #3): filtered to the Dubai calendar day, not now-18h
   if (!/dayKey\(String\(s\.ts \|\| ""\)\) !== todayKey\) continue;/.test(SA)) fail("T4d sends must be filtered to the operator's calendar today (tz-correct), not a rolling window");
@@ -96,9 +100,10 @@ const eq = (a, b, m) => (JSON.stringify(a) === JSON.stringify(b) ? ok(m) : fail(
 {
   // source-seam: the override branch exists, is FIRST, and is NOT gated on a verify tool
   if (!/let sendStateTruth: string \| null = null;/.test(SA)) fail("T5a the deterministic send-state override must exist");
-  const blk = SA.slice(SA.indexOf("let sendStateTruth"), SA.indexOf("let sendStateTruth") + 700);
+  const blk = SA.slice(SA.indexOf("let sendStateTruth"), SA.indexOf("let sendStateTruth") + 1500);
   if (!/SEND_STATE_QUESTION\.test\(String\(opts\.command/.test(blk)) fail("T5b gated on a send-state question");
-  if (!/SEND_STATE_DENIAL\.test\(String\(reply/.test(blk)) fail("T5c gated on a send-state DENIAL (not any claim — so a correct affirmation is never clobbered)");
+  // KT #390: the gate now fires on a DENIAL **or** an AFFIRMATIVE send claim (the LOG decides truth)
+  if (!/SEND_STATE_DENIAL\.test\(String\(reply[\s\S]*?SEND_AFFIRM\.test\(String\(reply/.test(blk)) fail("T5c gated on a send-state DENIAL OR an affirmative send claim (SEND_AFFIRM) — the per-person log answer prevents clobbering a true affirmation (KT #390)");
   if (!/!toolRuns\.some\(\(t\) => SEND_TOOLS\.has\(t\.name\)/.test(blk)) fail("T5d exempts a genuine send THIS turn");
   if (/VERIFY_TOOLS/.test(blk)) fail("T5e the override must NOT depend on a verify tool (that gate is what let the lie ship)");
   // it must run BEFORE claimsStagingWithoutTool (be the first finalize branch)
@@ -109,8 +114,11 @@ const eq = (a, b, m) => (JSON.stringify(a) === JSON.stringify(b) ? ok(m) : fail(
   const SEND_STATE_QUESTION = (() => { const m = SA.match(/const SEND_STATE_QUESTION = (\/.*\/i);/); return m ? eval(m[1]) : /$^/; })();
   const SEND_STATE_DENIAL = (() => { const m = SA.match(/const SEND_STATE_DENIAL = (\/.*\/i);/); return m ? eval(m[1]) : /$^/; })();
   const SEND_TOOLS = new Set(["message_person", "post_to_group", "send_file_to_person", "transfer_drive_file"]);
+  const SEND_AFFIRM = (() => { const m = SA.match(/const SEND_AFFIRM = (\/.*\/i);/); return m ? eval(m[1]) : /$^/; })();
+  // KT #390: the gate now fires on a DENIAL or an AFFIRMATIVE send claim; the LOG decides truth.
   const gatePasses = (command, reply, toolRuns, rank) => (rank === "owner" || rank === "founder")
-    && SEND_STATE_QUESTION.test(command) && SEND_STATE_DENIAL.test(reply)
+    && SEND_STATE_QUESTION.test(command)
+    && (SEND_STATE_DENIAL.test(reply) || SEND_AFFIRM.test(reply))
     && !toolRuns.some((t) => SEND_TOOLS.has(t.name) && t.result?.ok === true);
   const command = "Did you text Mark and Cynthia today?";
   const lie = "I logged that, but I have not actually messaged them. It is on their board and will show in their daily brief. Want me to message them directly now so they see it?";
@@ -120,8 +128,39 @@ const eq = (a, b, m) => (JSON.stringify(a) === JSON.stringify(b) ? ok(m) : fail(
   eq(gatePasses(command, lie, [{ name: "message_person", result: { ok: true, detail: { delivered: true } } }], "founder"), false, "T5i a real send this turn is exempt");
   // team tier never triggers it (privacy)
   eq(gatePasses(command, lie, [], "member"), false, "T5j team tier never triggers the override");
-  // skeptic #1: a CORRECT, richer affirmative reply must NOT be clobbered (denial gate)
-  eq(gatePasses(command, "Yes, I sent Mark the report at 9am and he replied he is on it.", [], "founder"), false, "T5k a correct affirmative reply is left intact (not flattened)");
+
+  // ---- KT #390: the FALSE-AFFIRMATIVE now trips the gate (the exact transcript lie) ----
+  eq(gatePasses("did u text now mark", "Yes, I did message Mark Njambi earlier today.", [], "founder"), true,
+     "T5k the false-affirmative 'did message Mark' now trips the override gate (was the live lie L228/247)");
+  eq(gatePasses("did u text mark", "I sent Mark the report earlier.", [], "founder"), true,
+     "T5k2 the 'I sent X the report' shape also trips the gate (skeptic hole H)");
+  // behavioural mirror of answerSendStateFromLog's per-person affirm branch (grouped names)
+  const STOP = new Set(["Sent","Messaged","Texted","Pinged","Notified","Told","Emailed","Reminded","Informed","Reached","Posted","Contacted","Alerted","Acknowledged","Briefed","Updated","Copied","Called","Phoned","Looped","Followed","Forwarded","Done","Logged","Created","Marked","Added","Removed","Deleted","Set","Made","Drafted","Noted","Tracked","Closed","Opened","Replied","Good","Morning","Afternoon","Evening","Hi","Hello","Hey","Just","Yes","No","OK","Okay","Sure","Want","Nisria","Sasa","Nur"]);
+  const people = (reply) => [...String(reply).matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*)\b/g)].map((m) => m[1]).filter((full) => !STOP.has(full.split(/\s+/)[0])).map((full) => ({ first: full.split(/\s+/)[0].toLowerCase(), full }));
+  // mirror incl. the round-2 SCOPE fix: skip group-shaped replies; only judge people NAMED in the
+  // command or actually in the log. returns "INTACT" | "NEGATIVE" | "PASS".
+  const perPerson = (byName, cmd, reply) => {
+    if (SEND_STATE_DENIAL.test(reply)) return "PASS";
+    if (/\bgroup\b/i.test(reply)) return "PASS";
+    const ppl = people(reply).filter((p) => new RegExp(`\\b${p.first}\\b`).test(cmd.toLowerCase()) || byName.has(p.first));
+    if (!ppl.length) return "PASS";
+    return ppl.every((p) => byName.has(p.first)) ? "INTACT" : "NEGATIVE";
+  };
+  eq(people("Yes, I did message Mark Njambi earlier today.").map((p) => p.full).join("|"), "Mark Njambi",
+     "T5l 'Mark Njambi' groups as ONE person (no surname-noise, skeptic hole F)");
+  eq(perPerson(new Map(), "did u text now mark", "Yes, I did message Mark Njambi earlier today."), "NEGATIVE",
+     "T5m empty log + affirmative => honest negative (the exact transcript lie L228/247)");
+  eq(perPerson(new Map([["mark", {}]]), "did you message mark and cynthia", "Yes, I messaged Mark and Cynthia earlier today."), "NEGATIVE",
+     "T5n PARTIAL lie: only Mark sent, Cynthia not => names the gap (skeptic hole E)");
+  eq(perPerson(new Map([["mark", {}], ["cynthia", {}]]), "did you message mark and cynthia", "Yes, I messaged Mark and Cynthia earlier today."), "INTACT",
+     "T5o both really sent => true affirmation left intact (no clobber)");
+  eq(perPerson(new Map(), "did you message them", "I have not actually messaged them today."), "PASS",
+     "T5p a genuine DENIAL is never treated as an affirmative (honest denial left intact)");
+  // round-2 hole B: a stray Capitalized noun must NOT fabricate a negative or taint a true send
+  eq(perPerson(new Map([["mark", {}]]), "did you text mark", "I sent the Zoom link to Mark earlier."), "INTACT",
+     "T5q 'Zoom' (not asked-about, not sent-to) is ignored — a true Mark-send is NOT tainted (skeptic hole B)");
+  eq(perPerson(new Map(), "did you post to the team", "I posted it to the Maisha Inventory group."), "PASS",
+     "T5r a group-shaped reply is skipped (no 'no record of messaging Maisha' fabrication)");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");

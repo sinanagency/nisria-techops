@@ -384,6 +384,30 @@ const SEND_TOOLS = new Set(["message_person", "post_to_group", "send_file_to_per
 const SEND_VERBS_GROUP = "looped\\s+in|followed\\s+up\\s+with|sent|messaged|reminded|notified|told|pinged|informed|reached|emailed|dm'?d|dmed|contacted|alerted|acknowledged|briefed|updated|copied|cc'?d|called|phoned";
 const SEND_CLAIM = /\b(?:sent\s+(?:it|them|the\s+(?:task|message|reminder|note))?\s*(?:to|him|her|them)|i'?ve\s+sent|i\s+have\s+sent|message\s+sent|messaged|texted|pinged|notified|told\s+(?:him|her|them|\w+)|let\s+(?:him|her|them|\w+)\s+know|reached\s+out\s+to|posted\s+(?:it\s+)?(?:to|in)\b)/i;
 const SEND_HAS = /\b(?:he|she|they)\s+(?:now\s+)?(?:has|have)\s+(?:it|them)\b|\b\w+\s+(?:has|have|received|got)\s+(?:the\s+(?:task|message|reminder|note)|it now)\b/i;
+// An AFFIRMATIVE send claim in a reply ("I did message Mark", "I sent Mark the report",
+// "I messaged Mark and Cynthia", "I told her", "I reached out to them"). SEND_CLAIM missed the
+// "did message" auxiliary and the "sent <Name> the <noun>" shape, so the transcript lie (KT #390)
+// evaded every guard. Used to fire the log-grounded send-state override on affirmatives, not just
+// denials. Deliberately does NOT match a denial ("I have not messaged…") or a future ("I will
+// message…") — the verb must sit right after I/I've/I have/I did.
+const SEND_AFFIRM = /\bi(?:'?ve| have| did)?\s+(?:just\s+|already\s+)?(?:sent|message[sd]?|messaging|text(?:ed)?|told|notif(?:y|ied)|ping(?:ed)?|email(?:ed)?|contact(?:ed)?|reach(?:ed)?(?:\s+out)?|let\s+\w+\s+know)\b/i;
+
+// Group consecutive capitalized words into ONE person ("Mark Njambi" => one, not two tokens;
+// "Mark and Cynthia" => two, split by the lowercase "and"). Stoplist applied to the FIRST token.
+// Returns {first (lowercased, for log match), full (display)}. Fixes the surname-noise the skeptic
+// flagged and lets the answer name each person honestly.
+function claimedPeople(sentence: string): { first: string; full: string }[] {
+  const out: { first: string; full: string }[] = [];
+  const re = /\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sentence))) {
+    const full = m[1];
+    const first = full.split(/\s+/)[0];
+    if (SEND_NAME_STOPLIST.has(first)) continue;
+    out.push({ first: first.toLowerCase(), full });
+  }
+  return out;
+}
 const HONEST_NO_SEND =
   "I logged that, but I have not actually messaged them. It is on their board and will show in their daily brief. Want me to message them directly now so they see it?";
 
@@ -794,10 +818,36 @@ async function answerSendStateFromLog(
       for (const key of byName.keys()) if (new RegExp(`\\b${key}\\b`).test(hist)) asked.push(key);
     }
     asked = [...new Set(asked)];
-    // Unresolved subject: return null → caller ships the honest "let me check". Never a roster dump.
+    const replyStr = String(reply || "");
+    const replyDenies = SEND_STATE_DENIAL.test(replyStr);
+
+    // AFFIRMATIVE PER-PERSON TRUTH (KT #390 + skeptic E/F/H). When the reply AFFIRMS a send and
+    // NAMES specific people, answer per person from the real log — never a blanket "yes" that
+    // hides a full or partial lie:
+    //   - every named person really messaged  → null (leave the true affirmation intact)
+    //   - NONE messaged ("Yes, I did message Mark Njambi" / empty log) → honest full negative
+    //   - SOME messaged ("messaged Mark and Cynthia", only Mark sent)  → name the gap honestly
+    // Grouped names ("Mark Njambi" = one person) kill the surname-noise the skeptic flagged.
+    if (!replyDenies && !/\bgroup\b/i.test(replyStr)) {
+      // SCOPE (skeptic round-2 hole B): only judge people the operator actually ASKED about (named
+      // in the command) or who were genuinely sent to — never a stray Capitalized noun in the reply
+      // ("Zoom link", a group name), which would fabricate "no record of messaging Zoom" and could
+      // taint a TRUE person-send. Group-shaped replies are skipped entirely (post_to_group sibling).
+      const people = claimedPeople(replyStr).filter((p) => new RegExp(`\\b${p.first}\\b`).test(cmd) || byName.has(p.first));
+      if (people.length) {
+        const miss = people.filter((p) => !byName.has(p.first)).map((p) => p.full);
+        if (miss.length === 0) return null; // all claimed recipients really were messaged — intact
+        const sent = people.filter((p) => byName.has(p.first)).map((p) => p.full);
+        const lead = sent.length ? `I did message ${joinNames(sent)} today, but ` : "";
+        return humanize(`${lead}I have no record of messaging ${joinNames(miss)} today, so I should not have said I did. Want me to message ${miss.length > 1 ? "them" : "them"} now?`, { now: { long: n.long, today: n.today } });
+      }
+    }
+
+    // DENIAL rewrite (a false denial while the log shows the send) OR a no-named-claim fallthrough.
+    // Unresolved subject → null (honest "let me check"), never a roster dump.
     if (asked.length === 0) return null;
-    const sent = asked.map((a) => byName.get(a)!.name);
-    return humanize(`Yes, I did message ${joinNames(sent)} earlier today.`, { now: { long: n.long, today: n.today } });
+    const sentNames = asked.map((a) => byName.get(a)!.name);
+    return humanize(`Yes, I did message ${joinNames(sentNames)} earlier today.`, { now: { long: n.long, today: n.today } });
   } catch {
     return null;
   }
@@ -1750,7 +1800,12 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       let sendStateTruth: string | null = null;
       if (!inGroup && (opts.operatorRank === "owner" || opts.operatorRank === "founder")
         && SEND_STATE_QUESTION.test(String(opts.command || ""))
-        && SEND_STATE_DENIAL.test(String(reply || ""))   // only override a DENIAL (the lie), never a correct affirmation (skeptic #1)
+        // Fire on a DENIAL **or** an AFFIRMATIVE send claim, incl. the "did message" auxiliary
+        // (KT #390 — the false-affirmative "Yes, I did message Mark earlier today" evaded the old
+        // denial-only gate). The LOG, not the reply polarity, decides: answerSendStateFromLog
+        // returns the affirmative when the log confirms, the honest negative when it does not, and
+        // null when unresolvable — so a TRUE affirmation is never turned into a false denial.
+        && (SEND_STATE_DENIAL.test(String(reply || "")) || SEND_AFFIRM.test(String(reply || "")))
         && !toolRuns.some((t) => SEND_TOOLS.has(t.name) && (t.result as any)?.ok === true)) {
         sendStateTruth = await answerSendStateFromLog(db, opts, reply, n);
       }
