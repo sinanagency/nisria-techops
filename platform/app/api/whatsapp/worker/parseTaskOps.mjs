@@ -188,9 +188,16 @@ const SCAFFOLD_WORDS = new Set([
 function distinctiveWords(f) {
   return f.split(/\s+/).filter((w) => w.length >= 3 && !SCAFFOLD_WORDS.has(w));
 }
+// ALL-CAPS acronyms (MT, BHF, STP, OB) are distinctive identifiers the >=3-char lowercase floor
+// in distinctiveWords drops. Capture them from the ORIGINAL-case text (KT #392, the live "Call
+// with MT is done" miss against "Call MT - BHF"). Lowercased so they match the lowercased titles.
+function acronyms(origText) {
+  return (String(origText).match(/\b[A-Z]{2,5}\b/g) || []).map((a) => a.toLowerCase()).filter((a) => !SCAFFOLD_WORDS.has(a));
+}
 export function fuzzyMatchTasks(frag, openRows) {
   if (!frag) return [];
-  const f = String(frag).toLowerCase().trim();
+  const orig = String(frag).trim();
+  const f = orig.toLowerCase();
   if (!f) return [];
   const open = Array.isArray(openRows) ? openRows : [];
   // 1) substring (case-insensitive) — a literal title fragment is a strong signal
@@ -198,12 +205,15 @@ export function fuzzyMatchTasks(frag, openRows) {
   if (hits.length) return hits;
   // 2) DISTINCTIVE-word overlap. Scaffold words ("work","with","the") never count, so a
   // request shares a task only when their identifying words (names/nouns) actually overlap.
-  const words = distinctiveWords(f);
+  // Acronyms (MT/BHF/OB) join the distinctive set so a code-only fragment can still match.
+  const words = [...new Set([...distinctiveWords(f), ...acronyms(orig)])];
   if (!words.length) return [];
   const scored = open
     .map((t) => {
-      const title = String(t.title || "").toLowerCase();
+      const titleOrig = String(t.title || "");
+      const title = titleOrig.toLowerCase();
       const titleWords = new Set(distinctiveWords(title));
+      for (const a of acronyms(titleOrig)) titleWords.add(a);
       const score = words.filter((w) => titleWords.has(w)).length;
       return { t, score };
     })

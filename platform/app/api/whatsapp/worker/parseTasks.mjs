@@ -348,6 +348,11 @@ function extractDueAndRecurrence(text, today) {
 // "this/next" suffixes so the title ends up describing the action.
 function cleanReminderTitle(raw) {
   let t = String(raw || "").trim();
+  // Strip a LEADING time-of-day ("at 2PM", "at 2:00 PM", "at 14:00", "by 3 pm") and any "to"
+  // that follows it (KT #392): "Remind me at 2PM to contact Snoopy" must title "contact Snoopy",
+  // NOT "at 2PM to contact Snoopy" (the live L83→L135 bug). Requires a digit after at/by, so a
+  // real title like "at the office, call John" is never touched.
+  t = t.replace(/^\s*(?:at|by|around|@)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+(?:to\s+)?/i, "");
   t = t.replace(/^\s*to\s+/i, "");
   t = t.replace(/\s+(?:next\s+(?:week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|month)|by\s+\w+|on\s+the\s+\d+(?:st|nd|rd|th)?(?:\s+of\s+(?:every|each)\s+month)?|every\s+\w+|tomorrow|this\s+week)\s*[.!?]?\s*$/i, "");
   return sanitizeTitle(t);
