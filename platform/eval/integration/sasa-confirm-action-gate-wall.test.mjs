@@ -58,7 +58,7 @@ const flat = (s) => s.replace(/\s+/g, " ");
   else if (!/if \(r\?\.ok === true\) \{ notes\.push/.test(region)) fail("A3e must report the tool's OWN verified summary on success");
   else if (!/else \{ okItem = false; failed\.push/.test(region)) fail("A3f a failed confirm leaves the action un-committed (retryable), never a fake done");
   // skeptic C: an allowlist — only a whitelisted tool may be dispatched by "yes"
-  else if (!/const CONFIRMABLE_TOOLS = new Set\(\["log_payout"\]\)/.test(region)) fail("A3g must allowlist confirm-able tools (no arbitrary payload.tool dispatch)");
+  else if (!/const CONFIRMABLE_TOOLS = new Set\(\["log_payout"/.test(region)) fail("A3g must allowlist confirm-able tools (no arbitrary payload.tool dispatch)");
   else if (!/!CONFIRMABLE_TOOLS\.has\(tool\)/.test(region)) fail("A3h must refuse a tool not on the allowlist");
   else ok("A3 confirm gate: live-authority-gated, allowlisted, runs the real tool, verified, no fabricated done");
 }
@@ -86,6 +86,34 @@ const flat = (s) => s.replace(/\s+/g, " ");
   else ok("A4a confirm gate loads awaiting_confirm rows (confirm_action included)");
   if (!/const no = /.test(W)) fail("A4b a 'no' must cancel the staged action");
   else ok("A4b 'no' cancels the staged action (nothing fires)");
+}
+
+// ---- A6: the DELETE family (permanent data loss) is gated by ONE interceptor ----
+{
+  // the interceptor sits at the TOP of runAction (before the tool dispatch) so it covers all 5
+  const i = ST.indexOf("C2 STAGE-THEN-CONFIRM for the DELETE family");
+  const region = i >= 0 ? ST.slice(i, i + 1400) : "";
+  if (!region) fail("A6 the delete-family stage interceptor must exist");
+  else if (!/const DELETE_TOOLS = new Set\(\["delete_event", "delete_contact", "delete_case", "delete_document", "delete_payment"\]\)/.test(region))
+    fail("A6a all five delete tools must be gated");
+  else if (!/if \(ctx\.confirmWrites && ctx\.contactId && DELETE_TOOLS\.has\(name\)\)/.test(region))
+    fail("A6b the interceptor must fire only on the WhatsApp surface (confirmWrites)");
+  else if (!/kind: "confirm_action"/.test(region)) fail("A6c a delete must stage a confirm_action");
+  else if (!/permanently deletes/.test(region)) fail("A6d the confirm prompt must warn it is permanent/irreversible");
+  else ok("A6 the delete family (5 tools) is gated by one stage-then-confirm interceptor with an irreversibility warning");
+  // it must run BEFORE the tool dispatch (so the model can't reach the delete) — interceptor is
+  // above the first `if (name === "create_task")`
+  const interceptIdx = ST.indexOf("DELETE_TOOLS.has(name)");
+  const firstToolIdx = ST.indexOf('if (name === "create_task")');
+  if (!(interceptIdx > 0 && interceptIdx < firstToolIdx)) fail("A6e the interceptor must precede the tool dispatch");
+  else ok("A6e interceptor runs before any tool logic (model never reaches the delete)");
+}
+
+// ---- A7: the gate allowlist now includes the delete family ----
+{
+  if (!/const CONFIRMABLE_TOOLS = new Set\(\["log_payout", "delete_event", "delete_contact", "delete_case", "delete_document", "delete_payment"\]\)/.test(W))
+    fail("A7a the confirm-gate allowlist must include the 5 delete tools");
+  else ok("A7a the gate allowlists log_payout + the 5 delete tools");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");

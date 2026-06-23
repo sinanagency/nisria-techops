@@ -1337,6 +1337,24 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   const n = await now();
   const opts = { now: { long: n.long, today: n.today } };
 
+  // C2 STAGE-THEN-CONFIRM for the DELETE family (KT #374). Permanent data loss must NEVER fire
+  // on the model's judgment (class C2). On WhatsApp (confirmWrites), a delete_* tool STAGES a
+  // confirm_action and asks "reply yes"; the confirm gate re-runs this tool with confirmWrites
+  // OFF (so this guard is skipped and the delete executes). ONE interceptor gates all five
+  // without touching their internals. Web console (no confirmWrites = a human clicked it) is
+  // direct. Graceful: if staging fails (kind not migrated) fall through — never worse than today.
+  const DELETE_TOOLS = new Set(["delete_event", "delete_contact", "delete_case", "delete_document", "delete_payment"]);
+  if (ctx.confirmWrites && ctx.contactId && DELETE_TOOLS.has(name)) {
+    const what = String(input.title || input.name || input.payee || input.query || input.case || input.event || "").trim();
+    const noun = name.replace("delete_", "");
+    const { error: stErr } = await db.from("pending_actions").insert({
+      contact_id: ctx.contactId, kind: "confirm_action", status: "awaiting_confirm",
+      summary: `${name}${what ? ` ${what}` : ""}`,
+      payload: { tool: name, args: input, preview: `delete the ${noun}${what ? ` "${what.slice(0, 60)}"` : ""}` },
+    });
+    if (!stErr) return { ok: true, summary: humanize(`That permanently deletes the ${noun}${what ? ` "${what.slice(0, 60)}"` : ""}, which cannot be undone. Reply yes to confirm, or tell me to cancel.`, opts), detail: { staged: true } };
+  }
+
   // ---- SAFE: create_task ----
   if (name === "create_task") {
     const title = String(input.title || "").trim();
