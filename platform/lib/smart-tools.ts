@@ -3859,8 +3859,23 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     let cands = (data || []) as any[];
     if (!frag) cands = cands.slice(0, 1);
     if (!cands.length) return { ok: false, summary: humanize("I could not find that task to remove.", opts) };
-    if (cands.length > 1) return { ok: false, summary: humanize(`Which task: ${cands.slice(0, 5).map((t) => `"${t.title}"`).join(", ")}?`, opts), detail: { ambiguous: true } };
+    if (cands.length > 1) {
+      // DEDUP DELETE (KT #375, live 2026-06-23): if the matches are DUPLICATES (same title
+      // ignoring case + whitespace) they are the SAME task, so "delete one of them" is NOT
+      // ambiguous — delete ONE and keep the rest. Without this, two tasks identical but for
+      // letter-case ("Contact Jensen..." vs "contact Jensen...") looped the operator forever
+      // on "which one?" with no way to break it ("lowercase" re-ran the same match). Only a
+      // GENUINELY different second task still triggers the disambiguation ask.
+      const norm = (s: string) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+      const distinct = new Set(cands.map((c) => norm(c.title)));
+      if (distinct.size === 1) {
+        cands = [cands[cands.length - 1]]; // all dupes → remove the OLDEST, keep one
+      } else {
+        return { ok: false, summary: humanize(`Which task: ${cands.slice(0, 5).map((t) => `"${t.title}"`).join(", ")}?`, opts), detail: { ambiguous: true } };
+      }
+    }
     const t = cands[0];
+    const wasDuplicate = (data || []).length > 1;
     // ACCESS CONTROL (P0): a team-tier caller may only delete THEIR OWN task.
     {
       const gate = await assertTaskAccess(ctx, db, { taskAssigneeId: t.assignee_id ?? null });
@@ -3877,8 +3892,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // so "Removed the task" was reported even when RLS / a network error blocked the delete.
     const { error: delErr } = await db.from("tasks").delete().eq("id", t.id);
     if (delErr) return { ok: false, summary: humanize(`I could not remove "${t.title}" just now. ${(delErr as any).message || ""}`.trim(), opts), error: (delErr as any).message || "delete_failed" };
-    await emit({ type: "task.deleted", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: t.id, payload: t });
-    return { ok: true, summary: humanize(`Removed the task "${t.title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { deleted_id: t.id } };
+    await emit({ type: "task.deleted", source: "agent:sasa", actor: "Nur", subject_type: "task", subject_id: t.id, payload: { ...t, was_duplicate: wasDuplicate } });
+    return { ok: true, summary: humanize(wasDuplicate ? `Removed the duplicate "${t.title}" and kept the other copy.` : `Removed the task "${t.title}".`, opts), affordance: { kind: "open", label: "View tasks", href: "/tasks" }, detail: { deleted_id: t.id, was_duplicate: wasDuplicate } };
   }
 
   // ---- LIVING BRAIN: operator-taught facts (#12 write-back, #13 correction). ----
