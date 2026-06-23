@@ -49,6 +49,7 @@ import { enqueueJob, triggerWorker } from "./jobs";
 import { pushTaskAlert, pushOperatorUpdate, pushCalendarAlert } from "./notify";
 import { registerIntent } from "./pending-intents";
 import { commandReferencesGroup } from "./group-tokens.mjs";
+import { pickFromMatches, isAllDuplicates } from "./match-dedup.mjs";
 import { getCalendar, holidayOn, type CalEvent } from "./calendar";
 import { searchInbox, readEmail } from "./gmail";
 import { createEvent as gcalCreate, patchEvent as gcalPatch, deleteEvent as gcalDelete, gcalConfigured } from "./gcal";
@@ -1672,7 +1673,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       if (owned.length === 1) {
         list = owned;
       } else {
-        return { ok: false, summary: humanize(`There is more than one open task that could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) };
+        // AMBIGUITY-LOOP (KT #375): all-duplicate matches are the SAME task → act on one
+        // instead of an unbreakable "which one?" loop; only genuinely different tasks ask.
+        const picked = pickFromMatches(list, (t: any) => `${t.title}|${t.assignee_id || ""}`);
+        if (picked) list = [picked];
+        else return { ok: false, summary: humanize(`There is more than one open task that could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) };
       }
     }
     const task = list[0];
@@ -1827,7 +1832,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (list.length > 1) {
       const owned = member?.id ? list.filter((t) => t.assignee_id === member.id) : [];
       if (owned.length === 1) list = owned;
-      else return { ok: false, summary: humanize(`More than one completed task could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) };
+      else { const picked = pickFromMatches(list, (t: any) => `${t.title}|${t.assignee_id || ""}`); if (picked) list = [picked]; // KT #375 all-dupes → act on one
+        else return { ok: false, summary: humanize(`More than one completed task could match. Which one: ${list.slice(0, 6).map((t) => `"${t.title}"`).join(", ")}?`, opts) }; }
     }
     const task = list[0];
     // ACCESS CONTROL (P0): a team-tier caller may only reopen THEIR OWN task.
@@ -2756,7 +2762,10 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: cases } = await db.from("beneficiaries").select("id,full_name,ref_code,triage_notes,photo_asset_id,intake_stage").not("intake_stage", "is", null).ilike("full_name", like).limit(5);
     const list = (cases || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I do not see a case for ${nm}.`, opts) };
-    if (list.length > 1) return { ok: false, summary: humanize(`A few cases match: ${list.map((c) => c.full_name).join(", ")}. Which one?`, opts) };
+    // NB (KT #375): do NOT collapse "duplicates" by name here — a case is a PERSON, and two
+    // children can genuinely share a name. Name ≠ identity, so collapsing would risk acting on
+    // the wrong child. A name match with >1 hit stays a real "which one?" (the right ask).
+    if (list.length > 1) return { ok: false, summary: humanize(`A few cases match: ${list.map((c) => `${c.full_name}${c.ref_code ? ` (${c.ref_code})` : ""}`).join(", ")}. Which one?`, opts) };
     const c = list[0];
 
     if (name === "move_case") {
@@ -2895,8 +2904,9 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: matches } = await db.from("tasks").select("id,title,assignee_id").neq("status", "done").ilike("title", `%${frag}%`).order("created_at", { ascending: false }).limit(5);
     const list = (matches || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find an open task matching "${frag}".`, opts) };
-    if (list.length > 1) return { ok: false, summary: humanize(`A few tasks match: ${list.map((t) => `"${t.title}"`).join(", ")}. Which one?`, opts) };
-    const t = list[0];
+    // AMBIGUITY-LOOP class (KT #375): all-duplicate matches are the same task → act on one.
+    const t = pickFromMatches(list, (x: any) => `${x.title}|${x.assignee_id || ""}`);
+    if (!t) return { ok: false, summary: humanize(`A few tasks match: ${list.map((x: any) => `"${x.title}"`).join(", ")}. Which one?`, opts) };
     // ACCESS CONTROL (P0): a team-tier caller may only update THEIR OWN task.
     {
       const gate = await assertTaskAccess(ctx, db, { taskAssigneeId: t.assignee_id ?? null });
@@ -3481,7 +3491,9 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const { data: docs } = await db.from("documents").select("id,title,folder").ilike("title", `%${q.replace(/[,()*%]/g, "")}%`).order("created_at", { ascending: false }).limit(6);
     const list = (docs || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a document matching "${q}".`, opts) };
-    if (list.length > 1) return { ok: false, summary: humanize(`A few documents match: ${list.map((d) => `"${d.title}"`).join(", ")}. Which one?`, opts) };
+    // NB (KT #375): do NOT collapse by title — two docs with the same title can be different
+    // files/versions. Show the folder to disambiguate; a real >1 match stays a "which one?".
+    if (list.length > 1) return { ok: false, summary: humanize(`A few documents match: ${list.map((d) => `"${d.title}"${d.folder ? ` in ${d.folder}` : ""}`).join(", ")}. Which one?`, opts) };
     const d = list[0];
     const { error: ddErr } = await db.from("documents").delete().eq("id", d.id);
     // VERIFIED WRITE (KT #336): never say "Removed" unless the delete landed.
@@ -3859,23 +3871,14 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     let cands = (data || []) as any[];
     if (!frag) cands = cands.slice(0, 1);
     if (!cands.length) return { ok: false, summary: humanize("I could not find that task to remove.", opts) };
-    if (cands.length > 1) {
-      // DEDUP DELETE (KT #375, live 2026-06-23): if the matches are DUPLICATES (same title
-      // ignoring case + whitespace) they are the SAME task, so "delete one of them" is NOT
-      // ambiguous — delete ONE and keep the rest. Without this, two tasks identical but for
-      // letter-case ("Contact Jensen..." vs "contact Jensen...") looped the operator forever
-      // on "which one?" with no way to break it ("lowercase" re-ran the same match). Only a
-      // GENUINELY different second task still triggers the disambiguation ask.
-      const norm = (s: string) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
-      const distinct = new Set(cands.map((c) => norm(c.title)));
-      if (distinct.size === 1) {
-        cands = [cands[cands.length - 1]]; // all dupes → remove the OLDEST, keep one
-      } else {
-        return { ok: false, summary: humanize(`Which task: ${cands.slice(0, 5).map((t) => `"${t.title}"`).join(", ")}?`, opts), detail: { ambiguous: true } };
-      }
-    }
-    const t = cands[0];
-    const wasDuplicate = (data || []).length > 1;
+    // AMBIGUITY-LOOP CLASS (KT #375): all-duplicate matches (same title but for case/space) are
+    // the SAME task → act on one (the shared pickFromMatches helper); only GENUINELY different
+    // tasks still ask "which one?". Without this, two tasks identical-but-for-case looped forever.
+    // true duplicate = same title AND same assignee (two people can have a same-titled task).
+    const taskKey = (c: any) => `${c.title}|${c.assignee_id || ""}`;
+    const wasDuplicate = isAllDuplicates(cands, taskKey);
+    const t = pickFromMatches(cands, taskKey);
+    if (!t) return { ok: false, summary: humanize(`Which task: ${cands.slice(0, 5).map((c: any) => `"${c.title}"`).join(", ")}?`, opts), detail: { ambiguous: true } };
     // ACCESS CONTROL (P0): a team-tier caller may only delete THEIR OWN task.
     {
       const gate = await assertTaskAccess(ctx, db, { taskAssigneeId: t.assignee_id ?? null });

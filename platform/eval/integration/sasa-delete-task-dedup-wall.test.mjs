@@ -1,55 +1,71 @@
-// delete_task duplicate-resolution wall (2026-06-23, KT #375). LIVE: Nur asked to delete one
-// of two tasks identical except letter-case ("Contact Jensen..." vs "contact Jensen..."). The
-// resolver matched both (ilike is case-insensitive), returned "which one?" forever, and the
-// operator could NOT break the loop ("lowercase" re-ran the same match → still 2 → ambiguous).
-// Fix: when the matches are DUPLICATES (same title ignoring case + whitespace) they are the
-// SAME task, so "delete one of them" is unambiguous — delete one, keep the rest. A GENUINELY
-// different second task still asks.
+// Ambiguity-loop class wall (2026-06-23, KT #375). LIVE: Nur asked to delete one of two tasks
+// identical except letter-case ("Contact Jensen..." vs "contact Jensen..."). The resolver
+// matched both (case-insensitive ilike), asked "which one?", and she could NOT break the loop
+// ("lowercase" re-ran the same match → still 2 → asked again forever).
+//
+// Fix = ONE shared helper (lib/match-dedup.mjs) applied at the TASK resolvers (complete/update/
+// reopen/delete_task): when matches are TRUE duplicates they are the same task → act on one;
+// genuinely different tasks still ask. CRITICAL inverse-safety: the duplicate key is title AND
+// assignee (two people can share a task title), and the helper is applied ONLY to tasks — NOT
+// to people/cases/contacts/payments (a name is NOT an identity; two children can share a name),
+// where collapsing would act on the wrong record.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pickFromMatches, isAllDuplicates } from "../../lib/match-dedup.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ST = fs.readFileSync(path.resolve(HERE, "..", "..", "lib", "smart-tools.ts"), "utf8");
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
+const key = (c) => `${c.title}|${c.assignee_id || ""}`;
 
-// Pure mirror of the deployed decision: dedup if all candidate titles normalize to one.
-const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
-function resolve(cands) {
-  if (cands.length <= 1) return { action: cands.length ? "delete" : "none" };
-  const distinct = new Set(cands.map((c) => norm(c.title)));
-  return distinct.size === 1 ? { action: "delete", deduped: true } : { action: "ask" };
-}
-const T = (got, want, m) => (JSON.stringify(got) === JSON.stringify(want) ? ok(m) : fail(`${m} (got ${JSON.stringify(got)}, want ${JSON.stringify(want)})`));
-
-// ---- D1: the exact live case — two tasks identical but for case → delete one, no loop ----
-T(resolve([{ title: "Contact Jensen and send him the contract and catalogue" }, { title: "contact Jensen and send him the contract and catalogue" }]),
-  { action: "delete", deduped: true }, "D1a case-only duplicates → delete one (no ambiguous loop)");
-T(resolve([{ title: "Send Jensen the contract" }, { title: "Send Jensen  the contract " }]),
-  { action: "delete", deduped: true }, "D1b whitespace-only duplicates → delete one");
-
-// ---- D2: genuinely different tasks STILL ask (no over-delete) ----
-T(resolve([{ title: "Contact Jensen and send the contract" }, { title: "Call the bank about the grant" }]),
-  { action: "ask" }, "D2a two DIFFERENT tasks → still ask which one (no wrong delete)");
-T(resolve([{ title: "Send Jensen the contract" }, { title: "Send Jensen the catalogue" }]),
-  { action: "ask" }, "D2b similar-but-different (contract vs catalogue) → still ask");
-
-// ---- D3: single / none unchanged ----
-T(resolve([{ title: "x" }]), { action: "delete" }, "D3a single match → delete");
-T(resolve([]), { action: "none" }, "D3b no match → none");
-
-// ---- D4: the deployed code carries this decision (seam) ----
+// ---- D1: the exact live case — two tasks identical but for case, same owner → act on one ----
 {
-  const i = ST.indexOf('name === "delete_task"');
-  const region = i >= 0 ? ST.slice(i, i + 2600) : "";
-  const flat = region.replace(/\s+/g, " ");
-  if (!/const distinct = new Set\(cands\.map\(\(c\) => norm\(c\.title\)\)\)/.test(flat)) fail("D4a delete_task must compute distinct normalized titles");
-  else ok("D4a delete_task computes distinct normalized titles");
-  if (!/if \(distinct\.size === 1\) \{ cands = \[cands\[cands\.length - 1\]\]/.test(flat))
-    fail("D4b on all-duplicates it must collapse to one candidate (delete one)");
-  else ok("D4b all-duplicates collapse to one (delete one, keep the rest)");
-  if (!/wasDuplicate \? `Removed the duplicate "\$\{t\.title\}" and kept the other copy\.`/.test(ST)) fail("D4c the success message must say it removed the duplicate + kept the other");
-  else ok("D4c the reply tells the operator it removed the duplicate and kept the copy");
+  const dupes = [{ title: "Contact Jensen and send him the contract and catalogue", assignee_id: "nur" },
+                 { title: "contact Jensen and send him the contract and catalogue", assignee_id: "nur" }];
+  const picked = pickFromMatches(dupes, key);
+  if (!picked) fail("D1a case-only duplicates (same owner) must resolve to ONE, not loop");
+  else ok("D1a case-only duplicates → act on one (no ambiguous loop)");
+  if (!isAllDuplicates(dupes, key)) fail("D1b must recognise them as all-duplicates");
+  else ok("D1b recognised as all-duplicates (reply can say 'removed the duplicate')");
+}
+
+// ---- D2: genuinely different tasks STILL ask (no wrong action) ----
+{
+  // same title, DIFFERENT assignee = two different people's tasks → must NOT collapse
+  const diffOwner = [{ title: "Call the bank", assignee_id: "mark" }, { title: "Call the bank", assignee_id: "eliza" }];
+  if (pickFromMatches(diffOwner, key) !== null) fail("D2a same title + DIFFERENT assignee must NOT collapse (Mark's vs Eliza's task)");
+  else ok("D2a same-title-different-assignee → ask (the inverse-safety catch)");
+  // different titles → ask
+  const diffTitle = [{ title: "Send the contract", assignee_id: "nur" }, { title: "Send the catalogue", assignee_id: "nur" }];
+  if (pickFromMatches(diffTitle, key) !== null) fail("D2b different titles must NOT collapse");
+  else ok("D2b different titles → ask");
+}
+
+// ---- D3: single / none ----
+{
+  if (pickFromMatches([{ title: "x", assignee_id: "a" }], key)?.title !== "x") fail("D3a single match → that one");
+  else ok("D3a single match → act");
+  if (pickFromMatches([], key) !== null) fail("D3b no match → null");
+  else ok("D3b no match → null");
+}
+
+// ---- D4: the SAFE scope — collapse applied to TASKS only, NOT to people/cases/docs ----
+{
+  // the 4 task resolvers key on title + assignee
+  const taskKeyCount = (ST.match(/assignee_id \|\| ""/g) || []).length;
+  if (taskKeyCount < 4) fail("D4a all four task resolvers (complete/update/reopen/delete_task) must key on title+assignee");
+  else ok("D4a the four task resolvers collapse on title+assignee (safe)");
+  // delete_case must NOT collapse (a case is a person; two children can share a name)
+  const caseI = ST.indexOf("do NOT collapse \"duplicates\" by name here");
+  if (caseI < 0) fail("D4b delete_case must explicitly NOT collapse by name (person identity)");
+  else ok("D4b delete_case does NOT collapse by name (two children can share a name)");
+  // delete_document must NOT collapse (versions)
+  if (!/do NOT collapse by title/.test(ST)) fail("D4c delete_document must NOT collapse by title (versions)");
+  else ok("D4c delete_document does NOT collapse by title");
+  // the helper is imported
+  if (!/import \{ pickFromMatches, isAllDuplicates \} from "\.\/match-dedup\.mjs";/.test(ST)) fail("D4d smart-tools must import the shared helper");
+  else ok("D4d smart-tools imports the shared dedup helper");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");
