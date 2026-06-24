@@ -41,7 +41,7 @@ function maintenanceDropTarget(payload: Record<string, any>): boolean {
   return !allow.includes(to);
 }
 
-async function send(payload: Record<string, any>): Promise<{ id: string | null; error?: string }> {
+async function send(payload: Record<string, any>): Promise<{ id: string | null; error?: string; viaReengage?: boolean }> {
   if (!whatsappConfigured()) return { id: null, error: "whatsapp not configured" };
   if (maintenanceDropTarget(payload)) {
     return { id: null, error: "maintenance_dropped" };
@@ -179,7 +179,7 @@ async function send(payload: Record<string, any>): Promise<{ id: string | null; 
         // window). The body is carried as the first param.
         const body = String((payload as any)?.text?.body || "").slice(0, 1000);
         const fb = await sendTemplate(String((payload as any)?.to || ""), reTpl, body ? [body] : []).catch(() => null);
-        if (fb?.id) return { id: fb.id };
+        if (fb?.id) return { id: fb.id, viaReengage: true };
       }
       return { id: null, error: errMsg };
     }
@@ -197,7 +197,7 @@ async function send(payload: Record<string, any>): Promise<{ id: string | null; 
 // one text chokepoint every path funnels through (sendTextAndLog, reminders, fanouts,
 // smart-tools all call sendText), so the guarantee cannot be bypassed. A chunk that
 // fails to send stops the rest (no half-garbled spill) and surfaces the error.
-export async function sendText(to: string, body: string): Promise<{ id: string | null; error?: string }> {
+export async function sendText(to: string, body: string): Promise<{ id: string | null; error?: string; viaReengage?: boolean }> {
   const chunks = splitForWhatsApp(formatWhatsApp(String(body)));
   if (chunks.length <= 1) {
     return send({ to, type: "text", text: { body: (chunks[0] ?? "").slice(0, 4096), preview_url: false } });
