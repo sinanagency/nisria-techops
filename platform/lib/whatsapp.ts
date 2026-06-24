@@ -111,16 +111,35 @@ async function send(payload: Record<string, any>): Promise<{ id: string | null; 
     if (primaryId && _body && _own && _rec && _rec !== _own) {
       void (async () => {
         let label = _rec;
+        // OWNER 24h-WINDOW CHECK (KT #395). A free-form mirror to the owner SILENTLY fails when he
+        // has not messaged the line in 24h: Meta accepts it with a wamid (so !mr?.id was false and
+        // the old template fallback never fired) but NEVER delivers it, and we logged free_ok:true
+        // — a false success (the exact "i didnt see the mirror / nothing came" bug). Check his real
+        // inbound window FIRST: if it is closed, skip the doomed free-form and deliver via the
+        // approved template instead, and record the truth.
+        let ownerWindowOpen = true;
         try {
           const { admin } = await import("./supabase-admin");
-          const { data } = await admin().from("contacts").select("name").ilike("phone", `%${_rec.slice(-9)}%`).limit(1);
+          const a = admin();
+          const { data } = await a.from("contacts").select("name").ilike("phone", `%${_rec.slice(-9)}%`).limit(1);
           if ((data as any)?.[0]?.name) label = (data as any)[0].name;
-        } catch { /* name is best-effort */ }
-        const mr = await send({ to: _own, type: "text", text: { body: `[Sasa → ${label}] ${String(_body).slice(0, 3500)}`, preview_url: false } }).catch(() => null);
-        if (!mr?.id) { try { await sendTemplate(_own, "system_alert", [`Sasa to ${label}`.slice(0, 60), String(_body).slice(0, 300)]); } catch { /* window-closed fallback */ } }
+          const ownC = (await a.from("contacts").select("id").ilike("phone", `%${_own.slice(-9)}%`).limit(1)).data?.[0]?.id;
+          if (ownC) {
+            const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+            const { data: inb } = await a.from("messages").select("id").eq("contact_id", ownC).eq("direction", "in").gte("created_at", since).limit(1);
+            ownerWindowOpen = !!(inb && (inb as any).length);
+          }
+        } catch { /* best-effort: assume open and let the send/fallback decide */ }
+        let freeOk = false;
+        if (ownerWindowOpen) {
+          const mr = await send({ to: _own, type: "text", text: { body: `[Sasa → ${label}] ${String(_body).slice(0, 3500)}`, preview_url: false } }).catch(() => null);
+          freeOk = !!mr?.id;
+        }
+        // window closed OR the free-form genuinely failed → the approved template DOES deliver outside the window.
+        if (!freeOk) { try { await sendTemplate(_own, "system_alert", [`Sasa to ${label}`.slice(0, 60), String(_body).slice(0, 300)]); } catch { /* nothing more we can do */ } }
         try {
           const { emit } = await import("./events");
-          await emit({ type: "sasa.owner_mirror", source: "lib:whatsapp.send", actor: "system", subject_type: "contact", subject_id: null, payload: { label, to_last4: _rec.slice(-4), primary_ok: true, free_ok: !!mr?.id } });
+          await emit({ type: "sasa.owner_mirror", source: "lib:whatsapp.send", actor: "system", subject_type: "contact", subject_id: null, payload: { label, to_last4: _rec.slice(-4), primary_ok: true, free_ok: freeOk, window_open: ownerWindowOpen, via: freeOk ? "free" : "template" } });
         } catch { /* never block */ }
       })();
     }
