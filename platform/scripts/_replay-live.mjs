@@ -29,14 +29,15 @@ const sbxRest = (p, init = {}) => fetch(`${SBX_URL}/rest/v1/${p}`, { ...init, he
 const prodRest = (p) => fetch(`${PROD_URL}/rest/v1/${p}`, { headers: { apikey: PROD_SVC, Authorization: `Bearer ${PROD_SVC}` } });
 
 async function seedSandbox() {
-  // map each phone -> a stable sandbox contact_id; seed contacts + team_members
+  // master data is already seeded (anonymized). Resolve each operator/team phone to its
+  // EXISTING sandbox contact_id (by phone); only create if genuinely missing.
   const map = {};
-  for (const [phone, info] of Object.entries({ ...Object.fromEntries(Object.entries(OPERATORS).map(([p, i]) => [p, i.name])), ...TEAM })) {
-    const cid = crypto.randomUUID();
+  const names = { ...Object.fromEntries(Object.entries(OPERATORS).map(([p, i]) => [p, i.name])), ...TEAM };
+  for (const phone of Object.keys(names)) {
+    let cid = null;
+    try { const j = await (await sbxRest(`contacts?select=id&phone=eq.${encodeURIComponent("+" + phone)}&limit=1`)).json(); cid = j?.[0]?.id || null; } catch {}
+    if (!cid) { cid = crypto.randomUUID(); await sbxRest("contacts", { method: "POST", body: JSON.stringify({ id: cid, name: names[phone], phone: "+" + phone, channel: "whatsapp" }) }).catch(() => {}); }
     map[phone] = cid;
-    await sbxRest("contacts", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ id: cid, name: info, phone: "+" + phone, channel: "whatsapp" }) }).catch(() => {});
-    const isOp = OPERATORS[phone];
-    await sbxRest("team_members", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ name: info, phone: "+" + phone, role: isOp ? "founder" : "field", status: "active", bot_access: true }) }).catch(() => {});
   }
   return map;
 }
@@ -66,7 +67,14 @@ async function liveReplay(rec, history, sbxCid) {
 }
 
 async function judge(rec, neu) {
-  const sys = `You grade a nonprofit WhatsApp assistant replayed with REAL evolving state. Decide if the NEW reply is correct for the user message given the thread. Use the user's NEXT message as a truth signal. ALSO decide if this case is LOGICALLY UNREPLAYABLE in a fresh sandbox (references a record created before the replay window, is a pure context fragment with no resolvable referent, is media-only, or depends on external state) — if so set excludable=true. STRICT JSON: {"new_ok":bool,"old_ok":bool,"routing_ok":bool,"excludable":bool,"reason":"<=14 words"}.`;
+  const sys = `You grade a nonprofit WhatsApp assistant (Sasa) replayed with REAL evolving state. Decide if the NEW reply is a CORRECT, SAFE handling of the user message given the thread.
+CRITICAL grading rules:
+- Sasa is DESIGNED to STAGE money/destructive actions and ask "reply yes to confirm" before committing. A reply that correctly STAGES the right payment/action and asks to confirm is CORRECT (new_ok=true) — do NOT penalize it for not having already committed, even if the OLD reply shows a post-confirmation "Logged X".
+- Asking ONE sharp clarifying question when the user message is genuinely ambiguous is CORRECT. Refusing/deflecting a clear request, or asking for info already given, is WRONG.
+- Refusing to share finances/data with the OWNER/admin is WRONG (the owner may see everything).
+- Judge NEW on its own merit, not merely "did it match OLD" — OLD was often wrong too.
+Use the user's NEXT message as a truth signal. ALSO set excludable=true if the case is LOGICALLY UNREPLAYABLE in a fresh sandbox (references a record/action created before the window or by the OLD bot, pure context fragment with no resolvable referent, media-only, or depends on external state).
+STRICT JSON: {"new_ok":bool,"old_ok":bool,"routing_ok":bool,"excludable":bool,"reason":"<=14 words"}.`;
   const usr = `USER: ${rec.inbound}\nNEW [${neu.domain}, tools:${(neu.toolsRan || []).join(",") || "none"}]: ${neu.reply}\nOLD: ${rec.oldReply || "(none)"}\nNEXT USER: ${rec.nextUser || "(none)"}`;
   const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": AKEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: JUDGE_MODEL, max_tokens: 160, system: sys, messages: [{ role: "user", content: usr }] }) });
   const j = await r.json(); const t = (j?.content || []).find((b) => b.type === "text")?.text || ""; const m = t.match(/\{[\s\S]*\}/);
@@ -86,21 +94,23 @@ async function judge(rec, neu) {
     let oldReply = "", nextUser = "";
     for (let j = i + 1; j < seq.length; j++) { if (seq[j].direction === "out" && seq[j].body) { oldReply = seq[j].body; break; } if (seq[j].direction === "in") break; }
     for (let j = i + 1; j < seq.length; j++) { if (seq[j].direction === "in" && seq[j].body) { nextUser = seq[j].body; break; } }
-    inbound.push({ ts: r.created_at, contact_id: r.contact_id, phone: r.phone, inbound: r.body.trim(), oldReply, nextUser });
+    // REAL conversation history up to this point (human turns + the OLD bot's real
+    // replies), NOT the new bot's self-play replies (which compound errors). State
+    // still evolves via the bot's live tool calls on the sandbox.
+    const hist = [];
+    for (let j = Math.max(0, i - 8); j < i; j++) { const m = seq[j]; if (!m.body) continue; hist.push({ role: m.direction === "in" ? "user" : "assistant", content: String(m.body).slice(0, 700) }); }
+    inbound.push({ ts: r.created_at, contact_id: r.contact_id, phone: r.phone, inbound: r.body.trim(), history: hist, oldReply, nextUser });
   }
   inbound.sort((a, b) => a.ts.localeCompare(b.ts));
   const slice = inbound.slice(START, START + N);
   console.log(`total inbound: ${inbound.length}; replaying [${START}, ${START + slice.length}) sequentially...`);
 
-  const hist = {}; // per contact_id running history (self-play)
   const out = [];
   for (let k = 0; k < slice.length; k++) {
     const rec = slice[k];
     const sbxCid = cidMap[rec.phone] || null;
-    const h = (hist[rec.contact_id] ||= []);
     let neu;
-    try { neu = await liveReplay(rec, h.slice(-8), sbxCid); } catch (e) { neu = { __err: String(e?.message || e) }; }
-    if (neu && neu.ok) { h.push({ role: "user", content: rec.inbound }); h.push({ role: "assistant", content: neu.reply || "" }); }
+    try { neu = await liveReplay(rec, rec.history || [], sbxCid); } catch (e) { neu = { __err: String(e?.message || e) }; }
     out.push({ rec, neu });
     if (k % 25 === 0) console.log(`  ${k}/${slice.length} (${rec.phone} -> ${neu?.domain || neu?.error || "err"})`);
   }
