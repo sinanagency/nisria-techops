@@ -114,7 +114,11 @@ async function processJob(db: any, job: any): Promise<void> {
   // leave / cancel" → kill the active bot. Same deterministic-code-for-
   // deterministic-verbs pattern that jensen-pa uses (KT #127, #230).
   // Only fires for admin rank (Nur + Taona); team-tier passes through.
-  if (opRank === "owner" || opRank === "founder") {
+  // MAINTENANCE: a blocked (non-allowlisted) sender must not slip through the
+  // meeting/notetaker chokepoint below; force them down to the canned notice.
+  const _maintBlocked = process.env.MAINTENANCE_MODE === "1"
+    && !(process.env.MAINTENANCE_ALLOWLIST || "").split(",").map((s) => s.trim()).filter(Boolean).includes(from);
+  if (!_maintBlocked && (opRank === "owner" || opRank === "founder")) {
     const cancelText = (text || "").trim();
     if (isCancelIntent(cancelText)) {
       const r = await cancelActiveBot();

@@ -143,6 +143,13 @@ export async function POST(req: NextRequest) {
   } : null;
   if (!senderPhone) return NextResponse.json({ ok: true, reply: "" });
 
+  // MAINTENANCE GATE: while MAINTENANCE_MODE=1 the group bot goes fully dark for
+  // ALL members (no reply, no processing, no writes). Groups have no per-user
+  // allowlist, so Sasa simply stays silent in every group until maintenance lifts.
+  if (process.env.MAINTENANCE_MODE === "1") {
+    return NextResponse.json({ ok: true, reply: "", maintenance: true });
+  }
+
   const db = admin();
 
   // dedupe FIRST, before any transcription cost: never process the same wa
