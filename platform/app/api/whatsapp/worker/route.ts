@@ -19,6 +19,7 @@ import { sendText, sendTextAndLog, operatorOf, downloadMedia, sendTypingIndicato
 import { extractMeetingLink, dispatchMeetingBot, isCancelIntent, cancelActiveBot } from "../../../../lib/digital-u";
 import { commitBankImport } from "../../../../lib/bank-import";
 import { runSasa, type SasaTurn } from "../../../../lib/agents/sasa";
+import { runOrchestrated, meshEnabled } from "../../../../lib/agents/orchestrator";
 import { coalesceTurn, finishTurn } from "../../../../lib/whatsapp-coalesce";
 import { autoCapture } from "../../../../lib/memory-extract";
 import { withSandbox, isHarnessMessageId } from "../../../../lib/sandbox";
@@ -1708,11 +1709,11 @@ async function processJob(db: any, job: any): Promise<void> {
       : null;
     const runSasaOpts = { history, command: cmdWithSystem, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote, recentTaskActivity, swipeAnchor: swipeAnchorOpt, traceId: traceId || undefined };
     const runner = isHarnessMessageId(waMsgId)
-      ? () => runSasa(runSasaOpts)
+      ? () => meshEnabled() ? runOrchestrated(runSasaOpts) : runSasa(runSasaOpts)
       : null;
     var sasaResult = runner
       ? await (withSandbox(runner) as Promise<Awaited<ReturnType<typeof runSasa>>>)
-      : await runSasa(runSasaOpts);
+      : meshEnabled() ? await runOrchestrated(runSasaOpts) : await runSasa(runSasaOpts);
     reply = sasaResult.reply;
   } catch (e: any) {
     // A REAL backend failure (Claude API error, tool/DB throw). This is the only
