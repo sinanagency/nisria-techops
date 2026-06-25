@@ -197,6 +197,7 @@ export async function routeMessage(
   text: string,
   history: { role: "user" | "assistant"; content: string }[] = [],
 ): Promise<RouterResult> {
+  console.log('[router] routeMessage called for:', text.slice(0, 50));
   if (!text || !text.trim()) {
     return { domain: "general", confidence: 0, reason: "empty_message" };
   }
