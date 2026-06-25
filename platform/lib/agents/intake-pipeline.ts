@@ -107,6 +107,7 @@ function buildRoutedCommand(
     people: "This appears to be beneficiary/contact-related. Handle intake or lookup accordingly.",
     comms: "This appears to be communication-related. Handle accordingly.",
     knowledge: "This appears to be document/memory-related. File or search accordingly.",
+    programs: "This appears to be inventory/wishlist-related. Record stock or wishlist items; never invent quantities or prices.",
     general: "Handle this appropriately based on the content.",
   };
 

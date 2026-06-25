@@ -77,21 +77,32 @@ const DOMAIN_PATTERNS: { domain: Domain; patterns: RegExp[] }[] = [
   {
     domain: "comms",
     patterns: [
-      /\b(message|send|tell|notify|ping)\s+(?:me|them|him|her|[A-Z][a-z]+)\b/i,
+      /\b(message|send|tell|notify|ping|whatsapp|text|dm)\b[\s\S]{0,25}\bto\s+[A-Z][a-z]+/i, // "send a message to Violet"
+      /\b(send|message|tell|notify|ping)\s+(?:me|them|him|her|[A-Z][a-z]+)\b/i,
+      /\bsend\s+(?:a\s+|an\s+)?(?:whatsapp\s+|text\s+)?(?:message|msg|note|reply)\b/i,
       /\b(email|newsletter|thank[\s-]?you|draft)\b/i,
-      /\b(post\s+to\s+(?:group|facebook|instagram)|social\s+post)\b/i,
-      /\b(flag\s+to\s+nur|relay\s+to|group\s+digest)\b/i,
+      /\b(post\s+to\s+(?:group|facebook|instagram)|social\s+post|publish\s+(?:the\s+)?post)\b/i,
+      /\b(flag\s+to\s+nur|relay\s+to|group\s+digest|reply\s+to|inbox)\b/i,
       /\b(outbound|sent|delivered)\b/i,
     ],
   },
   {
     domain: "people",
     patterns: [
-      /\b(beneficiary|child|case|intake|program|ob\s+number)\b/i,
-      /\b(contact|phone|number|whatsapp|reach)\s+(?:me|them|him|her|[A-Z][a-z]+)\b/i,
-      /\b(team\s+member|roster|add\s+(?:a\s+)?(?:team\s+)?member|update\s+(?:team\s+)?member)\b/i,
+      /\b(beneficiary|child|case|intake|ob\s+number)\b/i,
+      /\b(contact\s+details|phone\s+number|reach)\s+(?:for\s+)?(?:me|them|him|her|[A-Z][a-z]+)\b/i,
+      /\b(team\s+member|roster|add\s+(?:a\s+)?(?:team\s+)?member|update\s+(?:team\s+)?member|activate\s+[A-Z])/i,
       /\b(who\s+is|find\s+(?:a\s+)?(?:person|contact|beneficiary)|look\s+up)\b/i,
       /\b(approve|decline|merge)\s+(?:case|beneficiary)\b/i,
+    ],
+  },
+  {
+    domain: "programs",
+    patterns: [
+      /\b(inventory|stock|folklore|maisha)\b/i,
+      /\b(wishlist|wish\s+list|needs?\s+funded|fund(?:ed)?\s+(?:the\s+)?(?:school\s+kit|bed|laptop|fees|item))\b/i,
+      /\b(school\s+kits?|sewing|fabric|garment)\b/i,
+      /\b(add|list|update)\s+(?:an?\s+)?(?:inventory|wishlist)\b/i,
     ],
   },
   {
@@ -144,6 +155,7 @@ Decision rules:
 - comms: messaging, email, newsletters, posting to groups, outbound
 - people: team members, contacts, beneficiaries, cases, intake
 - knowledge: documents, files, Brain facts, grants, memory, search
+- programs: Maisha inventory (stock, quantities, Folklore listing) and the donor wishlist (fundable needs and funded counts)
 - general: greetings, meta-questions, ambiguous, or multi-domain
 
 If the message touches multiple domains, pick the PRIMARY one (the action that needs to happen first).
