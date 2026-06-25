@@ -14,10 +14,12 @@ export type EventIn = {
 
 export async function emit(e: EventIn) {
   try {
-    await admin().from("events").insert({ ...e, payload: e.payload || {} });
+    const res = await admin().from("events").insert({ ...e, payload: e.payload || {} });
+    if (res?.error) {
+      console.error("emit supabase error:", res.error);
+    }
   } catch (err) {
-    // events are best-effort; never let logging break a flow
-    console.error("emit failed", err);
+    console.error("emit threw:", err);
   }
 }
 

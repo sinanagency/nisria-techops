@@ -24,7 +24,7 @@ async function emitRouterTelemetry(
   command: string,
 ): Promise<void> {
   try {
-    emit({
+    await emit({
       type: "router.classified",
       source: "agent:router",
       actor: "system",
@@ -36,8 +36,10 @@ async function emitRouterTelemetry(
         reason: reason.slice(0, 200),
         command: command.slice(0, 200),
       },
-    }).catch(() => {});
-  } catch {}
+    });
+  } catch (err) {
+    console.error("emitRouterTelemetry failed:", err);
+  }
 }
 
 export type RouterResult = {
@@ -212,7 +214,7 @@ export async function routeMessage(
       confidence: Math.min(topScore.score, 1),
       reason: `rule_match: ${topScore.matches} pattern(s) matched`,
     };
-    emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
+    await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
     return result;
   }
 
@@ -226,7 +228,7 @@ export async function routeMessage(
         confidence: (topScore.score + haiku.confidence) / 2,
         reason: `rule+haiku_agree: ${haiku.reason}`,
       };
-      emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
+      await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
       return result;
     }
     // If Haiku disagrees but has high confidence, trust Haiku
@@ -236,7 +238,7 @@ export async function routeMessage(
         confidence: haiku.confidence,
         reason: `haiku_override: ${haiku.reason}`,
       };
-      emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
+      await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
       return result;
     }
     // Otherwise, use rule-based with lower confidence
@@ -245,7 +247,7 @@ export async function routeMessage(
       confidence: topScore.score * 0.7,
       reason: `rule_low_conf: ${topScore.matches} pattern(s), haiku_uncertain`,
     };
-    emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
+    await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
     return result;
   }
 
@@ -257,7 +259,7 @@ export async function routeMessage(
       confidence: haiku.confidence,
       reason: `haiku_only: ${haiku.reason}`,
     };
-    emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
+    await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
     return result;
   }
 
@@ -267,7 +269,7 @@ export async function routeMessage(
     confidence: 0.3,
     reason: `low_confidence: best_rule=${topScore.domain}(${topScore.score}), haiku=${haiku.domain}(${haiku.confidence})`,
   };
-  emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
+  await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
   return result;
 }
 
