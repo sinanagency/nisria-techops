@@ -534,10 +534,30 @@ export async function POST(req: NextRequest) {
     if (names.length) command = `${command}\n(this message @mentions: ${names.join(", ")})`;
   }
 
+  // GROUP MESH (toggle: SASA_GROUP_MESH=on, off by default). Apply the mesh's
+  // deterministic domain routing + tool scoping to the group bot WITHOUT touching
+  // its listen-only reply-gate: surface stays "group" → buildGroupSystem + the
+  // "SPEAK ONLY WHEN" / NO_REPLY discipline are unchanged. We only narrow the
+  // toolset to the routed domain (team-tier subset + cross-cutting). If routing
+  // fails or the flag is off, allowedToolNames stays undefined = full team toolset
+  // (exact prior behavior). Flip the env var on/off anytime to enable/disable.
+  let groupAllowedTools: string[] | undefined = undefined;
+  if ((process.env.SASA_GROUP_MESH || "").toLowerCase() === "on") {
+    try {
+      const { routeMessage } = await import("../../../../lib/agents/router");
+      const { getToolsForDomain } = await import("../../../../lib/agents/manifests");
+      const routed = await routeMessage(command, isCaseGroup(group) ? [] : history);
+      groupAllowedTools = getToolsForDomain(routed.domain, "team");
+    } catch (e) {
+      console.error("[group-mesh] routing failed, using full team toolset:", e);
+    }
+  }
+
   const sasaRes = await runSasa({
     surface: "group",
     groupName: group,
     operatorName: opName || senderName || undefined,
+    allowedToolNames: groupAllowedTools, // mesh scoping when SASA_GROUP_MESH=on; undefined = full team toolset
     speakerPhone: senderPhone, // exact identity: lets the brain tick the speaker's own task
     // Cases groups: NO history. Each intake message stands alone, so the brain
     // never re-logs a child it already saw earlier in the thread (history replay
