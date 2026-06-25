@@ -30,7 +30,12 @@ export function meshEnabled(): boolean {
 type OrchestratorOpts = Parameters<typeof runSasa>[0];
 
 export async function runOrchestrated(opts: OrchestratorOpts): Promise<SasaResult> {
-  console.log('[orchestrator] runOrchestrated called, meshEnabled:', meshEnabled());
+  // Debug event to confirm orchestrator is being called
+  try {
+    const { emit } = await import("../events");
+    emit({ type: "mesh.debug_entry", source: "agent:orchestrator", actor: "system", payload: { fn: "runOrchestrated" } }).catch(() => {});
+  } catch {}
+
   const command = String((opts as any).command || "");
   const history: SasaTurn[] = [...((opts as any).history || [])];
   const tier = (opts as any).operatorRole === "team" ? "team" : "admin";
