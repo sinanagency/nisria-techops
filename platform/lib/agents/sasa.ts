@@ -2504,14 +2504,19 @@ function stubTool(name: string, input: any): { ok: boolean; summary: string } {
 // + tools) but stubs tool execution (stubTool, no DB), feeding results back so we
 // capture Sasa's full exchange and FINAL reply. Works on Claude (real keys) or the
 // local brain (SASA_BRAIN_BASE_URL). Zero side effects. The gym judges the whole turn.
-export async function evalSasaMulti(opts: { history?: SasaTurn[]; command: string; role?: "admin" | "team"; maxTurns?: number }): Promise<{ finalText: string; turns: { text: string; toolCalls: { name: string; input: any }[] }[]; allToolCalls: { name: string; input: any }[] }> {
+export async function evalSasaMulti(opts: { history?: SasaTurn[]; command: string; role?: "admin" | "team"; maxTurns?: number; allowedToolNames?: string[]; domainFocus?: string }): Promise<{ finalText: string; turns: { text: string; toolCalls: { name: string; input: any }[] }[]; allToolCalls: { name: string; input: any }[] }> {
   const role = opts.role || "admin";
   const who = role === "team" ? "a team member" : "Nur";
   const dateLong = "Wednesday, June 3, 2026 (Asia/Dubai, 10:00)";
   const snapshot = "6 items waiting in Needs You, 0 messages need a reply, 3 open tasks.";
   const grounding = "Nisria (By Nisria Inc) is a US nonprofit helping children and families in Kenya. Founder and Executive Director: Nur M'nasria. The team roster lives in team_members. Sister brands: Maisha and AHADI.";
-  const system = buildSystem(role, who, dateLong, snapshot, grounding);
-  const toolset = (role === "team" ? SMART_TOOLS.filter((t) => TEAM_TOOL_NAMES.has(t.name)) : SMART_TOOLS) as any[];
+  // MESH-aware dry-run: when a domain scope is passed, the toolset is filtered to
+  // that domain (mirroring runSpecialist) and the domain-focus block is appended
+  // to the system prompt (mirroring sasa.ts:1670). Zero side effects either way.
+  const system0 = buildSystem(role, who, dateLong, snapshot, grounding);
+  const system = opts.domainFocus ? `${system0}\n\n${opts.domainFocus}` : system0;
+  const roleTools = role === "team" ? SMART_TOOLS.filter((t) => TEAM_TOOL_NAMES.has(t.name)) : SMART_TOOLS;
+  const toolset = ((opts.allowedToolNames && opts.allowedToolNames.length) ? roleTools.filter((t) => opts.allowedToolNames!.includes(t.name)) : roleTools) as any[];
   const convo: any[] = [
     ...(opts.history || []).map((m) => ({ role: m.role, content: String(m.content || "") })),
     { role: "user", content: opts.command },
