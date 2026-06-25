@@ -54,7 +54,7 @@ export const PEOPLE_MANIFEST: DomainManifest = {
   domain: "people",
   model: "claude-sonnet-4-6",
   tools: [
-    "lookup_contact", "team_detail", "list_team", "add_team_member", "update_team_member",
+    "team_detail", "list_team", "add_team_member", "update_team_member",
     "find_beneficiary", "list_beneficiaries", "add_beneficiary", "update_beneficiary",
     "delete_beneficiary", "merge_beneficiary", "approve_case", "decline_case",
     "move_case", "edit_case", "merge_case", "delete_case", "add_contact", "update_contact",
@@ -89,7 +89,7 @@ export const KNOWLEDGE_MANIFEST: DomainManifest = {
   model: "claude-haiku-4-5-20251001",
   tools: [
     "search_documents", "read_document", "summarize_document", "file_document", "delete_document",
-    "list_learned", "remember_fact", "edit_brain_section", "query_memory",
+    "list_learned", "edit_brain_section", "query_memory",
     "list_grants", "prepare_grants", "refresh_grants",
     // restored from orphan sweep: grant pipeline writes + studio docs + drive + assets
     "add_grant", "update_grant_status", "pursue_opportunity",
