@@ -682,8 +682,8 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     // real `messages` table (no fabrication), ranked by how many query words match.
     const q = String(input.query || "").trim();
     if (!q) return { results: [], note: "no query given" };
-    const terms = q.toLowerCase().split(/\s+/).map((w: string) => w.replace(/[,()*%]/g, "")).filter((w: string) => w.length >= 3).slice(0, 6);
-    const used = terms.length ? terms : [q.toLowerCase().replace(/[,()*%]/g, "")];
+    const terms = q.toLowerCase().split(/\s+/).map((w: string) => w.replace(/[(),:*%_]/g, "")).filter((w: string) => w.length >= 3).slice(0, 6);
+    const used = terms.length ? terms : [q.toLowerCase().replace(/[(),:*%_]/g, "")];
     const orExpr = used.map((w: string) => `body.ilike.%${w}%`).join(",");
     let mq = db.from("messages").select("body,created_at,direction,channel,contact_id").or(orExpr).order("created_at", { ascending: false }).limit(80);
     // PRIVACY WALL: the conversational memory is per-line. A non-owner caller
@@ -818,7 +818,7 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (!scored.length) {
       // Fallback: single-substring match (old behavior) so a one-word query like
       // "constitution" still works, and so the empty case stays consistent.
-      const like = `%${q.replace(/[,()*%]/g, "")}%`;
+      const like = `%${q.replace(/[(),:*%_]/g, "")}%`;
       let qb = db.from("documents").select("title,doc_type,folder,doc_date,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
       if (tier === "team") qb = qb.eq("sensitivity", "normal");
       const { data } = await qb.order("doc_date", { ascending: false }).limit(12);
@@ -871,7 +871,7 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
   if (name === "read_document") {
     const q = String(input.query || "").trim();
     if (!q) return { error: "give a document title fragment" };
-    const like = `%${q.replace(/[,()*%]/g, "")}%`;
+    const like = `%${q.replace(/[(),:*%_]/g, "")}%`;
     let qb = db.from("documents").select("title,doc_type,folder,doc_date,extracted_text,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
     if (tier === "team") qb = qb.eq("sensitivity", "normal");
     const { data } = await qb.order("doc_date", { ascending: false }).limit(1);
@@ -893,7 +893,7 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
   if (name === "agent_activity") {
     if (tier === "team") return { error: "not available here" };
     let qb = db.from("agent_runs").select("agent,decision,status,error,created_at");
-    if (input.agent) qb = qb.ilike("agent", `%${String(input.agent).replace(/[,()*%]/g, "")}%`);
+    if (input.agent) qb = qb.ilike("agent", `%${String(input.agent).replace(/[(),:*%_]/g, "")}%`);
     const { data } = await qb.order("created_at", { ascending: false }).limit(25);
     return { count: (data || []).length, runs: ((data || []) as any[]).map((r) => ({ agent: r.agent, decision: r.decision || null, status: r.status, error: r.error || null, at: r.created_at })) };
   }
@@ -911,14 +911,14 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
   if (name === "find_studio_doc") {
     const q = String(input.query || "").trim();
     let qb = db.from("studio_documents").select("title,doc_type,kind,brand,created_at");
-    if (q) qb = qb.ilike("title", `%${q.replace(/[,()*%]/g, "")}%`);
+    if (q) qb = qb.ilike("title", `%${q.replace(/[(),:*%_]/g, "")}%`);
     const { data } = await qb.order("created_at", { ascending: false }).limit(15);
     return { count: (data || []).length, documents: ((data || []) as any[]).map((d) => ({ title: d.title, type: d.doc_type || d.kind || null, brand: d.brand || null, created: d.created_at })) };
   }
   if (name === "summarize_document") {
     const q = String(input.query || "").trim();
     if (!q) return { error: "give a document title" };
-    const like = `%${q.replace(/[,()*%]/g, "")}%`;
+    const like = `%${q.replace(/[(),:*%_]/g, "")}%`;
     let qb = db.from("documents").select("title,extracted_text,summary").or(`title.ilike.${like},extracted_text.ilike.${like}`);
     if (tier === "team") qb = qb.eq("sensitivity", "normal");
     const { data } = await qb.order("doc_date", { ascending: false }).limit(1);
@@ -935,7 +935,7 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (tier === "team") return { error: "not available here" };
     const dn = String(input.name || "").trim();
     if (!dn) return { error: "which donor?" };
-    const { data: donors } = await db.from("donors").select("id,full_name,email,lifetime_value,last_gift_at").ilike("full_name", `%${dn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: donors } = await db.from("donors").select("id,full_name,email,lifetime_value,last_gift_at").ilike("full_name", `%${dn.replace(/[(),:*%_]/g, "")}%`).limit(5);
     const dlist = (donors || []) as any[];
     if (!dlist.length) return { found: false, note: `No donor matching "${dn}".` };
     if (dlist.length > 1) return { found: false, note: `A few donors match: ${dlist.map((d) => d.full_name).join(", ")}. Which one?` };
@@ -965,7 +965,7 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (tier === "team") return { error: "not available here" };
     // Payroll lives in `payments` (category=payroll), keyed by payee NAME, not the empty team_payments table.
     let qb = db.from("payments").select("payee,purpose,amount,currency,status,paid_at,method").eq("category", "payroll").order("paid_at", { ascending: false, nullsFirst: false }).limit(50);
-    if (input.name) qb = qb.ilike("payee", `%${String(input.name).replace(/[,()*%]/g, "")}%`);
+    if (input.name) qb = qb.ilike("payee", `%${String(input.name).replace(/[(),:*%_]/g, "")}%`);
     const { data } = await qb;
     const rows = (data || []) as any[];
     return { count: rows.length, payments: rows.map((r) => ({ member: r.payee || null, amount: money(r.amount), currency: r.currency || "KES", period: r.purpose || null, paid_at: r.paid_at || null, status: r.status, method: r.method || null })) };
@@ -974,7 +974,7 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     if (tier === "team") return { error: "not available here" };
     const cn = String(input.name || "").trim();
     if (!cn) return { error: "give a contact name" };
-    const { data: contacts } = await db.from("contacts").select("id,name,phone").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(8);
+    const { data: contacts } = await db.from("contacts").select("id,name,phone").ilike("name", `%${cn.replace(/[(),:*%_]/g, "")}%`).limit(8);
     const list = (contacts || []) as any[];
     if (!list.length) return { found: false, note: `No contact matching "${cn}".` };
     // DUP-TOLERANT (2026-06-22): never dead-end on our own messy data ("which Cynthia?").
@@ -2117,7 +2117,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       else { number = phoneKey(toRaw); }
     }
     if (!number) {
-      const likeP = `%${toRaw.replace(/[,()*%]/g, "")}%`;
+      const likeP = `%${toRaw.replace(/[(),:*%_]/g, "")}%`;
       const [t, c] = await Promise.all([
         db.from("team_members").select("name,phone,status").ilike("name", likeP).not("phone", "is", null).limit(6),
         db.from("contacts").select("name,phone").ilike("name", likeP).not("phone", "is", null).limit(6),
@@ -2136,7 +2136,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       number = phoneKey(chosen.phone); toName = chosen.name;
     }
     // find the filed document/photo
-    const likeD = `%${query.replace(/[,()*%]/g, "")}%`;
+    const likeD = `%${query.replace(/[(),:*%_]/g, "")}%`;
     const { data: docs } = await db.from("documents").select("title,mime,drive_file_id,drive_url").or(`title.ilike.${likeD},extracted_text.ilike.${likeD}`).order("created_at", { ascending: false }).limit(6);
     const dlist = (docs || []) as any[];
     if (!dlist.length) return { ok: false, summary: humanize(`I could not find a filed document matching "${query}". Try another word from its title.`, opts), detail: { matched: 0 } };
@@ -2180,7 +2180,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       folder = syn[folder] || "general";
     }
     const brand = ["nisria", "maisha", "ahadi"].includes(String(input.brand || "").toLowerCase()) ? String(input.brand).toLowerCase() : null;
-    const like = `%${query.replace(/[,()*%]/g, "")}%`;
+    const like = `%${query.replace(/[(),:*%_]/g, "")}%`;
     const { data: docs } = await db.from("documents").select("id,title,folder,drive_file_id").ilike("title", like).order("created_at", { ascending: false }).limit(10);
     const list = (docs || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a filed document matching "${query}". Try another word from its title, or resend the file and I will pull it in.`, opts), detail: { matched: 0 } };
@@ -2236,7 +2236,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const senderName = (ctx.operatorName || "").trim() || "a teammate";
     const senderKey = ctx.senderPhone ? phoneKey(ctx.senderPhone) : "";
     // Resolve against the TEAM ROSTER ONLY (active members). Never the contacts book.
-    const likeT = `%${toRaw.replace(/[,()*%]/g, "")}%`;
+    const likeT = `%${toRaw.replace(/[(),:*%_]/g, "")}%`;
     const byNumber = phoneKey(toRaw).length >= 9 && !/^0/.test(toRaw.replace(/\D/g, ""));
     const { data: teamRows } = await db.from("team_members").select("name,phone,status").not("phone", "is", null)
       .or(byNumber ? `phone.ilike.%${phoneKey(toRaw).slice(-9)}%` : `name.ilike.${likeT}`).limit(8);
@@ -2323,7 +2323,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       else if (hits.length > 1) return { ok: false, summary: humanize(`The number ${toRaw} could match more than one person: ${hits.slice(0, 4).map((m: any) => m.name).join(", ")}. Which one, or give me the full international number?`, opts), detail: { ambiguous: true } };
       else { number = phoneKey(toRaw); }
     } else {
-      const like = `%${toRaw.replace(/[,()*%]/g, "")}%`;
+      const like = `%${toRaw.replace(/[(),:*%_]/g, "")}%`;
       const [t, c] = await Promise.all([
         db.from("team_members").select("name,phone,status").ilike("name", like).not("phone", "is", null).limit(6),
         db.from("contacts").select("name,phone").ilike("name", like).not("phone", "is", null).limit(6),
@@ -2700,7 +2700,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
     const qn = String(input.name || "").trim();
     if (!qn) return { ok: false, summary: "Which beneficiary?", error: "no name" };
-    const esc = qn.replace(/[,()*%]/g, "");
+    const esc = qn.replace(/[(),:*%_]/g, "");
     const { data: matches } = await db.from("beneficiaries").select("id,full_name,public_name,ref_code,status").is("intake_stage", null).or(`full_name.ilike.%${esc}%,public_name.ilike.%${esc}%`).limit(5);
     const list: any[] = preferExact((matches || []) as any[], qn, "full_name"); // exact-name preference (KT #386)
     if (!list.length) return { ok: false, summary: humanize(`I could not find an accepted beneficiary called ${qn}. (A case in intake is removed with delete_case.)`, opts) };
@@ -2718,7 +2718,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const keepName = String(input.into || "").trim();
     if (!dupName || !keepName) return { ok: false, summary: "Tell me the duplicate to fold in and the record to keep.", error: "missing name/into" };
     const find = async (q: string) => {
-      const esc = q.replace(/[,()*%]/g, "");
+      const esc = q.replace(/[(),:*%_]/g, "");
       const { data } = await db.from("beneficiaries").select("*").is("intake_stage", null).or(`full_name.ilike.%${esc}%,public_name.ilike.%${esc}%`).limit(5);
       return (data || []) as any[];
     };
@@ -2758,7 +2758,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const keepRaw = String(input.into || "").trim();
     if (!dupRaw) return { ok: false, summary: "Tell me which contact to fold in.", error: "missing name" };
     const findC = async (q: string): Promise<any[]> => {
-      const esc = q.replace(/[,()*%]/g, "");
+      const esc = q.replace(/[(),:*%_]/g, "");
       if (phoneKey(q).length >= 9 || isLocalForm(q)) {
         const { data } = await db.from("contacts").select("id,name,phone,email").not("phone", "is", null).ilike("phone", `%${suffixKey(q)}%`).order("phone", { ascending: true }).limit(200);
         return ((data || []) as any[]).filter((c) => sameNumber(q, String(c.phone || ""), orgCCs()));
@@ -2837,7 +2837,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
     const nm = String(input.name || "").trim();
     if (!nm) return { ok: false, summary: "Which case?", error: "no name" };
-    const like = `%${nm.replace(/[,()*%]/g, "")}%`;
+    const like = `%${nm.replace(/[(),:*%_]/g, "")}%`;
     const { data: cases } = await db.from("beneficiaries").select("id,full_name,ref_code,triage_notes,photo_asset_id,intake_stage").not("intake_stage", "is", null).ilike("full_name", like).limit(5);
     const list: any[] = preferExact((cases || []) as any[], nm, "full_name"); // exact-name preference (KT #386)
     if (!list.length) return { ok: false, summary: humanize(`I do not see a case for ${nm}.`, opts) };
@@ -2880,7 +2880,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (name === "merge_case") {
       const intoNm = String(input.into || "").trim();
       if (!intoNm) return { ok: false, summary: "Which case should I merge it into?" };
-      const { data: parents } = await db.from("beneficiaries").select("id,full_name,triage_notes,photo_asset_id").not("intake_stage", "is", null).ilike("full_name", `%${intoNm.replace(/[,()*%]/g, "")}%`).neq("id", c.id).limit(5);
+      const { data: parents } = await db.from("beneficiaries").select("id,full_name,triage_notes,photo_asset_id").not("intake_stage", "is", null).ilike("full_name", `%${intoNm.replace(/[(),:*%_]/g, "")}%`).neq("id", c.id).limit(5);
       const plist = (parents || []) as any[];
       if (!plist.length) return { ok: false, summary: humanize(`I do not see a case called ${intoNm} to merge into.`, opts) };
       if (plist.length > 1) return { ok: false, summary: humanize(`A few match ${intoNm}: ${plist.map((p) => p.full_name).join(", ")}. Which one?`, opts) };
@@ -2918,7 +2918,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
     const nm = String(input.name || "").trim();
     if (!nm) return { ok: false, summary: "Which beneficiary/case?", error: "no name" };
-    const like = `%${nm.replace(/[,()*%]/g, "")}%`;
+    const like = `%${nm.replace(/[(),:*%_]/g, "")}%`;
     if (name === "approve_case" || name === "decline_case") {
       const { data: cases } = await db.from("beneficiaries").select("id,full_name,ref_code").not("intake_stage", "is", null).ilike("full_name", like).limit(5);
       const list = (cases || []) as any[];
@@ -3202,7 +3202,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "update_contact") {
     const cname = String(input.name || "").trim();
     if (!cname) return { ok: false, summary: "Which contact?", error: "no name" };
-    const { data: matches } = await db.from("contacts").select("id,name").ilike("name", `%${cname.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: matches } = await db.from("contacts").select("id,name").ilike("name", `%${cname.replace(/[(),:*%_]/g, "")}%`).limit(5);
     const list: any[] = preferExact((matches || []) as any[], cname, "name"); // exact-name preference (KT #386)
     if (!list.length) return { ok: false, summary: humanize(`I could not find a contact called ${cname}.`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
@@ -3240,7 +3240,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "update_donor") {
     const dname = String(input.name || input.full_name || "").trim();
     if (!dname) return { ok: false, summary: "Which donor?", error: "no name" };
-    const { data: matches } = await db.from("donors").select("id,full_name").ilike("full_name", `%${dname.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: matches } = await db.from("donors").select("id,full_name").ilike("full_name", `%${dname.replace(/[(),:*%_]/g, "")}%`).limit(5);
     const list = (matches || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a donor matching ${dname}.`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few donors match: ${list.map((d) => d.full_name).join(", ")}. Which one?`, opts) };
@@ -3284,7 +3284,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "update_campaign") {
     const cname = String(input.name || "").trim();
     if (!cname) return { ok: false, summary: "Which campaign?", error: "no name" };
-    const { data: matches } = await db.from("campaigns").select("id,name").ilike("name", `%${cname.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: matches } = await db.from("campaigns").select("id,name").ilike("name", `%${cname.replace(/[(),:*%_]/g, "")}%`).limit(5);
     const list = (matches || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a campaign matching "${cname}".`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few campaigns match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
@@ -3309,7 +3309,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!mname) return { ok: false, summary: "Which team member?", error: "no name" };
     if (typeof input.amount !== "number" || input.amount <= 0) return { ok: false, summary: "How much was paid?", error: "no amount" };
     const ccy = ["KES", "USD"].includes(input.currency) ? input.currency : "KES";
-    const { data: members } = await db.from("team_members").select("id,name").ilike("name", `%${mname.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: members } = await db.from("team_members").select("id,name").ilike("name", `%${mname.replace(/[(),:*%_]/g, "")}%`).limit(5);
     const list = (members || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a team member called ${mname}.`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((m) => m.name).join(", ")}. Which one?`, opts) };
@@ -3342,7 +3342,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "pursue_opportunity") {
     const q = String(input.query || "").trim();
     if (!q) return { ok: false, summary: "Which opportunity (funder or title)?", error: "no query" };
-    const like = `%${q.replace(/[,()*%]/g, "")}%`;
+    const like = `%${q.replace(/[(),:*%_]/g, "")}%`;
     const { data: opps } = await db.from("grant_opportunities").select("id,title,funder,description,amount_floor,amount_ceiling,currency,close_date,url,source,relevance_score,pursued").or(`funder.ilike.${like},title.ilike.${like}`).neq("pursued", true).order("relevance_score", { ascending: false }).limit(5);
     const list = (opps || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I do not see an un-pursued opportunity matching "${q}".`, opts) };
@@ -3365,7 +3365,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (!["researching", "drafting", "review", "submitted", "won", "lost", "rejected"].includes(input.status) && typeof input.amount_awarded !== "number") {
       return { ok: false, summary: humanize("Tell me the new status (submitted, won, lost, rejected, ...) or the award amount.", opts) };
     }
-    const { data: matches } = await db.from("grant_applications").select("id,funder,status").ilike("funder", `%${funder.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: matches } = await db.from("grant_applications").select("id,funder,status").ilike("funder", `%${funder.replace(/[(),:*%_]/g, "")}%`).limit(5);
     const list = (matches || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a grant application to ${funder}.`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few grants match: ${list.map((g) => g.funder).join(", ")}. Which one?`, opts) };
@@ -3446,7 +3446,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "mark_payment_paid") {
     const payee = String(input.payee || "").trim();
     if (!payee) return { ok: false, summary: "Which payment (by payee)?", error: "no payee" };
-    let q = db.from("payments").select("id,payee,amount,currency,due_on,recurrence,category,method,purpose").eq("status", "upcoming").ilike("payee", `%${payee.replace(/[,()*%]/g, "")}%`);
+    let q = db.from("payments").select("id,payee,amount,currency,due_on,recurrence,category,method,purpose").eq("status", "upcoming").ilike("payee", `%${payee.replace(/[(),:*%_]/g, "")}%`);
     if (typeof input.amount === "number") q = q.eq("amount", input.amount);
     const { data: ups } = await q.order("due_on", { ascending: true }).limit(5);
     const list = (ups || []) as any[];
@@ -3475,7 +3475,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "mark_handled") {
     const cn = String(input.name || "").trim();
     if (!cn) return { ok: false, summary: "Which conversation (contact name)?", error: "no name" };
-    const { data: contacts } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: contacts } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[(),:*%_]/g, "")}%`).limit(5);
     const list = (contacts || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a contact called ${cn}.`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
@@ -3553,7 +3553,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   if (name === "update_inventory_item") {
     const iname = String(input.name || "").trim();
     if (!iname) return { ok: false, summary: "Which item?", error: "no name" };
-    const { data: matches } = await db.from("inventory").select("id,name").ilike("name", `%${iname.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: matches } = await db.from("inventory").select("id,name").ilike("name", `%${iname.replace(/[(),:*%_]/g, "")}%`).limit(5);
     const list: any[] = preferExact((matches || []) as any[], iname, "name"); // exact-name preference (KT #386)
     if (!list.length) return { ok: false, summary: humanize(`I could not find an inventory item matching "${iname}".`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few items match: ${list.map((i) => i.name).join(", ")}. Which one?`, opts) };
@@ -3576,7 +3576,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
     const q = String(input.query || "").trim();
     if (!q) return { ok: false, summary: "Which document?", error: "no query" };
-    const { data: docs } = await db.from("documents").select("id,title,folder").ilike("title", `%${q.replace(/[,()*%]/g, "")}%`).order("created_at", { ascending: false }).limit(6);
+    const { data: docs } = await db.from("documents").select("id,title,folder").ilike("title", `%${q.replace(/[(),:*%_]/g, "")}%`).order("created_at", { ascending: false }).limit(6);
     const list = (docs || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a document matching "${q}".`, opts) };
     // NB (KT #375): do NOT collapse by title — two docs with the same title can be different
@@ -3626,7 +3626,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (ctx.tier === "team") return { ok: false, summary: "That is not something I can do here.", error: "team tier" };
     const cn = String(input.name || "").trim();
     if (!cn) return { ok: false, summary: "Which contact?", error: "no name" };
-    const { data: matches } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[,()*%]/g, "")}%`).limit(5);
+    const { data: matches } = await db.from("contacts").select("id,name").ilike("name", `%${cn.replace(/[(),:*%_]/g, "")}%`).limit(5);
     const list = (matches || []) as any[];
     if (!list.length) return { ok: false, summary: humanize(`I could not find a contact called ${cn}.`, opts) };
     if (list.length > 1) return { ok: false, summary: humanize(`A few match: ${list.map((c) => c.name).join(", ")}. Which one?`, opts) };
