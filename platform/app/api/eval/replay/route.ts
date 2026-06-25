@@ -35,6 +35,30 @@ export async function POST(req: NextRequest) {
     if (body.routeOnly) {
       return NextResponse.json({ ok: true, domain: routed.domain, confidence: routed.confidence, reason: routed.reason });
     }
+    // LIVE mode: run the REAL mesh with REAL tools so state actually evolves.
+    // HARD-GATED: only runs when REPLAY_LIVE_OK=1 (set ONLY on the isolated sandbox
+    // deployment whose SUPABASE points at the throwaway DB + whose WhatsApp creds are
+    // blanked). On prod this env is absent, so live:true is refused — real writes can
+    // NEVER hit prod through this endpoint.
+    if (body.live) {
+      if (process.env.REPLAY_LIVE_OK !== "1") {
+        return NextResponse.json({ ok: false, error: "live mode disabled here (not the sandbox instance)" }, { status: 403 });
+      }
+      const { runOrchestrated } = await import("../../../../lib/agents/orchestrator");
+      const out = await runOrchestrated({
+        command, history,
+        operatorRole: role,
+        operatorName: body.operatorName,
+        operatorRank: body.operatorRank,
+        speakerPhone: body.speakerPhone,
+        contactId: body.contactId,
+        confirmWrites: true,
+      } as any);
+      return NextResponse.json({
+        ok: true, mode: "live", domain: routed.domain, confidence: routed.confidence, reason: routed.reason,
+        reply: out.reply, toolsRan: (out as any).toolsRan || [],
+      });
+    }
     const allowedToolNames = getToolsForDomain(routed.domain, role);
     const domainFocus = DOMAIN_FOCUS[routed.domain];
     const res = await evalSasaMulti({ command, history, role, allowedToolNames, domainFocus, maxTurns: 4 });
