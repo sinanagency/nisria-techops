@@ -214,7 +214,7 @@ function _SASA_COMPLETION_GUARD(reply: string, toolRuns: { name: string; result:
       completionTools: COMPLETION_TOOLS,
       shapes: [
         { name: "money", regex: SHAPE_MONEY, requiredTools: PAYMENT_TOOLS },
-        { name: "task", regex: SHAPE_TASK, requiredTools: TASK_TOOLS, readTools: TASK_READ_TOOLS },
+        { name: "task", regex: SHAPE_TASK, requiredTools: TASK_TOOLS, readTools: TASK_READ_TOOLS, selfMarkNoExempt: true },
         { name: "case", regex: SHAPE_CASE, requiredTools: CASE_OR_BENEFICIARY_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },
         { name: "event", regex: SHAPE_EVENT, requiredTools: EVENT_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },
         { name: "contact", regex: SHAPE_CONTACT, requiredTools: CONTACT_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },

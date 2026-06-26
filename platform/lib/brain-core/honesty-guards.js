@@ -55,7 +55,16 @@ export function makeCompletionGuard(config) {
                 continue;
             if (okIn(toolRuns, shape.requiredTools))
                 continue;
-            if (shape.readTools && ranSuccessfully(toolRuns, shape.readTools))
+            // Read-exemption: a read tool (e.g. list_tasks) normally excuses a shape
+            // match, because the model may be QUOTING a title ("Complete the report")
+            // from the read rather than claiming it acted. BUT a FIRST-PERSON self-mark
+            // ("I marked it complete", "Done, marked the task") is a direct action claim,
+            // not a quoted title — a read must NOT excuse it. Shapes opting in with
+            // selfMarkNoExempt require a real action tool even when a read ran.
+            // (2026-06-26: closes the gym-proven gap where "Done, marked the task
+            // complete" + only list_tasks slipped through.)
+            if (shape.readTools && ranSuccessfully(toolRuns, shape.readTools)
+                && !(shape.selfMarkNoExempt && config.agentSelfMark.test(reply)))
                 continue;
             if (shape.parseTasksExempt && parseTasksDidIt)
                 continue;

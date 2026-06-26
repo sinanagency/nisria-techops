@@ -13,6 +13,8 @@ export interface CompletionShape {
     readTools?: ReadonlySet<string>;
     /** True when a successful "parsed-task" write also satisfies this shape (workaround for cross-category title text). */
     parseTasksExempt?: boolean;
+    /** When true, a read tool does NOT excuse a FIRST-PERSON self-mark claim ("I marked it complete") — only a quoted title. Requires a real action tool for self-mark claims even if a read ran. */
+    selfMarkNoExempt?: boolean;
 }
 export interface CompletionGuardConfig {
     /** Detects an explicit agent claim of completion ("I logged", "I marked X done"). */
