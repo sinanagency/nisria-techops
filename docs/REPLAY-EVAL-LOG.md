@@ -29,3 +29,10 @@ RESUME (cheap, NO re-replay): once any sk-ant key has credit:
   → judges the 1183 checkpoint, writes docs/replay-live-proof.json with the real accuracy.
 Then continue the loop: <90% → fix top cluster, redeploy sandbox (needs a working key for routing/specialists too), reset transactional, re-run; 90-95% → stop.
 TO TOP UP: Anthropic console → Plans & Billing for the org behind anthropic-active-key (sk-ant-api03-aY0...), OR restore nur-anthropic-key-SUSPENDED.
+
+## 2026-06-26 — full run judged (key drained mid-run → corrected score)
+- Full replay's key (anthropic-active-key) drained at ~msg 554/1183 → 740 rows are the engine's "brief hiccup" API-error reply, judged as failures → bogus 23.5%.
+- REAL score on the 274 VALID replayable rows (live replies, hard early-half): NEW 65.7% (180/274) vs OLD 52.9%; routing 85.4%. New clearly beats old.
+- Top remaining cluster: money (37 valid-row failures), work 18, comms 10, people 9.
+- Driver hardened: tag API-error replies as apiDead (judge skips them, not counted as bot failures) + ABORT after 5 consecutive (never burn a run / corrupt a score on a dead key again).
+- FRUGAL going forward (operator: don't drain credit): no full re-runs; analyze failures from existing proof (free); fix; verify on a small ~60-80 representative sample with Haiku judge (~$1).
