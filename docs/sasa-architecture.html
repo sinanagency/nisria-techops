@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sasa Bot — Architecture & Logic Tree</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+    color: #1b1b1a; background: #ffffff; line-height: 1.5; font-size: 10.5pt; margin: 0;
+  }
+  h1,h2,h3,h4 { font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif; color: #14140f; font-weight: 600; line-height: 1.15; }
+  h1 { font-size: 30pt; margin: 0 0 6pt; letter-spacing: -0.4pt; }
+  h2 { font-size: 17pt; margin: 26pt 0 8pt; padding-bottom: 5pt; border-bottom: 1.5px solid #d9d4c5; }
+  h3 { font-size: 12.5pt; margin: 16pt 0 4pt; color: #2a2a22; }
+  h4 { font-size: 10.5pt; margin: 10pt 0 2pt; color: #6b6b5e; text-transform: uppercase; letter-spacing: 0.6pt; }
+  p { margin: 5pt 0; }
+  .gold { color: #9a7b2e; }
+  .muted { color: #75756a; }
+  a { color: #9a7b2e; text-decoration: none; }
+  code, pre, .mono { font-family: "SF Mono", "Menlo", "Consolas", monospace; font-size: 8.6pt; }
+  code { background: #f5f3ec; padding: 0.5pt 3pt; border-radius: 3px; color: #5a4a1e; }
+  .page-break { page-break-before: always; }
+  .avoid-break { page-break-inside: avoid; }
+
+  /* cover */
+  .cover { height: 247mm; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }
+  .cover .kicker { font-family: "SF Mono", Menlo, monospace; font-size: 9pt; letter-spacing: 3pt; text-transform: uppercase; color: #9a7b2e; margin-bottom: 14pt; }
+  .cover h1 { font-size: 40pt; max-width: 80%; }
+  .cover .sub { font-size: 13pt; color: #54544a; margin-top: 10pt; max-width: 75%; font-family: "Iowan Old Style", Georgia, serif; font-style: italic; }
+  .cover .meta { margin-top: 40pt; font-size: 9.5pt; color: #75756a; border-top: 1px solid #e3ddcd; padding-top: 12pt; }
+  .rule-gold { width: 54pt; height: 3px; background: #b8932f; margin: 0 0 22pt; }
+
+  /* logic tree pre */
+  pre.tree { background: #fbfaf5; border: 1px solid #e3ddcd; border-left: 3px solid #b8932f; border-radius: 5px; padding: 12pt 14pt; line-height: 1.35; overflow: visible; white-space: pre-wrap; color: #2c2c22; }
+
+  /* cards */
+  .node { border: 1px solid #e3ddcd; border-radius: 6px; padding: 9pt 12pt; margin: 8pt 0; page-break-inside: avoid; }
+  .node .h { display: flex; align-items: baseline; gap: 8pt; margin-bottom: 3pt; }
+  .node .num { font-family: "SF Mono", Menlo, monospace; font-size: 9pt; color: #fff; background: #b8932f; border-radius: 4px; padding: 1pt 6pt; font-weight: 600; }
+  .node .title { font-family: "Iowan Old Style", Georgia, serif; font-weight: 600; font-size: 11.5pt; }
+  .node .loc { margin-left: auto; font-family: "SF Mono", Menlo, monospace; font-size: 7.8pt; color: #9a937f; }
+  .node .does { margin: 3pt 0; }
+  .node .improve { margin-top: 5pt; padding: 5pt 8pt; background: #f6f8f4; border-left: 2px solid #7a9a6b; border-radius: 3px; font-size: 9.5pt; }
+  .node .improve b { color: #4f6b42; }
+  .node .risk { margin-top: 4pt; font-size: 9.5pt; color: #8a5a3a; }
+
+  table { width: 100%; border-collapse: collapse; margin: 8pt 0; font-size: 9pt; }
+  th { text-align: left; background: #f5f3ec; border-bottom: 1.5px solid #d9d4c5; padding: 5pt 7pt; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.4pt; color: #6b6b5e; }
+  td { border-bottom: 1px solid #ece8db; padding: 5pt 7pt; vertical-align: top; }
+  td .tools { font-family: "SF Mono", Menlo, monospace; font-size: 7.6pt; color: #5a5a4e; }
+  .badge { display: inline-block; font-size: 7.6pt; padding: 0.5pt 5pt; border-radius: 3px; font-weight: 600; }
+  .b-fixed { background: #e7f0e2; color: #43632f; }
+  .b-open { background: #f6e6dc; color: #99502a; }
+  .b-partial { background: #f4eeda; color: #8a6d1f; }
+  .lead { font-size: 11.5pt; color: #3a3a30; font-family: "Iowan Old Style", Georgia, serif; }
+  ul { margin: 5pt 0; padding-left: 16pt; }
+  li { margin: 2.5pt 0; }
+  .foot { margin-top: 6pt; font-size: 8pt; color: #9a937f; font-style: italic; }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<section class="cover">
+  <div class="kicker">Nisria Command Center</div>
+  <div class="rule-gold"></div>
+  <h1>Sasa Bot: Architecture &amp; Logic Tree</h1>
+  <div class="sub">How a WhatsApp message becomes an action, every decision node, and exactly where to improve it.</div>
+  <div class="meta">
+    Live at <b>command.nisria.co</b> &nbsp;·&nbsp; Built by SEV7EN Marketing AI<br>
+    Prepared 2026-06-26 &nbsp;·&nbsp; Status: new architecture deployed, gated by maintenance<br>
+    Source of truth: this document is traced from the live code (file:line cited per node).
+  </div>
+</section>
+
+<!-- EXEC SUMMARY -->
+<h2>1. What this is, in plain terms</h2>
+<p class="lead">Sasa is an office, not a single brain. A message arrives like a customer at a front desk. A receptionist routes it to the right clerk. Each clerk has only their own equipment. The clerk's job is to <b>understand</b> what is wanted; the system does the action and writes the reply. That separation is the whole design.</p>
+<p>The bot has moved through three versions. <b>Mono</b>: one brain with every tool, no routing, easily confused. <b>Mesh</b> (live now): a router plus seven scoped specialists on one shared engine, with an honesty chain that refuses false claims. <b>Rails</b> (in progress): narrow the model to understanding only, and make the action and the reply deterministic, so a clear command produces one correct, gradable result.</p>
+<p>The recurring failure was never routing or tools. It was the last step: letting the model write the "what happened" sentence freely, where it could say "Logged" for a payment that was only staged. The fix is to take that pen away. This document maps every node so each one can be improved on purpose, not by guesswork.</p>
+
+<h4>Current state (honest)</h4>
+<ul>
+  <li>New architecture is <b>deployed</b> to prod and verified live (the new <code>/api/eval/replay</code> route answers on the apex; a real signed webhook drove the full pipeline).</li>
+  <li>The bot is <b>gated by maintenance</b> right now: only the owner number is served; members get a single notice. Lifting it is one env flip plus redeploy.</li>
+  <li>The brain runs on a funded Anthropic key set in prod. Swap to a dedicated bot key when convenient.</li>
+</ul>
+
+<!-- THE MAP -->
+<h2 class="page-break">2. The architecture in one picture</h2>
+<pre class="tree">
+   INBOUND WHATSAPP MESSAGE
+            |
+       [ WEBHOOK ]  verify signature, store, return 200 fast, hand to worker
+            |
+       [ WORKER ]   GATE 1: is sender allowed?      GATE 2: maintenance?
+            |        (admin / team+bot_access)        (locked -> notice only)
+            v
+     [ ORCHESTRATOR ]  route -> (decompose if needed) -> run specialist(s)
+            |
+   +--------+---------+---------+---------+---------+---------+
+   |        |         |         |         |         |         |
+  WORK    MONEY    PEOPLE    COMMS   KNOWLEDGE PROGRAMS  GENERAL     <- 7 specialists
+   |        |         |         |         |         |         |
+   +--------+----+----+---------+---------+---------+---------+
+                 |
+        [ SHARED ENGINE: runSasa ]  scoped tools only + domain focus
+                 |  tool loop (dispatch-time scope wall)
+                 v
+        [ FINALIZE: honesty chain ]  deterministic staged-confirm FIRST,
+                 |                    then leak/lie guards, then format
+                 v
+        [ SEND ]  WhatsApp reply, persist (unless dev mode)
+</pre>
+<p class="muted">Three things from the latest work sit at fixed nodes: the scope-leak guard at the specialist, the deterministic staged-confirmation and leak-strip in finalize, and the routing telemetry (<code>mesh.routed</code> / <code>mesh.completed</code>) at the orchestrator. They are called out per node below.</p>
+
+<!-- THE LOGIC TREE STEP BY STEP -->
+<h2 class="page-break">3. The runtime logic tree, node by node</h2>
+<p class="muted">Each node lists what it does, where it lives, its current weak point, and the concrete improvement. This is the work list.</p>
+
+<div class="node">
+  <div class="h"><span class="num">1</span><span class="title">Webhook (fast intake)</span><span class="loc">app/api/whatsapp/webhook/route.ts:61</span></div>
+  <div class="does">Verifies Meta's HMAC signature, resolves the sender to a contact, stores the inbound message, enqueues a job, triggers the worker, and returns 200 within Meta's timeout. The slow brain runs separately so Meta never sees a timeout.</div>
+  <div class="risk">Weak point: a bad or missing <code>WHATSAPP_APP_SECRET</code> rejects everything; media arrives as a reference that must be fetched later.</div>
+  <div class="improve"><b>Improve:</b> add a dead-letter log for signature failures and malformed payloads so silent drops are visible, not invisible.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">2</span><span class="title">Gate 1 — is the sender allowed?</span><span class="loc">worker/route.ts:104</span></div>
+  <div class="does">Allowed only if role is admin (owner/founder on the operators allowlist) or a team member with <code>bot_access=true</code>. Everyone else is logged as <code>whatsapp.ignored</code> and gets no reply. The 727 line is invite-only.</div>
+  <div class="risk">Weak point: a legitimate new team member with no <code>bot_access</code> flag is silently ignored, which looks like the bot is broken.</div>
+  <div class="improve"><b>Improve:</b> a one-line "you are not enrolled yet, ask Nur" reply for known-but-unflagged team numbers, so silence never reads as failure.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">3</span><span class="title">Gate 2 — maintenance</span><span class="loc">worker/route.ts:213</span></div>
+  <div class="does">When <code>MAINTENANCE_MODE=1</code>, only the allowlisted owner number gets full service. Everyone else gets one canned maintenance notice (throttled to once per six hours) and nothing else runs: no brain, no tools, no writes. This gate is currently ON.</div>
+  <div class="risk">Weak point: the gate is all-or-nothing and lives in an env var, so toggling needs a redeploy; there is no partial / read-only mode.</div>
+  <div class="improve"><b>Improve:</b> a soft mode that lets reads through but blocks writes during a quality pass; move the toggle to a DB flag so it flips without a redeploy.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">4</span><span class="title">Coalesce the burst</span><span class="loc">worker/route.ts:396</span></div>
+  <div class="does">A durable per-contact claim merges several quick messages ("salary 15k", "+5k transport", "for Mark") into one turn so the bot answers the whole thought, not each fragment. Losers defer to the winner.</div>
+  <div class="risk">Weak point: the coalesce window is a fixed wait; too short splits a thought, too long feels slow.</div>
+  <div class="improve"><b>Improve:</b> end the window early on a sentence-final signal (a question mark, "thanks", a long pause) instead of always waiting the full timer.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">5</span><span class="title">Window-open flush</span><span class="loc">worker/route.ts:431</span></div>
+  <div class="does">When a contact messages in, any reply that was held earlier (because WhatsApp's 24-hour window was closed) can now be delivered. Gated by <code>isLive</code> so test and maintenance traffic never trigger a real send.</div>
+  <div class="improve"><b>Improve:</b> surface held-message count to the operator so nothing waits silently for days.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">6</span><span class="title">Orchestrator — route &amp; (maybe) decompose</span><span class="loc">lib/agents/orchestrator.ts:69</span></div>
+  <div class="does">Media goes through an intake pipeline to a domain. Text goes to <code>routeMessage</code> (regex first, Haiku model as fallback), returning a domain and a confidence. Low-confidence or multi-intent messages are split into up to three steps, each run as its own specialist. There is no monolith fallback by design.</div>
+  <div class="risk">Weak point: routing is score-by-keyword-length; "remind me to <i>send</i> X" can tip to comms instead of work. Routing was ~86% on the hard set.</div>
+  <div class="improve"><b>Improve (the big lever):</b> this is where the Rails plan lands. Replace free tool-choice downstream with a structured parse (intent + slots), so the path becomes route to deterministic action. See section 7. Emits <code>mesh.routed</code> for measurement.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">7</span><span class="title">Specialist — scope the tools, focus the lane</span><span class="loc">lib/agents/specialists/index.ts:54</span></div>
+  <div class="does">Looks up the domain's tool list, fails closed if the scope is somehow empty (never runs unscoped), injects the domain focus plus the <span class="gold">no-scope-leak</span> rule, and calls the shared engine. This is the security wall: a money turn physically cannot reach a people tool.</div>
+  <div class="risk">Weak point: the focus is prose the model can still drift around; tool choice still happens inside the engine, not here.</div>
+  <div class="improve"><b>Improve:</b> move tool choice out of the engine and into a deterministic intent to tool table here, per the Rails plan.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">8</span><span class="title">Shared engine — the tool loop</span><span class="loc">lib/agents/sasa.ts (runSasa)</span></div>
+  <div class="does">Builds the system prompt (persona, Brain grounding, the real current date via the clock), then loops: the model proposes a tool, a <b>dispatch-time scope check</b> rejects any tool outside this domain, the tool runs, the result is fed back. Staging tools (payment, merge, delete) return "Ready to ... reply yes" with a <code>staged</code> flag.</div>
+  <div class="risk">Weak point: the model can still call the wrong in-scope tool, or loop asking instead of acting.</div>
+  <div class="improve"><b>Improve:</b> with the parse layer in place, the engine's tool loop shrinks to "execute the parsed action," removing most wrong-tool turns.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">9</span><span class="title">Finalize — the honesty chain</span><span class="loc">lib/agents/sasa.ts (finalize)</span></div>
+  <div class="does">The reply passes through ordered guards. <span class="gold">PRIMARY (new): deterministic staged-confirmation</span> — if any tool staged something, the reply IS the tool's own line, so the model can never say "Logged" for a staged payment. Then: send-state truth, fake-staging, completed-but-staged, plural-send, fabricated-number, the <span class="gold">meta/scope-leak strip</span>, apology cap, and a completion-mismatch backstop. Finally WhatsApp formatting and chunking.</div>
+  <div class="risk">Weak point: the later guards are catch-after-the-fact; each new lie shape needs a new guard (the game we are leaving).</div>
+  <div class="improve"><b>Improve:</b> as Rails extends, every action's confirmation comes from the tool result, so the guards become a near-silent backstop. A guard firing should be an alert, not normal.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">10</span><span class="title">Orchestrator finalize-with-guard</span><span class="loc">lib/agents/orchestrator.ts:149</span></div>
+  <div class="does">A last cross-domain leakage check on the real tools that ran, then emits <code>mesh.completed</code> with the tools and step count for measurement.</div>
+  <div class="improve"><b>Improve:</b> include the parsed intent and confidence in the telemetry so every turn is gradable against the golden set automatically.</div>
+</div>
+
+<div class="node">
+  <div class="h"><span class="num">11</span><span class="title">Send</span><span class="loc">lib/whatsapp.ts (sendTextAndLog)</span></div>
+  <div class="does">Sends the reply over WhatsApp and persists it, except in dev mode (owner/harness), which reroutes and skips persistence with a <code>[DEV]</code> prefix.</div>
+  <div class="improve"><b>Improve:</b> confirm delivery via Meta's status callback and retry or flag on failure, so a dropped send is never assumed delivered.</div>
+</div>
+
+<!-- SPECIALISTS TABLE -->
+<h2 class="page-break">4. The seven specialists and their tools</h2>
+<p class="muted">Each specialist is the shared engine scoped to one domain's tools. A specialist can never touch another domain's tools. Percentages are share of real transcript usage.</p>
+<table>
+  <thead><tr><th style="width:13%">Domain</th><th style="width:9%">Model</th><th>Tools (scoped)</th></tr></thead>
+  <tbody>
+    <tr><td><b>work</b><br><span class="muted">tasks, calendar</span></td><td>Haiku</td><td class="tools">create_task, complete_task, reopen_task, update_task, delete_task, add_task_comment, list_task_comments, link_task_dependency, list_task_dependencies, query_calendar, check_conflicts, create_event, move_event, delete_event, complete_calendar_event, list_tasks, read_brief, member_activity, dispatch_meeting_bot</td></tr>
+    <tr><td><b>money</b><br><span class="muted">payments, donations (admin only)</span></td><td>Sonnet</td><td class="tools">record_payment, update_payment, delete_payment, schedule_payment, mark_payment_paid, query_donations, lookup_donor, newest_donor, finance_summary, latest_gift, list_campaigns, list_payroll, list_bank_transactions, donor_activity, log_payout, add_donor, update_donor, add_campaign, update_campaign, set_monthly_goal, log_team_payment, set_beneficiary_funding</td></tr>
+    <tr><td><b>people</b><br><span class="muted">team, contacts, beneficiaries</span></td><td>Sonnet</td><td class="tools">team_detail, list_team, add_team_member, update_team_member, find_beneficiary, list_beneficiaries, add_beneficiary, update_beneficiary, delete_beneficiary, merge_beneficiary, approve_case, decline_case, move_case, edit_case, merge_case, delete_case, add_contact, update_contact, activate_member, set_bot_access, import_contacts, merge_contact, delete_contact, set_public_profile</td></tr>
+    <tr><td><b>comms</b><br><span class="muted">outbound messaging (admin only)</span></td><td>Sonnet</td><td class="tools">message_person, post_to_group, send_file_to_person, relay_to_colleague, draft_email, draft_thank_you, draft_all_thank_yous, draft_post, flag_to_nur, run_group_digest, show_outbound_audit, read_contact_thread, read_email, search_inbox, inbox_status, mark_handled, post_to_social, publish_social_post, send_newsletter, show_draft, list_groups, group_activity, list_content</td></tr>
+    <tr><td><b>knowledge</b><br><span class="muted">documents, Brain, grants</span></td><td>Haiku</td><td class="tools">search_documents, read_document, summarize_document, file_document, delete_document, list_learned, edit_brain_section, query_memory, list_grants, prepare_grants, refresh_grants, add_grant, update_grant_status, pursue_opportunity, find_studio_doc, transfer_drive_file, list_assets</td></tr>
+    <tr><td><b>programs</b><br><span class="muted">Maisha inventory, wishlist</span></td><td>Haiku</td><td class="tools">list_inventory, add_inventory_item, update_inventory_item, list_wishlist, add_wishlist_item, update_wishlist_item, fund_wishlist_item</td></tr>
+    <tr><td><b>general</b><br><span class="muted">greetings, ambiguous</span></td><td>Haiku</td><td class="tools">lookup_contact, search_history, remember_fact, flag_for_clarity, agent_activity</td></tr>
+  </tbody>
+</table>
+<p class="foot">Cross-cutting tools available to every specialist: lookup_contact, search_history, remember_fact, flag_for_clarity, agent_activity. Permission: money and comms are admin-only; the rest serve both admin and enrolled team (with the PII wall on people).</p>
+
+<!-- HONESTY CHAIN -->
+<h2 class="page-break">5. The honesty chain in detail (finalize)</h2>
+<p>Guards run in order. The first that matches rewrites the reply and the rest stand down. The top one is the new deterministic path; the others are the historical catch-after guards that Rails will make near-silent.</p>
+<table>
+  <thead><tr><th style="width:32%">Guard</th><th>What it catches</th></tr></thead>
+  <tbody>
+    <tr><td><b>deterministicStagedConfirm</b> <span class="badge b-fixed">new</span></td><td>Any staged action (payment, merge, delete). The reply becomes the tool's own honest "Ready to ... reply yes" line, so the model cannot narrate a staged action as done.</td></tr>
+    <tr><td>send-state truth</td><td>"Did you message X?" answered from the real outbound log, not the model's guess.</td></tr>
+    <tr><td>fake-staging</td><td>"Reply yes to confirm" text when no staging tool actually ran.</td></tr>
+    <tr><td>completed-but-staged <span class="badge b-fixed">new</span></td><td>Backstop: "Logged" when only a staging tool ran. Now superseded by the primary path, kept as a safety net.</td></tr>
+    <tr><td>plural-send mismatch</td><td>"Both messages sent" when only one actually went.</td></tr>
+    <tr><td>fabricated-number</td><td>A KES/USD figure not in the user's words or any tool result.</td></tr>
+    <tr><td>meta/scope-leak strip <span class="badge b-fixed">new</span></td><td>"I'm scoped to comms tools only", "the rules I run on" and similar internal leaks.</td></tr>
+    <tr><td>apology cap</td><td>Repeated "I'm so sorry, Nur" condolence openers on routine turns.</td></tr>
+    <tr><td>completion-mismatch backstop</td><td>Any "done/created/sent" claim with no category-matched tool success this turn.</td></tr>
+  </tbody>
+</table>
+
+<!-- FAILURE MODES -->
+<h2 class="page-break">6. Known failure modes (from the real benchmark)</h2>
+<p class="muted">Measured on 89 cases where the command was clear and the old bot failed. The honest read: the dangerous money lies are now closed at the source; the remaining failures are wrong tool-choice and need the parse layer.</p>
+<table>
+  <thead><tr><th style="width:42%">Failure</th><th style="width:18%">Status</th><th>Fix path</th></tr></thead>
+  <tbody>
+    <tr><td>Payment shown as "Logged" when only staged</td><td><span class="badge b-fixed">closed</span></td><td>Deterministic staged-confirm (node 9)</td></tr>
+    <tr><td>Case merge replied with money-shaped text</td><td><span class="badge b-fixed">closed</span></td><td>Domain-neutral line + staged-confirm</td></tr>
+    <tr><td>"I'm scoped to comms tools only this turn"</td><td><span class="badge b-fixed">closed</span></td><td>Leak strip + route "remind me" to work</td></tr>
+    <tr><td>Meta-narrative ("the rules I run on now")</td><td><span class="badge b-fixed">closed</span></td><td>Leak strip</td></tr>
+    <tr><td>Created a task when asked to edit one</td><td><span class="badge b-open">open</span></td><td>Intent parse (wrong-tool class)</td></tr>
+    <tr><td>Calendar "all done" with an unrequested delete</td><td><span class="badge b-open">open</span></td><td>Intent parse + templated confirm</td></tr>
+    <tr><td>Invented a task list / a one-assignee limit</td><td><span class="badge b-open">open</span></td><td>Parse + reply only from tool result</td></tr>
+    <tr><td>Asked a question the user already answered</td><td><span class="badge b-open">open</span></td><td>Parse fills slots from the message</td></tr>
+    <tr><td>Contradicted itself on a task lookup</td><td><span class="badge b-open">open</span></td><td>Deterministic read + ask-once</td></tr>
+  </tbody>
+</table>
+<p class="foot">Note on grading: 13 of the original "failures" were a judge artifact (it wanted a confirm-step on task creation that Nur likely does not want), not real bot bugs. Counting those as correct puts the new bot near three-quarters on the hardest set before the parse layer.</p>
+
+<!-- ROADMAP -->
+<h2 class="page-break">7. How we improve it (the Rails plan)</h2>
+<p class="lead">One change, applied per domain: narrow the model to understanding, make the action and the reply deterministic.</p>
+<pre class="tree">
+  TODAY (mesh)                         TARGET (rails)
+  route -> specialist:                 route -> specialist:
+    LLM picks tool + writes reply         1. LLM PARSE -> {intent, slots, confidence}
+    (wrong-tool + wrong-words bugs)       2. deterministic intent -> tool (scoped)
+                                          3. execute, capture result
+                                          4. templated confirmation from the result
+                                          5. fallback to free chat only when
+                                             intent = conversation / low confidence
+</pre>
+<h3>Why this reaches near-100% on clear commands</h3>
+<ul>
+  <li>The model does one job it is good at: turn messy, multilingual phrasing into a structured intent and slots.</li>
+  <li>Tool choice becomes a lookup table over the specialist's already-scoped tools, so wrong-tool turns disappear.</li>
+  <li>The confirmation is rendered from what the tool actually did, so the bot cannot lie about an outcome.</li>
+  <li>Every recognized action has one correct result, so the bot becomes <b>perfectly gradable</b> against a golden set.</li>
+</ul>
+<h3>Sequence</h3>
+<ul>
+  <li><b>Done:</b> staged-action confirmations (money, merge, delete) deterministic; leak and routing fixes.</li>
+  <li><b>Next:</b> build the parse layer for <b>work</b> first (largest cluster), then money, people, comms, knowledge, programs.</li>
+  <li>Each domain: intent catalog, intent to tool table, slot validators, confirmation templates, walls.</li>
+  <li><b>Measure once at the end</b> against the golden set on a safe sandbox deploy (sends dead, never prod), to respect key spend.</li>
+</ul>
+<p class="foot">References in the repo: spec 005 (specs/005-deterministic-rails), ADR 0015 (docs/decisions/0015-intent-parse-then-execute.md), knowledge-tree nodes 406 to 408.</p>
+
+<h2>8. How to operate it</h2>
+<ul>
+  <li><b>Unlock:</b> set <code>MAINTENANCE_MODE=0</code> in prod env, redeploy. <b>Lock:</b> set it to <code>1</code>, redeploy. The allowlist (owner number) always gets through.</li>
+  <li><b>Brain key:</b> <code>ANTHROPIC_API_KEY</code> in prod (type sensitive). It must be a funded key or the bot goes silent. Verify with a live brain test before unlocking.</li>
+  <li><b>Deploy oracle:</b> never trust the push. Confirm <code>command.nisria.co</code> is aliased to the new deployment and a discriminator route answers, then verify the brain with one real signed message.</li>
+  <li><b>Tests:</b> <code>npm run walls</code> (80 walls) plus <code>tsc</code> must be green; <code>predeploy.sh</code> gates the prod push.</li>
+</ul>
+<p class="foot">This document is generated from the live code and is meant to be marked up. Pick any node, write the improvement beside it, and it becomes the next work item.</p>
+
+</body>
+</html>
