@@ -1312,6 +1312,24 @@ const STAGING_CUE = /\b(?:ready to (?:log|record|stage|file)|reply\s+["']?yes["'
 // which has already confirmed a stage-only money tool ran this turn. "log/logging" (the
 // staging verb) is deliberately excluded so "Ready to log..." never trips it.
 const STAGED_DONE_CLAIM = /\b(?:logged|recorded|(?:all\s+)?done|completed?)\b/i;
+
+// DETERMINISTIC STAGED CONFIRMATION (Phase 3, the "job-3" fix). Every confirm-gated
+// action (record_payment, record_donation, merge_*, delete_*) returns its OWN honest
+// staging summary with detail.staged===true ("Ready to log KES 15,000 to Lucy. Reply
+// yes to confirm."). That summary is GROUND TRUTH from the tool, not the model. Instead
+// of catching the model AFTER it overwrites that line with "Logged/Done" (the endless
+// guard game), take the pen away: when staging tools ran this turn, the reply IS their
+// summaries, verbatim. The model never narrates a staged outcome, so it cannot lie about
+// one. Returns null when nothing was staged this turn (then the model's prose stands).
+function deterministicStagedConfirm(toolRuns: { name: string; result: any }[]): string | null {
+  const staged = toolRuns.filter((t) => (t.result as any)?.ok === true && (t.result as any)?.detail?.staged === true);
+  if (!staged.length) return null;
+  const lines = staged.map((t) => String((t.result as any)?.summary || "").trim()).filter(Boolean);
+  if (!lines.length) return null;
+  if (lines.length === 1) return lines[0];
+  return `A few things to confirm:\n${lines.map((s, i) => `${i + 1}. ${s}`).join("\n")}`;
+}
+
 function completedButOnlyStaged(reply: string, toolRuns: { name: string; result: any }[]): string | null {
   const staged = toolRuns.filter((t) => STAGE_ONLY_TOOLS.has(t.name) && (t.result as any)?.ok === true);
   if (!staged.length) return null;
@@ -1869,7 +1887,22 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         && !toolRuns.some((t) => SEND_TOOLS.has(t.name) && (t.result as any)?.ok === true)) {
         sendStateTruth = await answerSendStateFromLog(db, opts, reply, n);
       }
-      if (sendStateTruth) {
+      // PHASE 3 PRIMARY PATH (job-3 fix): if any confirm-gated tool STAGED something this
+      // turn, the reply IS the tool's own honest summary, not the model's prose. This runs
+      // FIRST so a true staged-confirmation can never be overwritten by a model "Logged/Done"
+      // line. Supersedes the completedButOnlyStaged catch (which stays as a later backstop).
+      const stagedConfirm = deterministicStagedConfirm(toolRuns);
+      if (stagedConfirm) {
+        reply = humanize(stagedConfirm, { now: { long: n.long, today: n.today } });
+        alreadySubstituted = true;
+        try {
+          import("../events").then(({ emit }) => emit({
+            type: "sasa.staged_confirm_deterministic", source: "agent:sasa", actor: opts.operatorName || "?",
+            subject_type: "contact", subject_id: opts.contactId || null, correlation_id: opts.traceId || null,
+            payload: { tools: toolRuns.filter((t) => (t.result as any)?.detail?.staged).map((t) => t.name) },
+          })).catch(() => {});
+        } catch {}
+      } else if (sendStateTruth) {
         reply = sendStateTruth;
         alreadySubstituted = true;
         try {

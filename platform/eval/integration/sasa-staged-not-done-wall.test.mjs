@@ -22,6 +22,23 @@ const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
 const flat = (s) => s.replace(/\s+/g, " ");
 
+// ---- S0: PHASE-3 PRIMARY PATH — staged tools drive the reply deterministically ----
+{
+  if (!/function deterministicStagedConfirm\(/.test(SASA))
+    fail("S0a deterministicStagedConfirm() must exist (the job-3 primary path)");
+  else ok("S0a deterministicStagedConfirm() defined");
+  // keys on the tool's OWN truth signal, not the model text
+  if (!/detail\?\.staged === true/.test(SASA))
+    fail("S0b must key on result.detail.staged===true (tool ground truth, not model prose)");
+  else ok("S0b keys on tool's detail.staged ground truth");
+  // wired as the FIRST substitution branch, ahead of sendStateTruth
+  const i = SASA.indexOf("const stagedConfirm = deterministicStagedConfirm(toolRuns);");
+  const region = i >= 0 ? SASA.slice(i, i + 400) : "";
+  if (!region || !/if \(stagedConfirm\) \{[\s\S]{0,120}reply = humanize\(stagedConfirm/.test(region))
+    fail("S0c stagedConfirm must be the primary branch that sets reply before any model-text guard");
+  else ok("S0c stagedConfirm is the primary reply path");
+}
+
 // ---- S1: staged-is-not-done guard exists and is wired into finalize ----
 {
   if (!/const STAGE_ONLY_TOOLS = new Set\(\["record_payment", "record_donation"\]\)/.test(SASA))
@@ -106,4 +123,34 @@ const flat = (s) => s.replace(/\s+/g, " ");
   else ok("B5 catches the meta-narrative (#2)");
   if (META_SCOPE_LEAK.test(clean)) fail("B6 must NOT flag a clean operational reply");
   else ok("B6 leaves a clean reply alone");
+}
+
+// ---- B7: PRIMARY PATH behavioral — staged tool results drive the reply verbatim ----
+{
+  const deterministicStagedConfirm = (toolRuns) => {
+    const staged = toolRuns.filter((t) => t.result?.ok === true && t.result?.detail?.staged === true);
+    if (!staged.length) return null;
+    const lines = staged.map((t) => String(t.result?.summary || "").trim()).filter(Boolean);
+    if (!lines.length) return null;
+    if (lines.length === 1) return lines[0];
+    return `A few things to confirm:\n${lines.map((s, i) => `${i + 1}. ${s}`).join("\n")}`;
+  };
+  // single staged payment -> reply is the tool's honest line, regardless of any model text
+  const r1 = deterministicStagedConfirm([{ name: "record_payment", result: { ok: true, summary: "Ready to log KES 15,000 to Lucy. Reply yes to confirm.", detail: { staged: true } } }]);
+  if (r1 === "Ready to log KES 15,000 to Lucy. Reply yes to confirm.") ok("B7 single staged action relays the tool's honest line");
+  else fail("B7 single staged action must relay the tool summary verbatim, got: " + r1);
+  // merge_case staged -> uses the merge tool's line (NOT money text) — fixes #8
+  const r2 = deterministicStagedConfirm([{ name: "merge_case", result: { ok: true, summary: 'Merging the case "Princess" into "Mercy" moves its history. Reply yes to confirm.', detail: { staged: true } } }]);
+  if (/Merging the case/.test(r2) && !/payee|amount/.test(r2)) ok("B8 merge_case relays its OWN line, no money text (#8)");
+  else fail("B8 merge_case must relay its own staging line, got: " + r2);
+  // nothing staged -> null (model prose stands for pure conversation)
+  if (deterministicStagedConfirm([{ name: "list_tasks", result: { ok: true, rows: [] } }]) === null) ok("B9 non-staged turn returns null (model prose stands)");
+  else fail("B9 must return null when nothing was staged");
+  // batch -> numbered
+  const r3 = deterministicStagedConfirm([
+    { name: "record_payment", result: { ok: true, summary: "Ready to log KES 15,000 to Lucy. Reply yes.", detail: { staged: true } } },
+    { name: "record_payment", result: { ok: true, summary: "Ready to log KES 5,000 to Mark. Reply yes.", detail: { staged: true } } },
+  ]);
+  if (/1\. Ready to log KES 15,000/.test(r3) && /2\. Ready to log KES 5,000/.test(r3)) ok("B10 batch staged actions are numbered");
+  else fail("B10 batch must number each staged line, got: " + r3);
 }
