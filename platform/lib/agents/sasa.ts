@@ -1645,7 +1645,7 @@ function sasaTurnDedupSimilarity(a: string, b: string): number {
 // the voice for the WhatsApp caller (omit for the full-admin web console).
 // surface 'group' puts Sasa inside a team group: team-tier tools, a reply gate
 // (returns empty reply when it should stay silent), and the group system prompt.
-export async function runSasa(opts: { history?: SasaTurn[]; command: string; operatorName?: string; operatorRole?: "admin" | "team"; operatorRank?: "owner" | "founder" | "member" | null; surface?: "dm" | "group"; groupName?: string; speakerPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string; casesIntake?: boolean; parseTasksFired?: boolean; recentTaskActivity?: boolean; swipeAnchor?: { subject_type: string; subject_id: string; label?: string; quotedExcerpt?: string } | null; traceId?: string; allowedToolNames?: string[]; domainFocus?: string }): Promise<SasaResult> {
+export async function runSasa(opts: { history?: SasaTurn[]; command: string; operatorName?: string; operatorRole?: "admin" | "team"; operatorRank?: "owner" | "founder" | "member" | null; surface?: "dm" | "group"; groupName?: string; speakerPhone?: string; proofPath?: string; confirmWrites?: boolean; contactId?: string; sourceMessageId?: string; casesIntake?: boolean; parseTasksFired?: boolean; recentTaskActivity?: boolean; swipeAnchor?: { subject_type: string; subject_id: string; label?: string; quotedExcerpt?: string; inferred?: boolean } | null; traceId?: string; allowedToolNames?: string[]; domainFocus?: string }): Promise<SasaResult> {
   const db = admin();
   const inGroup = opts.surface === "group";
   // a group is team-tier regardless of who posts: no donor/finance in a group
@@ -1724,7 +1724,18 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
     const a = opts.swipeAnchor;
     const lab = a.label ? ` titled "${a.label}"` : "";
     const ex = a.quotedExcerpt ? `\nQuoted message body: "${String(a.quotedExcerpt).slice(0, 200)}"` : "";
-    anchorBlock = `\n\nSWIPE-REPLY ANCHOR (HARD WALL): The human reply-quoted your prior message about ${a.subject_type} ${a.subject_id}${lab}.${ex}\nThis turn is a continuation of THAT thread. If the human says "done", "got it", "closed", "yes", "no", or any short verb-target phrase, you MUST resolve it against ${a.subject_type} ${a.subject_id} and NOT a different ${a.subject_type}. Targeting a different subject when an anchor is present is a hallucination, not a fuzzy-match.`;
+    if (a.inferred) {
+      // INFERRED ANCHOR (spec 006, reference-resolution): the human did NOT
+      // swipe-reply, they typed a pronoun follow-up ("move it", "delete it",
+      // "actually 3pm"). We resolved the referent from the LAST single record
+      // this thread acted on (within 30 min). Because the human did not
+      // explicitly point, this is a STRONG HINT, not a hard wall: act on it if
+      // it plainly fits, but if it does not match what they mean, ask via
+      // flag_for_clarity rather than mutating or deleting the wrong record.
+      anchorBlock = `\n\nLIKELY REFERENT (spec 006): The most recent record this thread acted on was ${a.subject_type} ${a.subject_id}${lab}.${ex}\nThe human just sent a short pronoun follow-up ("it", "that", "this", or an "actually ..." correction). They most likely mean THAT ${a.subject_type}. If the follow-up plainly fits it, resolve "it"/"that" to ${a.subject_type} ${a.subject_id}. If it clearly does NOT fit (different type, different thing), do NOT guess and do NOT mutate or delete another record: use flag_for_clarity to ask which one they mean.`;
+    } else {
+      anchorBlock = `\n\nSWIPE-REPLY ANCHOR (HARD WALL): The human reply-quoted your prior message about ${a.subject_type} ${a.subject_id}${lab}.${ex}\nThis turn is a continuation of THAT thread. If the human says "done", "got it", "closed", "yes", "no", or any short verb-target phrase, you MUST resolve it against ${a.subject_type} ${a.subject_id} and NOT a different ${a.subject_type}. Targeting a different subject when an anchor is present is a hallucination, not a fuzzy-match.`;
+    }
   }
   // MESH DOMAIN FOCUS (dynamic tail, per turn, never cached): the specialist's
   // lane + boundaries as a hard-wall block. Sits beside the anchor/calendar
@@ -2439,6 +2450,43 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         try { const { emit } = await import("../events"); await emit({ type: "sasa.canned_nonsequitur_replaced", source: "agent:sasa", actor: opts.operatorName || "?", subject_type: "contact", subject_id: opts.contactId || null, payload: { command: String(opts.command || "").slice(0, 160) } }); } catch {}
       }
     }
+    // REFERENCE-RESOLUTION CAPTURE (spec 006). Record the SINGLE concrete task/
+    // event this turn acted on, so a later typed pronoun follow-up ("move it",
+    // "delete it", "actually 3pm") can be resolved deterministically against it
+    // (the resolve side lives in the whatsapp worker, which reads the freshest
+    // sasa.referent_set for this contact within 30 min and feeds it back as an
+    // inferred swipeAnchor). DM only. If the turn touched ZERO or 2+ distinct
+    // records, capture nothing: there is no safe single referent, and a later
+    // pronoun must route to flag_for_clarity instead of a guess. Append-only,
+    // contact-scoped, best-effort: never blocks or alters the reply.
+    try {
+      if (opts.contactId && !inGroup) {
+        const REFERENT_TASK_TOOLS = new Set(["create_task", "update_task", "complete_task", "reopen_task"]);
+        const REFERENT_EVENT_TOOLS = new Set(["create_event", "update_event"]);
+        const refs = toolRuns
+          .filter((t) => (t.result as any)?.ok === true)
+          .map((t) => {
+            const d = (t.result as any)?.detail || {};
+            const label = String(d.title || (t.input as any)?.title || "").slice(0, 80);
+            if (REFERENT_TASK_TOOLS.has(t.name) && d.task_id) return { ref_type: "task", ref_id: String(d.task_id), ref_label: label };
+            if (REFERENT_EVENT_TOOLS.has(t.name) && d.event_id) return { ref_type: "event", ref_id: String(d.event_id), ref_label: label };
+            return null;
+          })
+          .filter(Boolean) as { ref_type: string; ref_id: string; ref_label: string }[];
+        const distinct = Array.from(new Map(refs.map((r) => [`${r.ref_type}:${r.ref_id}`, r])).values());
+        if (distinct.length === 1) {
+          const r = distinct[0];
+          void import("../events").then(({ emit }) => emit({
+            type: "sasa.referent_set",
+            source: "agent:sasa",
+            actor: opts.operatorName || "Nur",
+            subject_type: "referent",
+            subject_id: opts.contactId,
+            payload: { ref_type: r.ref_type, ref_id: r.ref_id, ref_label: r.ref_label },
+          })).catch(() => {});
+        }
+      }
+    } catch { /* best-effort; reference capture must never break the reply */ }
     return { reply, actions: serialize(actions), toolsRan: toolRuns.map((t) => t.name) };
   }
 

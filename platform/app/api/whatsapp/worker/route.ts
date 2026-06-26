@@ -1721,8 +1721,42 @@ async function processJob(db: any, job: any): Promise<void> {
     // the KT #195 hole: the harness fires real webhook payloads at prod, so
     // process-env SASA_SANDBOX_MODE doesn't help — the isolation has to come
     // from the message itself.
+    // REFERENCE-RESOLUTION RESOLVE (spec 006). No swipe-reply this turn, but the
+    // human typed a short pronoun follow-up ("move it", "delete it", "actually
+    // 3pm"). Resolve "it"/"that" to the LAST single record this thread acted on
+    // (captured as sasa.referent_set in sasa.ts finalize) if it is fresh (within
+    // 30 min). It is fed back through the EXISTING swipeAnchor path as an
+    // INFERRED anchor: a softer wall (act-or-ask), never the hard swipe
+    // must-resolve. Stale or absent referent means no anchor, and the model asks
+    // via flag_for_clarity instead of guessing. Best-effort, never blocks.
+    let swipeAnchorInferred = false;
+    if (!swipeAnchorSubject && contactId) {
+      const t = String(text || "").trim();
+      const PRONOUN = /\b(it|that|this|those|these|them)\b/i;
+      const MUTATE_VERB = /\b(move|moved|chang\w*|updat\w*|reschedul\w*|push\w*|postpon\w*|delet\w*|remov\w*|cancel\w*|renam\w*|reopen\w*|complet\w*|finish\w*|mark|set|edit\w*|fix\w*|bump\w*|shift\w*|done)\b/i;
+      const CORRECTION = /^(actually|no,|nope|wait,|sorry,|oops|scratch that)\b/i;
+      const isFollowUp = t.length > 0 && t.length <= 160 && ((PRONOUN.test(t) && MUTATE_VERB.test(t)) || CORRECTION.test(t));
+      if (isFollowUp) {
+        try {
+          const fresh = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+          const { data: refRows } = await db
+            .from("events")
+            .select("payload,created_at")
+            .eq("type", "sasa.referent_set")
+            .eq("subject_id", contactId)
+            .gte("created_at", fresh)
+            .order("created_at", { ascending: false })
+            .limit(1);
+          const ref = ((refRows || []) as any[])[0]?.payload;
+          if (ref?.ref_type && ref?.ref_id) {
+            swipeAnchorSubject = { subject_type: String(ref.ref_type), subject_id: String(ref.ref_id), label: ref.ref_label ? String(ref.ref_label) : undefined };
+            swipeAnchorInferred = true;
+          }
+        } catch { /* best-effort; absence just means no inferred anchor, never an error */ }
+      }
+    }
     const swipeAnchorOpt = swipeAnchorSubject
-      ? { subject_type: swipeAnchorSubject.subject_type, subject_id: swipeAnchorSubject.subject_id, label: swipeAnchorSubject.label, quotedExcerpt: swipeAnchorNote ? swipeAnchorNote.split('"')[1] : undefined }
+      ? { subject_type: swipeAnchorSubject.subject_type, subject_id: swipeAnchorSubject.subject_id, label: swipeAnchorSubject.label, quotedExcerpt: swipeAnchorNote ? swipeAnchorNote.split('"')[1] : undefined, inferred: swipeAnchorInferred }
       : null;
     const runSasaOpts = { history, command: cmdWithSystem, operatorName: opName || name || undefined, operatorRole: role, operatorRank: opRank, speakerPhone: from, proofPath: proofPath || undefined, confirmWrites: true, contactId: contactId || undefined, sourceMessageId: sourceMessageId || undefined, parseTasksFired: !!parsedContextNote, recentTaskActivity, swipeAnchor: swipeAnchorOpt, traceId: traceId || undefined };
     // MESH: the only agent entry. The monolith pattern (full-tool runSasa) is
