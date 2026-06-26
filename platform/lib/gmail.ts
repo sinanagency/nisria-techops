@@ -123,7 +123,34 @@ export type InboxHit = {
   date: string | null;
   snippet: string | null;
   attachments: string[]; // filenames of any attachments
+  mailbox?: string;       // which @nisria.co inbox this hit came from
 };
+
+// The inboxes the bot reads across. Defaults to the shared bot mailboxes; add
+// more @nisria.co addresses via INBOX_MAILBOXES (comma-separated) with NO code
+// change. All must be @nisria.co users the domain-wide-delegated service account
+// can impersonate (verified live: sasa@ and bot@ both reachable, gmail.readonly).
+export const INBOX_MAILBOXES: string[] = (process.env.INBOX_MAILBOXES || "sasa@nisria.co,bot@nisria.co")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+
+// Search EVERY configured inbox and merge, newest first, each hit tagged with the
+// mailbox it came from (so read_email can fetch the full body from the right one).
+// Per-mailbox failures are skipped, never fatal: one dead mailbox cannot blind the rest.
+export async function searchAllInboxes(query: string, max = 10): Promise<InboxHit[]> {
+  const perBox = Math.min(Math.max(max, 1), 25);
+  const all: InboxHit[] = [];
+  for (const mb of INBOX_MAILBOXES) {
+    try {
+      const hits = await searchInboxFor(mb, query, perBox);
+      for (const h of hits) all.push({ ...h, mailbox: mb });
+    } catch (e: any) {
+      console.error(`[gmail:searchAllInboxes] ${mb}: ${e?.message || e}`);
+    }
+  }
+  const ts = (d: string | null) => { const t = d ? Date.parse(d) : NaN; return isNaN(t) ? 0 : t; };
+  all.sort((a, b) => ts(b.date) - ts(a.date));
+  return all.slice(0, max);
+}
 
 function header(headers: any[], name: string): string | null {
   const h = (headers || []).find((x) => String(x.name).toLowerCase() === name.toLowerCase());

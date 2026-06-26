@@ -53,7 +53,7 @@ import { pickFromMatches, isAllDuplicates, findOpenDuplicate } from "./match-ded
 import { classifyNameMatch, isBareFirstName, preferExact } from "./resolve-name.mjs";
 import { claimedFigures, ungroundedFigures } from "./money-grounding.mjs";
 import { getCalendar, holidayOn, type CalEvent } from "./calendar";
-import { searchInbox, readEmail } from "./gmail";
+import { searchInbox, readEmail, searchAllInboxes } from "./gmail";
 import { createEvent as gcalCreate, patchEvent as gcalPatch, deleteEvent as gcalDelete, gcalConfigured } from "./gcal";
 import { dispatchMeetingBot } from "./digital-u";
 
@@ -420,9 +420,9 @@ export const SMART_TOOLS = [
   { name: "flag_to_nur", description: "Surface something to Nur for a keep-or-flag decision, as a WhatsApp message she can reply to. Use this when a TEAM MEMBER sends you a document, report, intake, or photos that Nur should know about (a case update, a child-reunification report, a beneficiary intake, anything that belongs on her desk). The file is ALREADY saved on file, so you do NOT tell the team member to forward it to Nur themselves: you summarise what came in and flag it to Nur here. Pass a short, specific summary including who sent it and what it is. Nur then replies to decide whether to flag it for follow-up or keep it on file.", input_schema: { type: "object", properties: { summary: { type: "string", description: "short specific summary, e.g. 'Mark sent a child-reunification report for Jazbon (OB 29/05/06/2026) plus 2 photos, saved on file'" } }, required: ["summary"] } },
   { name: "relay_to_colleague", description: "Pass a message from THIS team member to ANOTHER team member (colleague-to-colleague), delivered on WhatsApp with clear attribution ('From <sender>: ...'). Use when a team member asks you to tell, message, update, or pass something to a NAMED colleague on the team (e.g. 'tell Mark the visit is moved to Thursday', 'let Grace know I dropped the forms at the office', 'ask Violet to call me'). This is ONLY for teammates on the roster. It is NOT for Nur or the owner: anything that needs Nur's decision goes through flag_to_nur instead. It is NOT for outside contacts, donors, or beneficiaries. Pass the colleague's name (or number) and the exact message to relay.", input_schema: { type: "object", properties: { to: { type: "string", description: "the colleague's name as the team knows them (e.g. 'Mark', 'Grace'), or their full international number" }, message: { type: "string", description: "the exact message to relay to the colleague, in the sender's own words" } }, required: ["to", "message"] } },
   { name: "show_outbound_audit", description: "Show what YOU (Sasa) have actually sent to TEAM MEMBERS on WhatsApp in a recent window. This is the audit/receipt view, the ground truth of what really went out, independent of any earlier narration. Use whenever Nur asks 'what did you send today', 'who did you message', 'did you actually text X', 'show me what you sent', 'show your outbound', 'audit your sends', 'what messages went out from you today', 'did Cynthia get the message'. Returns a per-recipient summary with timestamps and the bodies of each message. Excludes messages back to Nur herself. Always also point her to /admin/transcripts for the full filterable view. Admin only.", input_schema: { type: "object", properties: { window_hours: { type: "number", description: "Lookback window in hours, default 24" }, contact: { type: "string", description: "Optional name filter (e.g. 'Mark', 'Violet'); omit for all recipients" } } } },
-  { name: "search_inbox", description: "Search the sasa@nisria.co email INBOX (read-only) to check what actually arrived. Use for 'did the SANARA statements come into the sasa email', 'did we get the I&M statement', 'any email from <sender> about <thing>', 'check the inbox for invoices'. Returns sender, subject, date, snippet and attachment filenames. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "What to look for in plain words (e.g. 'SANARA bank statement', 'invoice from Java'). Optionally a sender name/email." }, max: { type: "number", description: "max results, default 10" } }, required: ["query"] } },
+  { name: "search_inbox", description: "Search the Nisria email inboxes (read-only): sasa@nisria.co and bot@nisria.co (the shared bot mailbox Nur forwards things to), plus any others configured. Each result is tagged with which inbox it came from. Use to check what actually arrived. Use for 'did the SANARA statements come into the sasa email', 'did we get the I&M statement', 'any email from <sender> about <thing>', 'check the inbox for invoices'. Returns sender, subject, date, snippet and attachment filenames. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "What to look for in plain words (e.g. 'SANARA bank statement', 'invoice from Java'). Optionally a sender name/email." }, max: { type: "number", description: "max results, default 10" } }, required: ["query"] } },
   { name: "show_draft", description: "Show the operator an email DRAFT you already made that is waiting in Needs You for her approval. Use whenever she asks to SEE a draft you composed: 'show me the draft', 'show me the draft you made', 'what was the draft', 'read me the draft again', 'pull up that email draft', OR when she swipe-replies to a draft message asking to see or check it. Returns the recipient, subject and FULL body of the pending draft(s). It is still unsent. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "optional: a recipient name or a few words to pick which draft if there are several" } } } },
-  { name: "read_email", description: "READ the FULL text of ONE email from the sasa@nisria.co inbox out loud to the operator. Use when she wants to actually READ an email, not just check it arrived: 'read me the email from Mwangi', 'what does the latest email from the bank say', 'show me the full email about the grant', 'open that email'. Finds the best match and returns its full body (sender, subject, date, and the complete message). For just checking whether something arrived, use search_inbox. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "a sender name/email and/or a few words from the subject or body, e.g. 'Mwangi grant', 'latest from the bank'" } }, required: ["query"] } },
+  { name: "read_email", description: "READ the FULL text of ONE email out loud to the operator, searched across all the Nisria inboxes (sasa@ and bot@nisria.co, plus any others configured). Use when she wants to actually READ an email, not just check it arrived: 'read me the email from Mwangi', 'what does the latest email from the bank say', 'show me the full email about the grant', 'open that email'. Finds the best match and returns its full body (sender, subject, date, and the complete message). For just checking whether something arrived, use search_inbox. Admin only.", input_schema: { type: "object", properties: { query: { type: "string", description: "a sender name/email and/or a few words from the subject or body, e.g. 'Mwangi grant', 'latest from the bank'" } }, required: ["query"] } },
   { name: "list_content", description: "Recent social/content posts with their channels, status (draft/scheduled/posted), and schedule. Use for 'what content is scheduled', 'what posts are in draft', 'what did we post'.", input_schema: { type: "object", properties: {} } },
   { name: "list_beneficiaries", description: "List beneficiaries (children/families in the programs) with optional filters. CONFIDENTIAL: admin only, never in a group/team context. Use for 'who is in the rescue program', 'list our graduated children', 'who has no photo'. Filters: program, status, cohort.", input_schema: { type: "object", properties: { program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, status: { type: "string" }, has_photo: { type: "boolean" } } } },
   { name: "find_studio_doc", description: "Find a generated Studio document (cover letters, budgets, branded docs/PDFs) by title or type. Use for 'pull up the budget cover letter', 'find the grant narrative doc'.", input_schema: { type: "object", properties: { query: { type: "string" } } } },
@@ -1228,12 +1228,12 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     const q = String(input.query || "").trim();
     if (!q) return { error: "what should I look for in the inbox?" };
     try {
-      const hits = await searchInbox(q, Number(input.max) || 10);
+      const hits = await searchAllInboxes(q, Number(input.max) || 10);
       return {
         query: q,
         count: hits.length,
-        results: hits.map((h) => ({ from: h.from, subject: h.subject, date: h.date, snippet: h.snippet, attachments: h.attachments })),
-        note: hits.length ? undefined : "Nothing in the inbox matched. It may not have arrived yet, or try different words/sender.",
+        results: hits.map((h) => ({ from: h.from, subject: h.subject, date: h.date, snippet: h.snippet, attachments: h.attachments, inbox: h.mailbox })),
+        note: hits.length ? undefined : "Nothing in any inbox matched. It may not have arrived yet, or try different words/sender.",
       };
     } catch (e: any) {
       return { error: `Could not read the inbox: ${e?.message || e}` };
@@ -1278,16 +1278,17 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
       // newest/inbox), list the newest inbox emails instead of text-searching.
       const generic = /^(?:the\s+|my\s+)?(?:latest|most\s+recent|recent(?:ly)?|last|newest|new(?:est)?|first|top|next)?\s*(?:email|e-?mail|message|mail|msg|one|inbox|thing)?s?\s*(?:in\s+(?:the\s+)?inbox)?$/i.test(q) || q.length < 4;
       const searchQuery = generic ? "in:inbox" : q;
-      const hits = await searchInbox(searchQuery, generic ? 1 : 4);
-      if (!hits.length) return { matched: 0, note: generic ? `The inbox looks empty right now, or I could not reach it.` : `I could not find an email matching "${q}" in the inbox. It may not have arrived, or try the sender's name or different words.` };
+      const hits = await searchAllInboxes(searchQuery, generic ? 3 : 4);
+      if (!hits.length) return { matched: 0, note: generic ? `The inboxes look empty right now, or I could not reach them.` : `I could not find an email matching "${q}" in any inbox. It may not have arrived, or try the sender's name or different words.` };
       const top = hits[0];
-      const full = await readEmail(top.id);
+      const full = await readEmail(top.id, top.mailbox);
       const body = String(full?.body || top.snippet || "").trim().slice(0, 3500);
       return {
         matched: hits.length,
         from: top.from,
         subject: top.subject,
         date: top.date,
+        inbox: top.mailbox,
         attachments: top.attachments || [],
         body: body || "(this email has no readable text body)",
         more: hits.length > 1 ? `${hits.length} emails matched; this is the most recent. Name the sender or subject for a different one.` : undefined,
