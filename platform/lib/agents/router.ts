@@ -167,8 +167,9 @@ Decision rules:
 - money: payments, donations, finance, salaries, receipts, invoices
 - comms: messaging, email, newsletters, posting to groups, outbound
 - people: team members, contacts, beneficiaries, cases, intake
-- knowledge: documents, files, Brain facts, grants, memory, search
+- knowledge: org documents, files, Brain facts, grants, memory, search
 - programs: Maisha inventory (stock, quantities, Folklore listing) and the donor wishlist (fundable needs and funded counts)
+- library: saving and recalling LINKS / articles / clips / resources to keep ("save this link", "remember this article", "find/send me the X again", "the sample pics")
 - general: greetings, meta-questions, ambiguous, or multi-domain
 
 If the message touches multiple domains, pick the PRIMARY one (the action that needs to happen first).
@@ -229,74 +230,50 @@ export async function routeMessage(
     return { domain: "general", confidence: 0, reason: "empty_message" };
   }
 
-  // Stage 1: Rule-based classification
+  // UNDERSTAND-FIRST router (2026-06-26, KT #411). The model reads and understands EVERY
+  // message; keywords are no longer the primary decision. Rationale (operator directive):
+  // keyword-matching flails on messy/multilingual/context messages, and at Nisria's volume
+  // the per-message cost of letting the model understand is negligible. SAFETY: routing is
+  // the safest possible LLM use — the model picks ONE of a FIXED set of domains (validated
+  // in haikuClassify against MANIFESTS, so it cannot invent a lane), and a wrong pick only
+  // mis-files to a specialist that says "not my lane"; it can never act, send, or spend.
   const scored = scoreDomains(text);
-  const topScore = scored[0];
+  const top = scored[0];
+  const second = scored[1];
 
-  // High confidence (>0.8): route direct
-  if (topScore.score >= 0.8) {
+  // FAST-LANE (cost/latency only): a dead-obvious, unambiguous keyword hit skips the model.
+  // Requires an overwhelming top score AND a clear gap over the runner-up, so an ambiguous
+  // message is NEVER fast-laned — it always goes to the model to understand.
+  if (top && top.score >= 1.5 && (!second || top.score - second.score >= 0.8)) {
     const result: RouterResult = {
-      domain: topScore.domain,
-      confidence: Math.min(topScore.score, 1),
-      reason: `rule_match: ${topScore.matches} pattern(s) matched`,
+      domain: top.domain,
+      confidence: Math.min(top.score, 1),
+      reason: `fast_lane: ${top.matches} unambiguous pattern(s)`,
     };
     await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
     return result;
   }
 
-  // Medium confidence (0.4-0.8): Haiku verify
-  if (topScore.score >= 0.4) {
-    const haiku = await haikuClassify(text, history);
-    // If Haiku agrees with rule-based, use that
-    if (haiku.domain === topScore.domain && haiku.confidence >= 0.7) {
-      const result: RouterResult = {
-        domain: haiku.domain,
-        confidence: (topScore.score + haiku.confidence) / 2,
-        reason: `rule+haiku_agree: ${haiku.reason}`,
-      };
-      await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
-      return result;
-    }
-    // If Haiku disagrees but has high confidence, trust Haiku
-    if (haiku.confidence >= 0.8) {
-      const result: RouterResult = {
-        domain: haiku.domain,
-        confidence: haiku.confidence,
-        reason: `haiku_override: ${haiku.reason}`,
-      };
-      await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
-      return result;
-    }
-    // Otherwise, use rule-based with lower confidence
+  // The model understands the message and picks one domain.
+  const llm = await haikuClassify(text, history);
+  const LLM_FAILED = /^(no_api_key|haiku_error_|haiku_no_text|haiku_no_json|haiku_exception)/.test(llm.reason);
+  if (!LLM_FAILED) {
     const result: RouterResult = {
-      domain: topScore.domain,
-      confidence: topScore.score * 0.7,
-      reason: `rule_low_conf: ${topScore.matches} pattern(s), haiku_uncertain`,
+      domain: llm.domain,
+      confidence: llm.confidence,
+      reason: `understood: ${llm.reason}`,
     };
     await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
     return result;
   }
 
-  // Low confidence (<0.4): Haiku classify
-  const haiku = await haikuClassify(text, history);
-  if (haiku.confidence >= 0.6) {
-    const result: RouterResult = {
-      domain: haiku.domain,
-      confidence: haiku.confidence,
-      reason: `haiku_only: ${haiku.reason}`,
-    };
-    await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
-    return result;
-  }
-
-  // Fallback to general
-  const result: RouterResult = {
-    domain: "general",
-    confidence: 0.3,
-    reason: `low_confidence: best_rule=${topScore.domain}(${topScore.score}), haiku=${haiku.domain}(${haiku.confidence})`,
-  };
-  await emitRouterTelemetry(result.domain, result.confidence, result.reason, text);
-  return result;
+  // SAFETY NET: the model was unreachable (no key / timeout / error). Fall back to the
+  // keyword score so routing still works, never a hard dependency on the model being up.
+  const fb: RouterResult = top && top.score >= 0.4
+    ? { domain: top.domain, confidence: top.score * 0.7, reason: `regex_fallback (model down): ${top.matches} pattern(s)` }
+    : { domain: "general", confidence: 0.3, reason: `regex_fallback_general (model down): best=${top?.domain}(${top?.score ?? 0})` };
+  await emitRouterTelemetry(fb.domain, fb.confidence, fb.reason, text);
+  return fb;
 }
 
 // Decompose multi-domain messages into per-domain steps.
