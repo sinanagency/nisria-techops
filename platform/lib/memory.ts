@@ -7,6 +7,17 @@ import { admin } from "./supabase-admin";
 import { embed, embedderConfigured, toVectorLiteral } from "./embedder";
 import { OWNER_PRIVATE_KIND } from "./privacy";
 import { isSandbox } from "./sandbox";
+import { withTimeout } from "./with-timeout.mjs";
+
+// Graceful-degradation budget for the SLOW, OPTIONAL part of retrieval (the
+// query arms: vector RPC + tsv scan). Ported in spirit from EmirVoice's rag.js,
+// which caps knowledge-base search at 2s and returns [] instead of hanging. We
+// give the arms a touch more (two arms run in sequence) but still keep a WhatsApp
+// reply snappy. The org grounding (brand_voice + org_fact) loads OUTSIDE this
+// budget and always survives, so a timed-out recall still honours the one-brain
+// law (lib/CLAUDE.md rule 4). The withTimeout helper is a pure .mjs so this file
+// and the wall test share the exact same code (zero drift).
+const RECALL_QUERY_TIMEOUT_MS = 2500;
 
 export type Memory = {
   kind: string;            // brand_voice | org_fact | approved_reply | message | asset | decision | doc_chunk
@@ -151,69 +162,77 @@ export async function recall(
   // query arm. Fail-soft: any arm can be empty and the other still answers.
   const q = (query || "").trim().slice(0, 200);
   if (q) {
-    const RRF_K = 60;          // standard RRF damping; larger = flatter rank weighting
-    const pool = Math.max(limit * 2, 10); // pull a wider net per arm, fuse down to `limit`
-    const arms: any[][] = [];
+    // The query arms are the slow, optional half of recall. Gather them inside a
+    // thunk so we can time-box the WHOLE block: if the vector RPC or the tsv scan
+    // is slow, we fall back to [] (no query matches) rather than hang the reply.
+    // The org grounding pushed above is untouched (one-brain law).
+    const gatherQueryMatches = async (): Promise<any[]> => {
+      const RRF_K = 60;          // standard RRF damping; larger = flatter rank weighting
+      const pool = Math.max(limit * 2, 10); // pull a wider net per arm, fuse down to `limit`
+      const arms: any[][] = [];
 
-    // SEMANTIC arm (vector). Skipped cleanly if no embedder or it errors.
-    if (embedderConfigured()) {
-      const v = await embed(q);
-      if (v) {
-        try {
-          const { data, error } = await db.rpc("match_memory", {
-            query_embedding: toVectorLiteral(v) as any,
-            match_count: pool,
-            filter_kinds: opts.kinds?.length ? opts.kinds : null,
-            exclude_kinds: blockedKinds, // org grounding (added above) + owner-private for non-owner
-            include_sandbox: sandbox,   // mirror sandbox isolation into the RPC; default false in prod
-          });
-          if (!error && data?.length) arms.push(data);
-        } catch { /* semantic arm down, lexical still answers */ }
+      // SEMANTIC arm (vector). Skipped cleanly if no embedder or it errors.
+      if (embedderConfigured()) {
+        const v = await embed(q);
+        if (v) {
+          try {
+            const { data, error } = await db.rpc("match_memory", {
+              query_embedding: toVectorLiteral(v) as any,
+              match_count: pool,
+              filter_kinds: opts.kinds?.length ? opts.kinds : null,
+              exclude_kinds: blockedKinds, // org grounding (added above) + owner-private for non-owner
+              include_sandbox: sandbox,   // mirror sandbox isolation into the RPC; default false in prod
+            });
+            if (!error && data?.length) arms.push(data);
+          } catch { /* semantic arm down, lexical still answers */ }
+        }
       }
-    }
 
-    // LEXICAL arm (full-text tsv). On odd input it can throw, so recency stands in.
-    try {
-      let s = db
-        .from("agent_memory")
-        .select("kind,brand,title,content")
-        .not("kind", "in", `(${blockedKinds.join(",")})`)
-        .eq("status", "active")
-        .eq("sandbox", sandbox)
-        .limit(pool);
-      if (opts.kinds?.length) s = s.in("kind", opts.kinds);
-      const { data } = await s.textSearch("tsv", q, { type: "websearch" });
-      if (data?.length) arms.push(data);
-    } catch {
+      // LEXICAL arm (full-text tsv). On odd input it can throw, so recency stands in.
       try {
-        let r = db
+        let s = db
           .from("agent_memory")
           .select("kind,brand,title,content")
           .not("kind", "in", `(${blockedKinds.join(",")})`)
+          .eq("status", "active")
           .eq("sandbox", sandbox)
-          .order("created_at", { ascending: false })
-          .limit(limit);
-        if (opts.kinds?.length) r = r.in("kind", opts.kinds);
-        const { data } = await r;
+          .limit(pool);
+        if (opts.kinds?.length) s = s.in("kind", opts.kinds);
+        const { data } = await s.textSearch("tsv", q, { type: "websearch" });
         if (data?.length) arms.push(data);
-      } catch { /* nothing to add */ }
-    }
+      } catch {
+        try {
+          let r = db
+            .from("agent_memory")
+            .select("kind,brand,title,content")
+            .not("kind", "in", `(${blockedKinds.join(",")})`)
+            .eq("sandbox", sandbox)
+            .order("created_at", { ascending: false })
+            .limit(limit);
+          if (opts.kinds?.length) r = r.in("kind", opts.kinds);
+          const { data } = await r;
+          if (data?.length) arms.push(data);
+        } catch { /* nothing to add */ }
+      }
 
-    // FUSE: Reciprocal Rank Fusion. A row's score is the sum over arms of
-    // 1/(k + rank). A row that ranks well in BOTH arms beats one that only spikes
-    // in a single arm, which is exactly the precision we want. Then take top-`limit`
-    // and hand them to push() (which dedupes against the org grounding above).
-    const fuse = new Map<string, { row: any; score: number }>();
-    for (const arm of arms) {
-      arm.forEach((r: any, i: number) => {
-        const key = `${r.kind}|${r.title || ""}|${(r.content || "").slice(0, 60)}`;
-        const cur = fuse.get(key) || { row: r, score: 0 };
-        cur.score += 1 / (RRF_K + i + 1);
-        fuse.set(key, cur);
-      });
-    }
-    const fused = [...fuse.values()].sort((a, b) => b.score - a.score).slice(0, limit).map((x) => x.row);
-    push(fused);
+      // FUSE: Reciprocal Rank Fusion. A row's score is the sum over arms of
+      // 1/(k + rank). A row that ranks well in BOTH arms beats one that only spikes
+      // in a single arm, which is exactly the precision we want. Then take top-`limit`
+      // and hand them to push() (which dedupes against the org grounding above).
+      const fuse = new Map<string, { row: any; score: number }>();
+      for (const arm of arms) {
+        arm.forEach((r: any, i: number) => {
+          const key = `${r.kind}|${r.title || ""}|${(r.content || "").slice(0, 60)}`;
+          const cur = fuse.get(key) || { row: r, score: 0 };
+          cur.score += 1 / (RRF_K + i + 1);
+          fuse.set(key, cur);
+        });
+      }
+      return [...fuse.values()].sort((a, b) => b.score - a.score).slice(0, limit).map((x) => x.row);
+    };
+
+    // Time-box the query arms; org grounding already in `out` survives a timeout.
+    push(await withTimeout(gatherQueryMatches(), RECALL_QUERY_TIMEOUT_MS, [], "recall:query"));
   }
   return out;
 }
