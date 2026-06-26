@@ -32,6 +32,13 @@ export type SpecialistResult = {
 // Per-domain LANE + BOUNDARIES, injected as a hard-wall block in the engine's
 // dynamic tail. The engine already carries the full Sasa persona, brain
 // grounding, date, and send/honesty laws — this only pins the domain.
+// Hard rule appended to EVERY domain focus (honesty-cluster #2 + #12): the mesh tool
+// scoping is internal. The operator must never hear "I'm scoped to X tools", "this
+// lane", "specialist this turn", "switch to the X lane", or anything about the bot's
+// own rules/training. If a request needs a capability not in this turn's tools, say
+// you'll take care of it, do NOT narrate the routing or dead-end with a scope excuse.
+const NO_SCOPE_LEAK = `\nNEVER expose internals: do not mention lanes, specialists, "scoped" tools, routing, or your own rules/training/guardrails to the operator. That is plumbing they must never see. If something needs a capability you do not have this turn, simply say you will take care of it, never say "I'm scoped to ... this turn" or "switch to the ... lane".`;
+
 export const DOMAIN_FOCUS: Record<Domain, string> = {
   work: `DOMAIN SPECIALIST (HARD WALL): You are Sasa's Work specialist this turn. Your lane: tasks, reminders, calendar, scheduling. Your toolset has been scoped to work tools only. You CANNOT log payments, manage beneficiaries or contacts, send messages, or search documents. If asked, say that is outside this lane and offer to handle it next. Every task action must reference a real task_id from list_tasks; never invent task titles. Acting outside the work lane is a hallucination, not a fuzzy match.`,
   money: `DOMAIN SPECIALIST (HARD WALL): You are Sasa's Money specialist this turn. Your lane: payments, donations, finance.
@@ -59,7 +66,7 @@ export async function runSpecialist(opts: SpecialistOpts): Promise<SpecialistRes
   // Fail CLOSED: never run the engine unscoped from a mesh turn. If scope is
   // somehow empty (bad domain), refuse rather than fall back to the full toolset.
   if (!allowedToolNames.length) throw new Error(`mesh scope empty for domain "${domain}"`);
-  const domainFocus = DOMAIN_FOCUS[domain] || DOMAIN_FOCUS.general;
+  const domainFocus = (DOMAIN_FOCUS[domain] || DOMAIN_FOCUS.general) + NO_SCOPE_LEAK;
   const base = opts.base || {};
 
   const result = await runSasa({

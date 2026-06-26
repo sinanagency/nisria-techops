@@ -44,7 +44,7 @@ for (let i = 0; i < TESTS.length; i++) {
   } catch (e) { http = -1; }
   process.stdout.write(`[${i + 1}/6] sent "${t.text.slice(0, 32)}..." HTTP ${http} ; waiting for worker...\n`);
   // wait past coalesce window + worker processing
-  await sleep(26000);
+  await sleep(50000);
   const routed = await recentRouted();
   const match = routed.find((e) => (e.payload?.command || "").includes(t.key));
   const got = match ? (match.subject_id || match.payload?.domain) : null;

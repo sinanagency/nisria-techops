@@ -57,6 +57,7 @@ const DOMAIN_PATTERNS: { domain: Domain; patterns: RegExp[] }[] = [
     domain: "work",
     patterns: [
       /\bassign\s+(?:this|that|it|the)?\s*(?:task|reminder|to\s+me|to\s+[A-Z][a-z]+)/i, // "assign this task to me: Pay X" → work, not money
+      /\b(?:remind\s+me|set\s+(?:a\s+)?reminder|remind\s+(?:me\s+)?to)\b/i, // "remind me to send X at 2pm" → work, NOT comms (the "send" is the reminder body, not an outbound)
       /\badd\s+(?:this|a|the)?\s*(?:task|reminder)\b/i,
       /\b(remind|reminder|task|todo|assign|deadline|due\s+(?:on|date|time))\b/i,
       /\b(done\s+with|completed|finished|mark\s+(?:as\s+)?done|reopen)\b/i,

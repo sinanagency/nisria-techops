@@ -1287,8 +1287,52 @@ function claimsToolResultMismatch(rawText: string, toolRuns: { name: string; res
   return !anyCompleted;
 }
 
+// v1.4.1 (2026-06-26, honesty-cluster #8): domain-NEUTRAL. The original line was
+// money-shaped ("payee and amount in one sentence") and leaked verbatim into a
+// case-merge turn ("Fold Princess into Mercy's case") where the bot claimed staging
+// it never did — telling the operator to send a payee/amount made no sense. Keep it
+// generic so it reads right for payments, cases, intakes, anything that stages.
 const HONEST_NO_STAGING =
-  "I said I had it staged but I have not actually called the tool to stage it. Send me the exact line again so I can record it cleanly, with the payee and amount in one sentence.";
+  "I have not actually staged that yet, the tool did not run, so nothing is queued. Tell me the exact details again and I will set it up cleanly.";
+
+// STAGED-IS-NOT-DONE GUARD (v1.4.1, 2026-06-26, honesty-cluster #9). record_payment
+// and record_donation STAGE a pending_action (awaiting_confirm); they never commit.
+// The model sometimes narrates the stage as a finished log ("Logged. KES 180,000 to
+// Mary.") which reads to the operator as money already recorded, when it is only
+// waiting on her "yes". The completion-mismatch guard treats record_payment ok=true
+// as backing a completion claim, so the lie passes both existing guards (it is not a
+// fake-staging claim either, since the reply uses DONE language, not staging cues).
+// Detect: a stage-only money tool ran ok=true, the reply makes a completion claim,
+// and it lacks any staging cue -> replace with the tool's own honest staging summary.
+const STAGE_ONLY_TOOLS = new Set(["record_payment", "record_donation"]);
+const STAGING_CUE = /\b(?:ready to (?:log|record|stage|file)|reply\s+["']?yes["']?|to\s+confirm|awaiting\s+(?:your\s+)?confirm|once\s+you\s+confirm|i'?ve\s+staged|i\s+have\s+staged|staged\s+(?:it|that|this))\b/i;
+// Completion verbs that read as "the money is logged/final", INCLUDING the bare shapes
+// ("Logged.", "Recorded it", "All done") that AGENT_COMPLETION/DONE_SIMPLE skip because
+// they require an "I/we" subject. Safe to be this broad ONLY inside completedButOnlyStaged,
+// which has already confirmed a stage-only money tool ran this turn. "log/logging" (the
+// staging verb) is deliberately excluded so "Ready to log..." never trips it.
+const STAGED_DONE_CLAIM = /\b(?:logged|recorded|(?:all\s+)?done|completed?)\b/i;
+function completedButOnlyStaged(reply: string, toolRuns: { name: string; result: any }[]): string | null {
+  const staged = toolRuns.filter((t) => STAGE_ONLY_TOOLS.has(t.name) && (t.result as any)?.ok === true);
+  if (!staged.length) return null;
+  if (!STAGED_DONE_CLAIM.test(reply)) return null;
+  if (STAGING_CUE.test(reply)) return null; // already honest about the pending confirm
+  const summaries = staged.map((t) => String((t.result as any)?.summary || "").trim()).filter(Boolean);
+  if (!summaries.length) return null;
+  return summaries.length === 1
+    ? summaries[0]
+    : `${summaries.length} staged, none logged yet:\n${summaries.map((s, i) => `${i + 1}. ${s}`).join("\n")}`;
+}
+
+// META / SCOPE LEAK GUARD (v1.4.1, 2026-06-26, honesty-cluster #2 + #12). The mesh
+// runs the engine under a domain-scoped tool list; that scoping is an INTERNAL
+// implementation detail the operator must never hear. Two leaks observed: (a) a
+// specialist told the user "I'm scoped to comms tools only this turn and can't
+// create tasks" (exposes routing, and dead-ends a valid request), and (b) the bot
+// broke character into a self-improvement meta-narrative ("the rules I run on now
+// are tighter"). Strip both deterministically: never reveal lanes, specialists,
+// scoping, tool counts, or talk about its own rules/training/architecture.
+const META_SCOPE_LEAK = /\b(?:scoped to|this lane|that lane|outside (?:this|my) lane|specialist this turn|switch to the \w+ lane|the rules i run on|i'?ve been (?:improved|upgraded|retrained)|my (?:architecture|training|rules|guardrails)|tool(?:set)? (?:is )?scoped|i can(?:'t| ?not) (?:create|do) \w+ (?:this turn|in this lane))\b/i;
 
 // SYMPATHY-OPENER GUARD (v1.3.8). Sasa opens routine ops replies with "I'm so
 // sorry, Nur. That's heartbreaking" when the user mentions ANY hard news, then
@@ -1800,6 +1844,7 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       // Track whether any earlier guard already substituted reply this turn and gate
       // the backstop on it, so a specific line is never stomped by the generic one.
       let alreadySubstituted = false;
+      let stagedNotDone: string | null = null; // honesty-cluster #9: staged-as-done rewrite text
       // KT #357 (skeptic #1): track whether the lie-path already staged a send this
       // turn, so the honest-offer hook below does not double-stage the same send.
       let sendAlreadyStaged = false;
@@ -1876,6 +1921,12 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
         if (!stagedByBackstop) {
           reply = humanize(HONEST_NO_STAGING, { now: { long: n.long, today: n.today } });
         }
+        alreadySubstituted = true;
+      } else if (!alreadySubstituted && (() => { const s = completedButOnlyStaged(reply, toolRuns); if (s) { stagedNotDone = s; return true; } return false; })()) {
+        // STAGED-IS-NOT-DONE (honesty-cluster #9): a stage-only money tool ran but the
+        // reply called it logged/done. Replace with the tool's honest staging summary
+        // so the operator sees "Ready to log... reply yes", never a false "Logged".
+        reply = humanize(stagedNotDone!, { now: { long: n.long, today: n.today } });
         alreadySubstituted = true;
       } else if ((() => {
         // 2026-06-15 (KT #287): PASSIVE-PLURAL SEND mismatch. Bug pattern:
@@ -2273,6 +2324,19 @@ export async function runSasa(opts: { history?: SasaTurn[]; command: string; ope
       // made routine ops turns sound like condolences.
       if (apologyExceeded(opts.history) && SYMPATHY_OPENER.test(reply)) {
         reply = humanize(APOLOGY_CAP_REPLACEMENT, { now: { long: n.long, today: n.today } });
+      }
+      // META / SCOPE LEAK GUARD (v1.4.1, honesty-cluster #2 + #12): the operator must
+      // never hear about lanes, specialists, tool scoping, or the bot's own rules.
+      // Strip any sentence that leaks it; if that empties the reply (the leak WAS the
+      // whole reply, e.g. "I'm scoped to comms tools only this turn"), fall to a
+      // neutral handle-it line rather than fabricate a capability it lacks this turn.
+      if (META_SCOPE_LEAK.test(reply)) {
+        const kept = reply
+          .split(/(?<=[.!?])\s+/)
+          .filter((s) => !META_SCOPE_LEAK.test(s))
+          .join(" ")
+          .trim();
+        reply = kept || "On it. Tell me exactly what you need and I'll handle it.";
       }
       // NUMBER FABRICATION GUARD (v1.3.8). If Sasa named specific KES/USD amounts
       // that don't appear in the user's words this turn OR in any tool result,
