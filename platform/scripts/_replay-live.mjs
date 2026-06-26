@@ -17,7 +17,8 @@ const SBX_URL = SB("SBX_URL"), SBX_SVC = SB("SBX_SVC");
 const SECRET = fs.readFileSync("/tmp/.sbxsecret", "utf8").trim();
 const DEPLOY = fs.readFileSync("/tmp/.sbxurl", "utf8").trim();
 const START = parseInt(process.env.REPLAY_START || "0"), N = parseInt(process.env.REPLAY_N || "100000");
-const JUDGE_MODEL = "claude-sonnet-4-6"; // stronger + temp 0 for stable, credible grades
+const JUDGE_MODEL = process.env.JUDGE_MODEL || "claude-sonnet-4-6"; // sonnet default; haiku for cheap samples
+const TARGET_FILE = process.env.TARGET_FILE || ""; // replay only a provided list of recs (e.g. "old failed on clear input")
 
 const OPERATORS = {
   "971501622716": { name: "Nur", role: "admin", rank: "owner" },
@@ -89,6 +90,10 @@ STRICT JSON: {"new_ok":bool,"old_ok":bool,"routing_ok":bool,"excludable":bool,"r
   if (!JUDGE_ONLY) {
     if (!DEPLOY.startsWith("http")) { console.log("no sandbox deploy url"); process.exit(2); }
     console.log("seeding sandbox operators..."); cidMap = await seedSandbox();
+    if (TARGET_FILE) {
+      slice = fs.readFileSync(TARGET_FILE, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      console.log(`TARGET mode: replaying ${slice.length} pre-selected recs from ${TARGET_FILE}`);
+    } else {
     console.log("pulling transcript..."); const rows = await pullTranscript();
     // build global chrono inbound list with per-thread oldReply/nextUser
     const inbound = [];
@@ -106,6 +111,7 @@ STRICT JSON: {"new_ok":bool,"old_ok":bool,"routing_ok":bool,"excludable":bool,"r
     inbound.sort((a, b) => a.ts.localeCompare(b.ts));
     slice = inbound.slice(START, START + N);
     console.log(`total inbound: ${inbound.length}; replaying [${START}, ${START + slice.length}) sequentially...`);
+    }
   }
 
   let out = [];

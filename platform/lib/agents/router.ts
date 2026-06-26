@@ -56,6 +56,8 @@ const DOMAIN_PATTERNS: { domain: Domain; patterns: RegExp[] }[] = [
   {
     domain: "work",
     patterns: [
+      /\bassign\s+(?:this|that|it|the)?\s*(?:task|reminder|to\s+me|to\s+[A-Z][a-z]+)/i, // "assign this task to me: Pay X" → work, not money
+      /\badd\s+(?:this|a|the)?\s*(?:task|reminder)\b/i,
       /\b(remind|reminder|task|todo|assign|deadline|due\s+(?:on|date|time))\b/i,
       /\b(done\s+with|completed|finished|mark\s+(?:as\s+)?done|reopen)\b/i,
       /\b(open\s+tasks|pending\s+tasks|my\s+tasks|what.*task)\b/i,
