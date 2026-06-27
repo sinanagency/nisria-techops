@@ -1,0 +1,917 @@
+{
+  "generated": "last-24h transcript 2026-06-21",
+  "source": "Links Nur sent the 727 bot (Sasa) in the 24h to 2026-06-21 17:00 UTC. 71 distinct URLs: 51 Sasa had saved, 19 it dropped (recovered here), 2 Zoom skipped. All verified in the 2026-06-21 audits.",
+  "counts": {
+    "press": 60,
+    "resources": 9,
+    "skipped": 2
+  },
+  "press": [
+    {
+      "url": "https://open.spotify.com/episode/31qJkfzjfzS69l4A4kOvvH?si=MpENvNh_Tl63ApS1oNFGGg",
+      "title": "Spotify feature",
+      "outlet": "Spotify",
+      "media_type": "podcast",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.masrawy.com/news/news_various/details/2019/11/25/1677072/%D8%AE%D8%A7%D8%B5-%D9%81%D8%AA%D9%8A%D8%A7%D8%AA-%D8%A7%D9%84%D9%86%D9%87%D8%A7%D8%B1-%D8%B9%D8%A7%D9%85%D9%84%D8%A7%D8%AA-%D8%AC%D9%86%D8%B3-%D8%A8%D9%83%D9%8A%D9%86%D9%8A%D8%A7-%D8%AA%D8%B1%D9%83%D9%86-%D8%A7%D9%84%D8%AF%D8%B9%D8%A7%D8%B1%D8%A9-%D9%84%D8%AD%D9%8A%D8%A7%D8%A9-%D8%A3%D9%81%D8%B6%D9%84-#HpFeature",
+      "title": "Masrawy feature",
+      "outlet": "Masrawy",
+      "media_type": "article",
+      "brand": "nisria",
+      "subject": null,
+      "published_on": "2019-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.masrawy.com/news/news_various/details/2020/10/1/1884819/%D8%AE%D8%A7%D8%B5-%D8%A3%D8%B2%D9%85%D8%A9-%D8%BA%D8%B0%D8%A7%D8%A1-%D9%83%D9%8A%D9%81-%D8%A3%D9%86%D9%82%D8%B0%D8%AA-%D8%AC%D9%8A%D9%86-%D8%A3%D8%B7%D9%81%D8%A7%D9%84-%D8%A8%D8%B3%D8%B7%D8%A7%D8%A1-%D8%A8%D9%83%D9%8A%D9%86%D9%8A%D8%A7-%D9%85%D9%86-%D8%AC%D9%88%D8%B9-%D9%83%D9%88%D8%B1%D9%88%D9%86%D8%A7-",
+      "title": "Masrawy feature",
+      "outlet": "Masrawy",
+      "media_type": "article",
+      "brand": "nisria",
+      "subject": null,
+      "published_on": "2020-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.theguardian.com/global-development/2025/oct/14/waste-charity-kenyan-film-fast-fashion-dumping-documentary-wasteland-second-hand-clothing-market?CMP=Share_AndroidApp_Other",
+      "title": "The Guardian feature",
+      "outlet": "The Guardian",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.theguardian.com/global-development/2025/feb/01/sustainability-nairobi-fashion-week-african-designers",
+      "title": "The Guardian feature",
+      "outlet": "The Guardian",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.esquireme.com/brief/events/18652-young-arab-awards",
+      "title": "Esquire Middle East feature",
+      "outlet": "Esquire Middle East",
+      "media_type": "article",
+      "brand": "personal",
+      "subject": "Nur M'nasria",
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.arabianbusiness.com/gallery/in-pictures-young-arab-awards-2016-in-dubai-656015",
+      "title": "Arabian Business feature",
+      "outlet": "Arabian Business",
+      "media_type": "article",
+      "brand": "personal",
+      "subject": "Nur M'nasria",
+      "published_on": "2016-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://m.youtube.com/watch?v=i4XSqicOgF0&pp=ygULTnVyIG1uYXNyaWE%3D&ra=m",
+      "title": "YouTube feature",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://m.youtube.com/watch?v=51UF6cxMPzk&pp=ygUNSmloYWQgbW5hc3JpYQ%3D%3D&ra=m",
+      "title": "YouTube feature",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://mosaicofmuslimwomen.wordpress.com/2011/12/21/jmnasria/",
+      "title": "Mosaic of Muslim Women feature",
+      "outlet": "Mosaic of Muslim Women",
+      "media_type": "article",
+      "brand": "personal",
+      "subject": "Nur M'nasria",
+      "published_on": "2011-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.khaleejtimes.com/uae/kt-celebrates-hope-filmmaker-puts-smiles-on-childrens-faces",
+      "title": "Khaleej Times feature",
+      "outlet": "Khaleej Times",
+      "media_type": "article",
+      "brand": "personal",
+      "subject": "Nur M'nasria",
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://m.youtube.com/watch?v=LA8rijv2jVw&pp=ygUW2LrZitirINmF2KfZhdinINis2YrZhg%3D%3D&ra=m",
+      "title": "YouTube feature",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.vogue.it/article/nairobi-fashion-week-2026-designer-da-conoscere",
+      "title": "Vogue Italia feature",
+      "outlet": "Vogue Italia",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2026-01-01",
+      "tags": [
+        "from-24h",
+        "needs-manual-check"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "http://www.fashionstudiomagazine.com/2026/01/nairobi-fashion-week-2026.html?m=1",
+      "title": "Fashion Studio Magazine feature",
+      "outlet": "Fashion Studio Magazine",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2026-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.simplysuzette.com/post/kenya-s-sustainable-fashion-industry",
+      "title": "Simply Suzette feature",
+      "outlet": "Simply Suzette",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://blackballad.co.uk/beauty-fashion-style/sustainable-regenerative-fashion-african-designers?previewId=gbeesty",
+      "title": "Black Ballad feature",
+      "outlet": "Black Ballad",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.aljazeera.com/gallery/2023/8/16/photos-kenyan-designers-make-a-fashion-statement-against-textile-waste",
+      "title": "Al Jazeera feature",
+      "outlet": "Al Jazeera",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2023-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.vogue.it/article/moda-sostenibile-e-rigenerativa-la-nairobi-fashion-week",
+      "title": "Vogue Italia feature",
+      "outlet": "Vogue Italia",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h",
+        "needs-manual-check"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://thekenyatimes.com/latest-entertainment-news-kenya/how-models-lit-up-nairobi-fashion-week-2025-with-eco-friendly-outfits-photos/",
+      "title": "The Kenya Times",
+      "outlet": "Kenya Times",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h",
+        "needs-manual-check"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.voguebusiness.com/sustainability/inside-nairobis-eco-fashion-scene",
+      "title": "Vogue Business",
+      "outlet": "Vogue Business",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://issuu.com/nomadmagazineafrica/docs/nomad_43_issuu",
+      "title": "Nomad Magazine",
+      "outlet": "Nomad Magazine (Issuu)",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://epaper.peopledaily.digital/html5/reader/production/default.aspx?pnum=20&edid=a04b2e9f-37f6-4a11-9416-539b44e67e24&isshared=true",
+      "title": "People Daily feature",
+      "outlet": "People Daily",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://epaper.peopledaily.digital/html5/reader/production/default.aspx?pubname=People%20Daily&pubid=2d11dca3-13c2-4add-9dc1-cee781ba2925",
+      "title": "People Daily feature",
+      "outlet": "People Daily",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://geschichtenvonunterwegs.de/nairobi-fashion-week-2026-unveiled/",
+      "title": "Geschichten von unterwegs feature",
+      "outlet": "Geschichten von unterwegs",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2026-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://fabricandgarment.co.za/crafting-sustainably-empowering-communities/",
+      "title": "Fabric & Garment SA feature",
+      "outlet": "Fabric & Garment SA",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://guzangs.com/worn-out-part-iii-return-to-sender/",
+      "title": "Guzangs feature",
+      "outlet": "Guzangs",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://visitnairobikenya.com/fashion-innovators-redefining-nairobi/",
+      "title": "Visit Nairobi feature",
+      "outlet": "Visit Nairobi",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://geschichtenvonunterwegs.de/nairobi-fashion-week-2025/",
+      "title": "Geschichten von unterwegs feature",
+      "outlet": "Geschichten von unterwegs",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://thedive.co.ke/nairobi-fashion-week-experts-call-for-global-policy-to-advance-sustainable-fashion-practices/",
+      "title": "The Dive feature",
+      "outlet": "The Dive",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://fashionpoliceng.com/african-fashion/nairobi-fashion-week-2025-highlights-african-regenerative-fashion/",
+      "title": "Fashion Police NG feature",
+      "outlet": "Fashion Police NG",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://businesslistingkenya.com/nairobi-fashion-week-sustainable-style-takes-center-stage/",
+      "title": "Business Listing Kenya feature",
+      "outlet": "Business Listing Kenya",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.aasaitvkenya.com/post/sustainability-takes-center-stage-at-nairobi-fashion-week-2025--africa---s-bold-step-toward-a-greener-future",
+      "title": "AASAI TV Kenya feature",
+      "outlet": "AASAI TV Kenya",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://allafrica.com/stories/202502070246.html",
+      "title": "AllAfrica feature",
+      "outlet": "AllAfrica",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://mycouture.africa/fashion/meet-the-designers-who-stole-the-show-at-nairobi-fashion-week-2025/",
+      "title": "MyCouture Africa feature",
+      "outlet": "MyCouture Africa",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.simplydiligent.co/post/kenya-s-sustainable-fashion-industry",
+      "title": "Simply Diligent feature",
+      "outlet": "Simply Diligent",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.rcfs.rw/rwanda-cultural-fashion-show-returns/item/420-turning-locals-into-the-next-sustainable-fashion-designers-maisha-by-nisria.html",
+      "title": "Rwanda Cultural Fashion Show feature",
+      "outlet": "Rwanda Cultural Fashion Show",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://m.youtube.com/watch?si=Zqf8DMR1JBmlfazR&v=iJT43KT9-Ec&feature=youtu.be",
+      "title": "YouTube feature",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://youtu.be/Vbv1TyjP76M?si=djTEd0OiMJMVw8Xx",
+      "title": "YouTube feature",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://youtu.be/w5YYewtEghs?si=IO_dDXxERdPUNmFv",
+      "title": "YouTube feature",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://youtu.be/UiJRtCxaeT8?si=xaRy9YwizzAb_2jq",
+      "title": "6al3a Ma3 Jihad M'nasria",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "personal",
+      "subject": "Nur M'nasria",
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://youtu.be/VC8Jxoxs-bY?si=Z2nFgn_2Cd3Vg8xz",
+      "title": "Hope Makers | Smile",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "personal",
+      "subject": "Nur M'nasria",
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://vimeo.com/811377286",
+      "title": "Vimeo feature",
+      "outlet": "Vimeo",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=iHePrdByx5E",
+      "title": "YouTube feature",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://thekenyatimes.com/culture/how-models-lit-up-nairobi-fashion-week-2025-with-eco-friendly-outfits-photos/",
+      "title": "Kenya Times feature",
+      "outlet": "Kenya Times",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h",
+        "needs-manual-check"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://mycouture.africa/fashion/designer-spotlight/meet-the-designers-who-stole-the-show-at-nairobi-fashion-week-2025/?v=b6bb43df4525",
+      "title": "MyCouture Africa feature",
+      "outlet": "MyCouture Africa",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://medium.com/theajalaproject/u-smile-i-smile-f53c7f6416ed",
+      "title": "The Ajala Project (Medium) feature",
+      "outlet": "The Ajala Project (Medium)",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://authenticite.me/gems-of-arabia/imad-yassin/",
+      "title": "Authenticite feature",
+      "outlet": "Authenticite",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.the-star.co.ke/news/2024-03-15-creativity-thrives-at-nairobi-design-week",
+      "title": "The Star feature",
+      "outlet": "The Star",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2024-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.k47.co.ke/nairobi-fashion-week-to-showcase-the-future-of-fashion-with-regenerative-theme/",
+      "title": "K47 feature",
+      "outlet": "K47",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.thecooldown.com/green-business/nairobi-fashion-week-sustainable-designers-africa/",
+      "title": "The Cooldown feature",
+      "outlet": "The Cooldown",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://nomad.africa/lifestyle/maisha-by-nisria-turning-locals-into-the-next-sustainable-fashion-designers/",
+      "title": "Nomad Africa feature",
+      "outlet": "Nomad Africa",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.tomorrowsworldtoday.com/sustainability/sustainable-styles-featured-at-nairobi-fashion-week/",
+      "title": "Tomorrow's World Today feature",
+      "outlet": "Tomorrow's World Today",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://vellum.co.ke/towards-zero-waste-how-east-africa-is-handling-the-textile-waste-crisis/",
+      "title": "Vellum feature",
+      "outlet": "Vellum",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://fesheni.africa/maisha-by-nisira/",
+      "title": "Fesheni Africa feature",
+      "outlet": "Fesheni Africa",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.facebook.com/watch/?v=1131116480304270&vanity=MaggiArabia&http_ref=eyJ0cyI6MTc4MjAyODY3MTAwMCwiciI6IiJ9",
+      "title": "MAGGI (Facebook) feature",
+      "outlet": "MAGGI (Facebook)",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.thecooldown.com/green-business/fashion-industry-deregulation-epa-report/",
+      "title": "The Cooldown feature",
+      "outlet": "The Cooldown",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.eabusinesstimes.com/nairobi-fashion-week-2025-to-spotlight-africas-designers-in-regenerative-fashion/",
+      "title": "EA Business Times feature",
+      "outlet": "EA Business Times",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": "2025-01-01",
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.tuko.co.ke/people/family/577800-nairobi-fashion-week-designers-decry-policies-regenratiuve-fashion-colourful-event/",
+      "title": "Tuko feature",
+      "outlet": "Tuko",
+      "media_type": "article",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://m.youtube.com/shorts/GleLkkeQOa0?ra=m",
+      "title": "YouTube feature",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://m.youtube.com/shorts/CHWdzL1wmWA?ra=m",
+      "title": "YouTube feature",
+      "outlet": "YouTube",
+      "media_type": "video",
+      "brand": "maisha",
+      "subject": null,
+      "published_on": null,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    }
+  ],
+  "resources": [
+    {
+      "url": "https://slynumber.com/app/register",
+      "title": "SLYNumber",
+      "category": "tool",
+      "brand": null,
+      "notes": "Virtual phone-number app",
+      "is_credential": false,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.mentimeter.com/",
+      "title": "Mentimeter",
+      "category": "tool",
+      "brand": null,
+      "notes": "Audience polling tool",
+      "is_credential": false,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.dubaidesignweek.ae/marketplace/2025/maisha-nisria/",
+      "title": "Dubai Design Week Marketplace - Maisha by Nisria",
+      "category": "listing",
+      "brand": null,
+      "notes": "Official DDW 2025 marketplace listing",
+      "is_credential": false,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.uni-passau.de/nachhaltigkeit/nachhaltiger-campus/jetzt-mitgestalten/studentische-projekte/abfallkoloniallismus",
+      "title": "Uni Passau - Abfallkolonialismus project",
+      "category": "research",
+      "brand": null,
+      "notes": "Student project on textile-waste colonialism",
+      "is_credential": false,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.hudumakenya.go.ke",
+      "title": "Huduma Kenya",
+      "category": "platform",
+      "brand": null,
+      "notes": "Kenya govt citizen e-services portal",
+      "is_credential": false,
+      "tags": [
+        "from-24h",
+        "needs-manual-check"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://hustlesasa.com/",
+      "title": "HustleSasa",
+      "category": "platform",
+      "brand": null,
+      "notes": "African e-commerce / ticketing / payouts for creators",
+      "is_credential": false,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://storyraise.com/#/",
+      "title": "StoryRaise",
+      "category": "funding",
+      "brand": null,
+      "notes": "Nonprofit storytelling / fundraising platform",
+      "is_credential": false,
+      "tags": [
+        "from-24h",
+        "needs-manual-check"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://help.instagram.com/2031680250470701",
+      "title": "Instagram Help article",
+      "category": "platform",
+      "brand": null,
+      "notes": "Instagram help reference",
+      "is_credential": false,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    },
+    {
+      "url": "https://www.pandadoc.com",
+      "title": "PandaDoc",
+      "category": "tool",
+      "brand": null,
+      "notes": "Document e-signature / contract management",
+      "is_credential": false,
+      "tags": [
+        "from-24h"
+      ],
+      "source_type": "transcript-24h"
+    }
+  ],
+  "skipped": [
+    {
+      "url": "https://us02web.zoom.us/j/85179556957?pwd=bRr3INPqIazm6bwdVd4TxBev4rWcVa.1",
+      "why": "ephemeral Zoom link"
+    },
+    {
+      "url": "https://us02web.zoom.us/j/83842522081?pwd=1g2CDgB0TRpAb7uJbnj6ua32wbD3ik.1",
+      "why": "ephemeral Zoom link"
+    }
+  ]
+}

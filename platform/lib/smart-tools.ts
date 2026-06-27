@@ -42,6 +42,7 @@ import { laneFor, createIntent, queueApproval, type Lane } from "./gateway";
 import { gatherRecipients, SEND_CAP } from "./outreach";
 import { searchFiles, transferOwnership } from "./drive";
 import { recall, groundingText, remember, rememberUpsert, queryMemory } from "./memory";
+import { sealSecret, openSecret } from "./vault";
 import { knownGroups, isKnownGroup } from "./groups";
 import { ownerContactIds, OWNER_PRIVATE_KIND, ownerKeys } from "./privacy";
 import { draftThankYou } from "./agents/steward";
@@ -438,6 +439,10 @@ export const SMART_TOOLS = [
   { name: "add_team_member", description: "Add a person to the team roster. SAFE: internal record only. Use for 'add <name> to the team as <role>'. ALWAYS pass their phone if the operator gives one (e.g. 'add Eden as a volunteer, his number is +254...') so the member can be recognised and messaged later.", input_schema: { type: "object", properties: { name: { type: "string" }, role: { type: "string" }, email: { type: "string" }, phone: { type: "string", description: "their WhatsApp number, e.g. +254712345678 — capture it whenever the operator provides it" }, member_type: { type: "string", enum: ["staff", "tailor", "volunteer", "contractor"] } }, required: ["name"] } },
   { name: "add_inventory_item", description: "Add a Maisha inventory item (handmade goods). SAFE: internal record. Use for 'add 20 necklaces to inventory'.", input_schema: { type: "object", properties: { name: { type: "string" }, quantity: { type: "number" }, category: { type: "string" }, collection: { type: "string" }, unit_price: { type: "number" } }, required: ["name"] } },
   { name: "add_beneficiary", description: "Intake a child/family into a program. SAFE: lands PRIVATE (never donor-facing until Nur publishes). Use for 'add a beneficiary named ...'. Capture as much of the profile as given (DOB/age, gender, guardian, story, needs, region, contact).", input_schema: { type: "object", properties: { full_name: { type: "string" }, program: { type: "string", enum: ["safe_house", "education", "rescue", "nutrition", "other"] }, region: { type: "string" }, needs: { type: "string" }, date_of_birth: { type: "string", description: "YYYY-MM-DD" }, age: { type: "number", description: "age at intake if DOB unknown" }, gender: { type: "string", enum: ["male", "female", "other"] }, guardian_status: { type: "string", description: "e.g. orphan, single guardian, both parents" }, story: { type: "string", description: "private background/story (never donor-facing)" }, contact_phone: { type: "string" }, tags: { type: "array", items: { type: "string" } } }, required: ["full_name"] } },
+  { name: "save_resource", description: "Save a link, platform, tool, supplier or account into Nur's Resources hub (/resources) so it stops living in 100+ open tabs. SAFE: internal record. Use when Nur drops a link to keep, or says 'save this', 'add <platform> to my resources', 'remember this supplier'. You CAN save a login (username + password) when Nur gives one, e.g. 'save my Mailchimp login, user nur@nisria.co password Hunter2!'. Pass the password in the `password` field — it is encrypted (AES-256) before it touches the database, and files under the Logins tab. When you save a password, do NOT repeat the password back in your reply (just confirm it's saved). Admin/owner only.", input_schema: { type: "object", properties: { title: { type: "string", description: "the platform/tool/site name, e.g. 'Mailchimp', 'Sly', 'FNB business banking'" }, url: { type: "string", description: "the link, include https://" }, category: { type: "string", enum: ["platform", "account", "tool", "supplier", "funding", "research", "partner", "social", "link"] }, brand: { type: "string", enum: ["nisria", "maisha", "ahadi"], description: "omit for personal/no-brand" }, username: { type: "string", description: "login username/email if it's an account" }, password: { type: "string", description: "the password/secret if Nur gives one — stored encrypted, never echoed back" }, is_credential: { type: "boolean", description: "true if this is a login (files under the Logins tab)" }, tags: { type: "array", items: { type: "string" } }, notes: { type: "string" } }, required: ["title"] } },
+  { name: "get_credential", description: "Retrieve a saved login (username + password) from Nur's Resources vault and give it back to her in chat. Use when Nur asks 'what's my <platform> password', 'get me the <platform> login', 'remind me my <platform> details'. Admin/owner ONLY — this is never available in a team group or to anyone but Nur. Match the platform by name.", input_schema: { type: "object", properties: { query: { type: "string", description: "the platform/account name to look up, e.g. 'Mailchimp', 'FNB'" } }, required: ["query"] } },
+  { name: "save_press_item", description: "Save an interview, article, podcast episode, video, or media feature into Nur's Press & Media library (/press), tagged by brand. SAFE: internal record. Use when Nur shares a link to a feature about her, Nisria, Maisha, or a past project (e.g. a Spotify episode, a Guardian article, a news interview), or says 'add this to my press', 'save this interview'. Capture the outlet and brand whenever given.", input_schema: { type: "object", properties: { title: { type: "string", description: "the headline or episode/feature title" }, url: { type: "string", description: "link to the interview/article/episode, include https://" }, outlet: { type: "string", description: "publication or platform, e.g. 'Spotify', 'The Guardian', 'BBC'" }, media_type: { type: "string", enum: ["interview", "article", "podcast", "video", "social", "feature", "award", "mention"] }, brand: { type: "string", enum: ["nisria", "maisha", "ahadi", "personal", "other"], description: "personal = about Nur herself; other = a past project" }, subject: { type: "string", description: "who/what is featured, e.g. 'Maisha', 'Nur', a project name" }, published_on: { type: "string", description: "YYYY-MM-DD if known" }, tags: { type: "array", items: { type: "string" } }, description: { type: "string" } }, required: ["title"] } },
+  { name: "tag_press_item", description: "Add one or more tags (and optionally set the brand) on an existing press/media record. SAFE: internal record. Use when Nur says 'add maisha as a tag to this article', 'tag that interview as education', etc. Resolve the target: pass title or outlet to match a specific feature (e.g. 'the Guardian article'), otherwise it tags the MOST RECENTLY saved press item ('this article'). A tag that names a brand (maisha/nisria/ahadi) also sets the record's brand.", input_schema: { type: "object", properties: { tags: { type: "array", items: { type: "string" }, description: "tags to add, e.g. ['maisha']" }, title: { type: "string", description: "match the press item by title (partial ok)" }, outlet: { type: "string", description: "match by outlet, e.g. 'Guardian'" } }, required: ["tags"] } },
   { name: "prepare_grants", description: "Trigger the Grant agent to prepare all un-prepared applications in the background. SAFE: enqueues jobs, nothing is submitted. Use for 'prepare the grants'.", input_schema: { type: "object", properties: {} } },
   { name: "record_payment", description: "Log a payment Nur has ALREADY MADE into the finance ledger as paid. SAFE: records internal finance state (it does NOT move money, she already paid it). Call ONCE PER payment when she reports payments she made, whether typed or read from a screenshot/receipt/PDF. currency is KES or USD only, NEVER mix them, default KES if she does not say (and state the currency back so she can correct). category one of: payroll, rent, utilities, stipend, upkeep, petty cash, health, legal, payout, other. If a payee or amount is unclear, ASK rather than guess.", input_schema: { type: "object", properties: { payee: { type: "string" }, amount: { type: "number" }, currency: { type: "string", enum: ["KES", "USD"] }, category: { type: "string" }, purpose: { type: "string", description: "what it was for" }, method: { type: "string", description: "mpesa, bank, cash, etc" }, date: { type: "string", description: "YYYY-MM-DD, defaults to today" } }, required: ["payee", "amount"] } },
   { name: "complete_task", description: "Mark a task DONE. SAFE: internal state. Use when someone reports they finished something (e.g. 'done with the stall map'). Resolve the task by who reported it and/or a fragment of the title. If more than one open task matches, ask which one rather than guessing.", input_schema: { type: "object", properties: { assignee_name: { type: "string", description: "who did it, defaults to the person speaking" }, title: { type: "string", description: "a fragment of the task title to match" } } } },
@@ -532,7 +537,7 @@ const READ_TOOLS = new Set([
   "list_content", "find_studio_doc", "list_beneficiaries", "summarize_document", "donor_activity",
   "group_activity", "member_activity",
   "query_calendar", "check_conflicts",
-  "list_learned", "list_wishlist", "query_memory",
+  "list_learned", "list_wishlist", "query_memory", "get_credential",
   "list_task_comments", "list_task_dependencies",
   "search_resources", "get_resource", "list_resources",
 ]);
@@ -716,6 +721,24 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
         return { when: String(m.created_at || "").slice(0, 16), who: m.direction === "out" ? "Sasa" : "the operator", channel: m.channel, text: full.slice(0, 2000), truncated: full.length > 2000 };
       }),
     };
+  }
+  // ---- READ: get_credential (vault password retrieval) ----
+  if (name === "get_credential") {
+    // SECRET WALL: logins are owner-only. Never in a team group, never for anyone
+    // but Nur on her own channel. Mirror the beneficiary PII wall.
+    if (tier === "team" || !viewerIsOwner) return { error: "not available", note: "Saved logins are private to Nur and are not available here." };
+    const q = String(input.query || "").trim().toLowerCase();
+    if (!q) return { error: "no query", note: "Which login do you want — name the platform." };
+    const { data } = await db.from("resources").select("id,title,url,username,secret_ciphertext,secret_iv,secret_tag").eq("is_credential", true).order("created_at", { ascending: false }).limit(200);
+    const rows = (data || []) as any[];
+    const hit = rows.find((r) => String(r.title || "").toLowerCase() === q)
+      || rows.find((r) => String(r.title || "").toLowerCase().includes(q))
+      || rows.find((r) => `${r.title || ""} ${r.url || ""} ${r.username || ""}`.toLowerCase().includes(q));
+    if (!hit) return { found: false, note: `I don't have a saved login matching "${input.query}".` };
+    let password: string | null = null;
+    if (hit.secret_ciphertext) { try { password = openSecret({ ciphertext: hit.secret_ciphertext, iv: hit.secret_iv, tag: hit.secret_tag }); } catch { password = null; } }
+    await emit({ type: "resource.secret_revealed", source: "agent:sasa", actor: "Nur", subject_type: "resource", subject_id: hit.id, payload: { via: "smart", title: hit.title } });
+    return { found: true, platform: hit.title, url: hit.url || null, username: hit.username || null, password: password ?? "(no password stored — only the username is on file)" };
   }
   // ---- READ COVERAGE: eyes on the rest of the portal (admin reads). ----
   if (name === "find_beneficiary") {
@@ -2584,6 +2607,79 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (invErr || !item) return { ok: false, summary: humanize(`I could not add ${iname} to inventory just now, so I have not. Want me to try again?`, opts), error: (invErr as any)?.message || "inventory insert failed" };
     await emit({ type: "inventory.item_added", source: "agent:sasa", actor: "Nur", subject_type: "inventory", subject_id: item?.id || null, payload: { name: iname, quantity, via: "smart" } });
     return { ok: true, summary: humanize(`Added ${quantity > 0 ? `${quantity} ` : ""}${iname} to inventory.`, opts), affordance: { kind: "open", label: "Open inventory", href: "/inventory" }, detail: { inventory_id: item?.id, quantity } };
+  }
+
+  // ---- SAFE: save_resource (Resources hub / vault) ----
+  if (name === "save_resource") {
+    const title = String(input.title || "").trim();
+    if (!title) return { ok: false, summary: "I need a name for the resource.", error: "no title" };
+    const CATS = ["platform", "account", "tool", "supplier", "funding", "research", "partner", "social", "link"];
+    const category = CATS.includes(String(input.category)) ? String(input.category) : (input.url ? "link" : "link");
+    const brand = ["nisria", "maisha", "ahadi"].includes(String(input.brand)) ? String(input.brand) : null;
+    const tags = Array.isArray(input.tags) ? input.tags.map((t: any) => String(t).trim().toLowerCase()).filter(Boolean) : [];
+    const pw = input.password ? String(input.password) : "";
+    const is_credential = !!input.is_credential || !!input.username || !!pw;
+    const row: Record<string, any> = {
+      title, url: input.url ? String(input.url).trim() : null, category, brand, tags,
+      username: input.username ? String(input.username).trim() : null,
+      notes: input.notes ? String(input.notes).trim() : null,
+      is_credential, source_type: "chat", created_by: "Nur",
+    };
+    // SECRET AT REST: the password is AES-256-GCM encrypted before it reaches the
+    // DB. The plaintext is never stored in `resources` and is never put into the
+    // agent_memory mirror below. (It does pass through the WhatsApp message log —
+    // accepted tradeoff; see MASTER-PROMPT residual-risk note.)
+    if (pw) { const s = sealSecret(pw); row.secret_ciphertext = s.ciphertext; row.secret_iv = s.iv; row.secret_tag = s.tag; }
+    const { data: res, error } = await db.from("resources").insert(row).select("id").single();
+    // VERIFIED WRITE (KT #336): never say "Saved" unless the row actually landed.
+    if (error || !res) return { ok: false, summary: humanize(`I couldn't save "${title}" to your resources just now, so I haven't. Want me to try again?`, opts), error: (error as any)?.message || "resource insert failed" };
+    await remember({ kind: "resource", brand, title, content: `Resource: ${title}${input.url ? ` — ${input.url}` : ""} (category: ${category}${is_credential ? ", login" : ""}).`, source_type: "resource", source_id: res.id });
+    await emit({ type: "resource.added", source: "agent:sasa", actor: "Nur", subject_type: "resource", subject_id: res.id, payload: { title, category, brand, is_credential, via: "smart" } });
+    // never echo the password back, even though we just stored it
+    const credNote = pw ? " The password is saved encrypted under your Logins tab." : (is_credential ? " It's filed under your Logins tab." : "");
+    return { ok: true, summary: humanize(`Saved ${title} to your Resources hub.${credNote}`, opts), affordance: { kind: "open", label: "Open Resources", href: "/resources" }, detail: { resource_id: res.id } };
+  }
+
+  // ---- SAFE: save_press_item (Press & Media library) ----
+  if (name === "save_press_item") {
+    const title = String(input.title || "").trim();
+    if (!title) return { ok: false, summary: "I need a title for the press feature.", error: "no title" };
+    const TYPES = ["interview", "article", "podcast", "video", "social", "feature", "award", "mention"];
+    const media_type = TYPES.includes(String(input.media_type)) ? String(input.media_type) : "feature";
+    const BR = ["nisria", "maisha", "ahadi", "personal", "other"];
+    const brand = BR.includes(String(input.brand)) ? String(input.brand) : null;
+    const tags = Array.isArray(input.tags) ? input.tags.map((t: any) => String(t).trim().toLowerCase()).filter(Boolean) : [];
+    const published_on = /^\d{4}-\d{2}-\d{2}$/.test(String(input.published_on || "")) ? String(input.published_on) : null;
+    const { data: item, error } = await db.from("press_items").insert({
+      title, url: input.url ? String(input.url).trim() : null, outlet: input.outlet ? String(input.outlet).trim() : null,
+      media_type, brand, subject: input.subject ? String(input.subject).trim() : null, published_on,
+      description: input.description ? String(input.description).trim() : null, tags,
+      source_type: "chat", created_by: "Nur",
+    }).select("id").single();
+    if (error || !item) return { ok: false, summary: humanize(`I couldn't save "${title}" to your press library just now, so I haven't. Want me to try again?`, opts), error: (error as any)?.message || "press insert failed" };
+    await remember({ kind: "press", brand: brand === "personal" || brand === "other" ? null : brand, title, content: `Press/media: "${title}"${input.outlet ? ` in ${input.outlet}` : ""}${input.url ? ` — ${input.url}` : ""} (${media_type}).`, source_type: "press", source_id: item.id });
+    await emit({ type: "press.added", source: "agent:sasa", actor: "Nur", subject_type: "press", subject_id: item.id, payload: { title, outlet: input.outlet || null, media_type, brand, via: "smart" } });
+    return { ok: true, summary: humanize(`Saved "${title}"${input.outlet ? ` (${input.outlet})` : ""} to your Press & Media library.`, opts), affordance: { kind: "open", label: "Open Press & Media", href: "/press" }, detail: { press_id: item.id } };
+  }
+
+  // ---- SAFE: tag_press_item (add tags to an existing feature) ----
+  if (name === "tag_press_item") {
+    const newTags = Array.isArray(input.tags) ? input.tags.map((t: any) => String(t).trim().toLowerCase()).filter(Boolean) : [];
+    if (!newTags.length) return { ok: false, summary: "Which tag should I add?", error: "no tags" };
+    // resolve the target press item: by title, then outlet, else the newest one ("this article")
+    let target: any = null;
+    if (input.title) { const { data } = await db.from("press_items").select("id,title,tags,brand,outlet").ilike("title", `%${String(input.title).replace(/[%_]/g, "")}%`).order("created_at", { ascending: false }).limit(1); target = data?.[0] || null; }
+    if (!target && input.outlet) { const { data } = await db.from("press_items").select("id,title,tags,brand,outlet").ilike("outlet", `%${String(input.outlet).replace(/[%_]/g, "")}%`).order("created_at", { ascending: false }).limit(1); target = data?.[0] || null; }
+    if (!target) { const { data } = await db.from("press_items").select("id,title,tags,brand,outlet").order("created_at", { ascending: false }).limit(1); target = data?.[0] || null; }
+    if (!target) return { ok: false, summary: humanize("You don't have any press features saved yet, so there's nothing to tag. Send me the link and I'll add it first.", opts), error: "no press items" };
+    const merged = Array.from(new Set([...(target.tags || []), ...newTags]));
+    // a tag that names a brand also sets the brand column (e.g. "maisha")
+    const brandHit = newTags.find((t: string) => ["nisria", "maisha", "ahadi"].includes(t));
+    const patch: any = { tags: merged }; if (brandHit && !target.brand) patch.brand = brandHit;
+    const { error } = await db.from("press_items").update(patch).eq("id", target.id);
+    if (error) return { ok: false, summary: humanize(`I couldn't tag "${target.title}" just now, so I haven't. Want me to try again?`, opts), error: (error as any)?.message || "press tag failed" };
+    await emit({ type: "press.tagged", source: "agent:sasa", actor: "Nur", subject_type: "press", subject_id: target.id, payload: { tags: newTags, brand: patch.brand || target.brand, via: "smart" } });
+    return { ok: true, summary: humanize(`Tagged "${target.title}"${target.outlet ? ` (${target.outlet})` : ""} with ${newTags.join(", ")}.`, opts), affordance: { kind: "open", label: "Open Press & Media", href: "/press" }, detail: { press_id: target.id, tags: merged } };
   }
 
   // ---- SAFE: add_beneficiary (PRIVATE, never donor-facing) ----
