@@ -1265,7 +1265,7 @@ const HONEST_NO_FIGURE_READ =
 // v1.3.11: widened per Opus skeptic — original regex missed "I'm going to log
 // it" and "Prepared to file this" rephrasings.
 const STAGING_CLAIM = /\b(?:ready to (?:log|record|stage|file)|reply\s+["']?yes["']?\s+(?:to\s+confirm|to\s+commit|please)|i'?ll\s+(?:stage|log)\s+(?:that|this|it)|(?:i'?ve\s+|i\s+(?:have\s+)?|already\s+)?staged\s+(?:that|this|it|the\s+\w+)|(?:i\s+)?have\s+it\s+staged|waiting\s+for\s+your\s+yes|i'?m\s+going\s+to\s+(?:log|record|stage|file)\b|prepar(?:ing|ed)\s+to\s+(?:log|record|stage|file)\b|about\s+to\s+(?:log|record|stage|file)\b)\b/i;
-const STAGING_TOOLS = new Set(["record_payment", "record_donation", "draft_thank_you", "draft_email", "send_newsletter", "import_contacts", "bank_import"]);
+const STAGING_TOOLS = new Set(["record_payment", "record_donation", "draft_thank_you", "draft_email", "send_newsletter", "import_contacts", "bank_import", "ingest_bank_email"]);
 function claimsStagingWithoutTool(reply: string, toolRuns: { name: string; result: any }[]): boolean {
   if (!STAGING_CLAIM.test(reply)) return false;
   const staged = toolRuns.some((t) => STAGING_TOOLS.has(t.name) && (t.result as any)?.ok === true);

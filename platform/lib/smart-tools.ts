@@ -25,6 +25,7 @@ import { admin, money } from "./supabase-admin";
 import { formatPersonName } from "./names";
 import { sendText, sendImage, sendDocument, phoneKey, toE164, operatorOf } from "./whatsapp";
 import { sameNumber, distinctLines, isLocalForm, suffixKey } from "./phone.mjs";
+import { parseBankEmail, looksLikeBankEmail, batchTag, payeeOverlap, withinDays } from "./bank-email";
 // The country codes the org actually uses, for local↔international number matching.
 // Nisria operates in Kenya (+254) and Dubai (+971); override via ORG_COUNTRY_CODES.
 // Gating the match to these kills cross-country tail collisions (a Kenyan local
@@ -445,6 +446,7 @@ export const SMART_TOOLS = [
   { name: "tag_press_item", description: "Add one or more tags (and optionally set the brand) on an existing press/media record. SAFE: internal record. Use when Nur says 'add maisha as a tag to this article', 'tag that interview as education', etc. Resolve the target: pass title or outlet to match a specific feature (e.g. 'the Guardian article'), otherwise it tags the MOST RECENTLY saved press item ('this article'). A tag that names a brand (maisha/nisria/ahadi) also sets the record's brand.", input_schema: { type: "object", properties: { tags: { type: "array", items: { type: "string" }, description: "tags to add, e.g. ['maisha']" }, title: { type: "string", description: "match the press item by title (partial ok)" }, outlet: { type: "string", description: "match by outlet, e.g. 'Guardian'" } }, required: ["tags"] } },
   { name: "prepare_grants", description: "Trigger the Grant agent to prepare all un-prepared applications in the background. SAFE: enqueues jobs, nothing is submitted. Use for 'prepare the grants'.", input_schema: { type: "object", properties: {} } },
   { name: "record_payment", description: "Log a payment Nur has ALREADY MADE into the finance ledger as paid. SAFE: records internal finance state (it does NOT move money, she already paid it). Call ONCE PER payment when she reports payments she made, whether typed or read from a screenshot/receipt/PDF. currency is KES or USD only, NEVER mix them, default KES if she does not say (and state the currency back so she can correct). category one of: payroll, rent, utilities, stipend, upkeep, petty cash, health, legal, payout, other. If a payee or amount is unclear, ASK rather than guess.", input_schema: { type: "object", properties: { payee: { type: "string" }, amount: { type: "number" }, currency: { type: "string", enum: ["KES", "USD"] }, category: { type: "string" }, purpose: { type: "string", description: "what it was for" }, method: { type: "string", description: "mpesa, bank, cash, etc" }, date: { type: "string", description: "YYYY-MM-DD, defaults to today" } }, required: ["payee", "amount"] } },
+  { name: "ingest_bank_email", description: "Read a forwarded BANK email, bank SMS, or bank STATEMENT text (M-Pesa, Sendwave, Co-op, KCB, Equity, Absa, Stanbic, NCBA, etc.) and STAGE the transactions it can cleanly parse for Nur's confirmation. It does NOT post to the ledger; Nur replies 'yes' to log them. NEVER invents a figure it cannot read, never mixes currencies, and flags transactions that already look logged. Use when Nur forwards/pastes a bank email or statement, or when a bank email is cc'd to bot@nisria.co. A non-bank email is ignored, not force-parsed. Pass the raw text; pass extracted attachment text in attachments_text.", input_schema: { type: "object", properties: { text: { type: "string", description: "the email body / SMS / statement text" }, from: { type: "string", description: "the sender address, if known (helps recognize a bank)" }, subject: { type: "string", description: "the email subject, optional" }, attachments_text: { type: "array", items: { type: "string" }, description: "extracted text of any attachments (PDF/image statements)" } } } },
   { name: "complete_task", description: "Mark a task DONE. SAFE: internal state. Use when someone reports they finished something (e.g. 'done with the stall map'). Resolve the task by who reported it and/or a fragment of the title. If more than one open task matches, ask which one rather than guessing.", input_schema: { type: "object", properties: { assignee_name: { type: "string", description: "who did it, defaults to the person speaking" }, title: { type: "string", description: "a fragment of the task title to match" } } } },
   { name: "reopen_task", description: "Reopen a COMPLETED task, moving it from done back to to-do (the inverse of complete_task). SAFE: internal state. Use when someone says a task is not actually finished, was ticked by mistake, or needs doing again (e.g. 'the canva task is not done', 'reopen the KRA filing', 'mark the stall map as not done', 'undo that, it is not finished'). Match a fragment of the title against DONE tasks; if more than one matches, ask which. A team-tier caller MUST pass a reason (one short sentence on WHY they are reopening); the owner/founder can reopen without one.", input_schema: { type: "object", properties: { assignee_name: { type: "string", description: "whose task, defaults to the person speaking" }, title: { type: "string", description: "a fragment of the completed task's title" }, reason: { type: "string", description: "required when the caller is a team-tier member: one short sentence on why the task is being reopened" } } } },
 
@@ -1422,11 +1424,24 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
 // Shared payment writer: the single place a payment row is inserted into the
 // ledger. Used by record_payment's direct (web console) path and by the worker
 // when it commits a CONFIRMED pending payment. Carries currency (Currency law).
+// Bank-email idempotency (money-truth P0): a bank txn carries a stable bank_tag
+// (M-Pesa code, or date|amount|currency|payee) persisted AS the ledger ref. This
+// returns an existing row id if that tag is already committed, so the same email
+// cc'd or re-forwarded after a prior confirm cannot double-count (Law 2) and the
+// source id survives on the row (Law 1). Normal payments carry no bank_tag.
+async function bankTagDuplicate(db: any, args: any): Promise<string | null> {
+  const tag = args.bank_tag ? String(args.bank_tag) : null;
+  if (!tag) return null;
+  const { data } = await db.from("payments").select("id").eq("ref", tag).limit(1);
+  return data && data.length ? data[0].id : null;
+}
 export async function commitPaymentRow(db: any, args: any): Promise<{ id: string | null; error?: string }> {
+  const dupId = await bankTagDuplicate(db, args);
+  if (dupId) return { id: dupId };
   const { data: row, error } = await db.from("payments").insert({
     direction: "out", payee: args.payee, purpose: args.purpose ?? null, amount: args.amount, currency: args.currency,
     method: args.method ?? null, status: "paid", paid_at: args.paid_at, category: args.category || "other",
-    recurrence: "none", ref: `AI-WA-${Date.now()}`, created_by: "Nur", screenshot_path: args.screenshot_path ?? null,
+    recurrence: "none", ref: args.bank_tag ? String(args.bank_tag) : `AI-WA-${Date.now()}`, created_by: "Nur", screenshot_path: args.screenshot_path ?? null,
     source_message_id: args.source_message_id ?? null,
   }).select("id").single();
   // VERIFIED WRITE (KT #336): a failed ledger insert must NOT be reported as logged.
@@ -3986,6 +4001,72 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // VERIFIED WRITE (KT #336): never say "Logged" unless the ledger row landed.
     if (payErr || !id) return { ok: false, summary: humanize(`I could not record that payment of ${human} just now, so I have not. Want me to try again?`, opts), error: payErr || "payment insert failed" };
     return { ok: true, summary: humanize(`Logged ${human}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { id, currency, amount, category } };
+  }
+
+  // ---- ingest_bank_email: parse a bank email/SMS/statement and STAGE its
+  // transactions as record_payment pending_actions. Nur's "yes" commits them all
+  // through the existing worker path (commitPaymentRow). Extends beside
+  // record_payment; introduces no new staging mechanism or schema. Five-law spine:
+  // never invent (unparseable lines skipped), confirm-before-write (staged only),
+  // dedup (idempotent staging + cross-source flag), currency-correct (per row).
+  if (name === "ingest_bank_email") {
+    if (!ctx.contactId) return { ok: false, summary: humanize("I need to know who to stage these for, so I have not staged anything.", opts), error: "no contact" };
+    const from = String(input.from || "").trim();
+    const text = String(input.text || input.body || "").trim();
+    const attTexts: string[] = Array.isArray(input.attachments_text)
+      ? input.attachments_text.map((x: any) => String(x || "")).filter(Boolean)
+      : (Array.isArray(input.attachments) ? input.attachments.map((a: any) => String(a?.extractedText ?? a?.text ?? "")).filter(Boolean) : []);
+
+    if (!looksLikeBankEmail(from, text, attTexts)) {
+      return { ok: false, summary: humanize(`That message${from ? ` from ${from}` : ""} does not look like a bank transaction email, so I ignored it (I did not force-parse it).`, opts), detail: { ignored: true, staged: 0 } };
+    }
+    const txns = [...parseBankEmail(text), ...attTexts.flatMap((t) => parseBankEmail(t))];
+    if (!txns.length) {
+      return { ok: false, summary: humanize(`That looked bank related but I could not read any transaction lines, so I staged nothing (no guessing).`, opts), detail: { ignored: true, staged: 0 } };
+    }
+
+    // light category -> the live finance buckets; anything unsure stays "other".
+    const CAT_MAP: Record<string, string> = { salary: "payroll", rent: "rent", utilities: "utilities", fee: "other", refund: "other", procurement: "other", courier: "other", unknown: "other" };
+    // idempotent staging: skip a txn already staged for this contact (by bank_tag).
+    const { data: pend } = await db.from("pending_actions").select("payload").eq("contact_id", ctx.contactId).eq("kind", "record_payment").eq("status", "awaiting_confirm");
+    const stagedKeys = new Set<string>((pend || []).map((p: any) => p?.payload?.bank_tag).filter(Boolean));
+
+    let staged = 0, dup = 0, flagged = 0;
+    for (const t of txns) {
+      const tag = batchTag(t);
+      if (stagedKeys.has(tag)) { dup += 1; continue; }
+      // cross-source: already on the ledger as a paid payment? amount+currency exact,
+      // payee word-overlap, dates within 3 days. Flag (hold back), never duplicate.
+      const { data: cand } = await db.from("payments").select("id,payee,paid_at").eq("amount", t.amount).eq("currency", t.currency).eq("status", "paid").limit(25);
+      const onLedger = (cand || []).some((c: any) => payeeOverlap(String(c.payee || ""), t.description) && withinDays(t.date, c.paid_at ? String(c.paid_at).slice(0, 10) : null, 3));
+      if (onLedger) { flagged += 1; continue; }
+
+      const category = CAT_MAP[t.category] || "other";
+      const method = t.ref ? "mpesa" : "bank";
+      const paid_at = t.date ? new Date(`${t.date}T12:00:00Z`).toISOString() : new Date().toISOString();
+      const pargs = { payee: t.description, purpose: "bank email import", amount: t.amount, currency: t.currency, method, paid_at, category, screenshot_path: null, source_message_id: ctx.sourceMessageId || null, bank_tag: tag };
+      const human = `${t.currency} ${t.amount.toLocaleString()} to ${t.description}`;
+      const { error: stageErr } = await db.from("pending_actions").insert({ contact_id: ctx.contactId, kind: "record_payment", payload: pargs, summary: human, status: "awaiting_confirm" });
+      if (stageErr) continue; // honesty: a failed stage is not counted as staged
+      stagedKeys.add(tag);
+      staged += 1;
+    }
+
+    // Honesty: only promise "reply yes" when something is actually staged. When
+    // every line was a duplicate or already on the ledger, say there is nothing new.
+    const parts: string[] = [];
+    if (staged) parts.push(`staged ${staged} transaction(s) for your confirmation`);
+    if (dup) parts.push(`${dup} already staged`);
+    if (flagged) parts.push(`${flagged} that look already logged, held back`);
+    let summary: string;
+    if (staged > 0) {
+      summary = `I read a bank email${from ? ` from ${from}` : ""} and ${parts.join(", ")}. Reply "yes" to log ${staged > 1 ? "them" : "it"}, or tell me which to drop.`;
+    } else if (dup > 0 || flagged > 0) {
+      summary = `I read a bank email${from ? ` from ${from}` : ""} but ${parts.join(", ")}, so there is nothing new to confirm.`;
+    } else {
+      summary = `I could not stage anything from that email just now, so I have not.`;
+    }
+    return { ok: staged > 0 || dup > 0 || flagged > 0, summary: humanize(summary, opts), detail: { staged, dup, flagged } };
   }
 
   // ---- GATED: draft_thank_you (queues into Needs-You) ----

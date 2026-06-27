@@ -38,6 +38,7 @@ export const MONEY_MANIFEST: DomainManifest = {
   model: "claude-sonnet-4-6",
   tools: [
     "record_payment", "update_payment", "delete_payment", "schedule_payment", "mark_payment_paid",
+    "ingest_bank_email",
     "query_donations", "lookup_donor", "newest_donor", "finance_summary", "latest_gift",
     "list_campaigns", "list_payroll", "list_bank_transactions", "donor_activity",
     "log_payout",
