@@ -21,23 +21,28 @@ import { spawnSync } from "node:child_process";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLATFORM = resolve(HERE, "..");
 const INTEGRATION = resolve(HERE, "integration");
+const UNIT = resolve(HERE, "unit");
 
-const files = readdirSync(INTEGRATION)
-  .filter((f) => f.endsWith(".test.mjs"))
-  .sort();
+// Run both the integration walls AND the unit suites (router, specialist-isolation,
+// intent, multi-domain-replay) so the routing/isolation layer is gated too and the
+// unit tests cannot silently rot again.
+const files = [
+  ...readdirSync(INTEGRATION).filter((f) => f.endsWith(".test.mjs")).map((f) => resolve(INTEGRATION, f)),
+  ...readdirSync(UNIT).filter((f) => f.endsWith(".test.mjs")).map((f) => resolve(UNIT, f)),
+].sort();
 
 if (files.length === 0) {
-  console.error("run-walls: no *.test.mjs found under eval/integration");
+  console.error("run-walls: no *.test.mjs found under eval/integration or eval/unit");
   process.exit(2);
 }
 
-console.log(`\nrun-walls: ${files.length} wall(s) under eval/integration\n`);
+console.log(`\nrun-walls: ${files.length} wall(s) under eval/integration + eval/unit\n`);
 
 const passed = [];
 const failed = [];
 
 for (const f of files) {
-  const full = resolve(INTEGRATION, f);
+  const full = f;
   const res = spawnSync("node", [full], {
     cwd: PLATFORM,
     encoding: "utf8",

@@ -17,7 +17,8 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SASA = fs.readFileSync(path.resolve(HERE, "..", "..", "lib", "agents", "sasa.ts"), "utf8");
 const SPEC = fs.readFileSync(path.resolve(HERE, "..", "..", "lib", "agents", "specialists", "index.ts"), "utf8");
-const ROUTER = fs.readFileSync(path.resolve(HERE, "..", "..", "lib", "agents", "router.ts"), "utf8");
+// Routing patterns live in router-patterns.ts (extracted for testability); read both.
+const ROUTER = fs.readFileSync(path.resolve(HERE, "..", "..", "lib", "agents", "router.ts"), "utf8") + "\n" + fs.readFileSync(path.resolve(HERE, "..", "..", "lib", "agents", "router-patterns.ts"), "utf8");
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
 const flat = (s) => s.replace(/\s+/g, " ");

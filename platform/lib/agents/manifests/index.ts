@@ -190,9 +190,32 @@ export function getToolsForDomain(domain: Domain, tier: "admin" | "team" = "admi
       // Cross-cutting
       "search_history", "flag_for_clarity",
     ]);
-    return manifest.tools.filter((t) => TEAM_SAFE_TOOLS.has(t) || CROSS_CUTTING_TOOLS.has(t));
+    // Domain tools that are team-safe...
+    const base = manifest.tools.filter((t) => TEAM_SAFE_TOOLS.has(t));
+    // ...plus the team-safe cross-cutting tools. Cross-cutting tools are not in any
+    // domain manifest, so filtering manifest.tools alone silently dropped them
+    // (a team specialist lost lookup_contact / search_history / flag_for_clarity).
+    const cross = Array.from(CROSS_CUTTING_TOOLS).filter((t) => TEAM_SAFE_TOOLS.has(t));
+    return Array.from(new Set([...base, ...cross]));
   }
 
   // Admin gets all domain tools + cross-cutting
   return [...manifest.tools, ...Array.from(CROSS_CUTTING_TOOLS)];
+}
+
+// Domain leakage: a specialist that ran a tool outside its own domain. Cross-cutting
+// tools are allowed everywhere. Single source of truth, used by the orchestrator's
+// runtime guard and by the routing tests (no model client, so it stays testable).
+export function checkDomainLeakage(
+  _reply: string,
+  toolRuns: { name: string; result: any }[],
+  expectedDomain: Domain,
+): { leakage: boolean; details: string } {
+  for (const toolRun of toolRuns) {
+    const toolDomain = TOOL_TO_DOMAIN[toolRun.name];
+    if (toolDomain && toolDomain !== expectedDomain && !CROSS_CUTTING_TOOLS.has(toolRun.name)) {
+      return { leakage: true, details: `Tool ${toolRun.name} belongs to ${toolDomain} domain, but specialist is ${expectedDomain}` };
+    }
+  }
+  return { leakage: false, details: "" };
 }

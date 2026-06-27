@@ -1,8 +1,8 @@
 // Router unit tests — verifies domain classification accuracy.
 // Pure local, no DB, no network, no Anthropic.
 
-import { routeMessage, scoreDomains } from "../../lib/agents/router.js";
-import { MANIFESTS, getToolsForDomain, TOOL_TO_DOMAIN, CROSS_CUTTING_TOOLS } from "../../lib/agents/manifests/index.js";
+import { scoreDomains } from "../../lib/agents/router-patterns.ts";
+import { MANIFESTS, getToolsForDomain, TOOL_TO_DOMAIN, CROSS_CUTTING_TOOLS } from "../../lib/agents/manifests/index.ts";
 
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
@@ -70,8 +70,10 @@ console.log("\n=== ROUTER UNIT TESTS ===\n");
   else ok("R3c money admin has record_payment");
 
   const moneyTeam = getToolsForDomain("money", "team");
-  if (moneyTeam.length > 0) fail("R3d money team should have no tools (admin only)");
-  else ok("R3d money team has no tools (admin only domain)");
+  const MONEY_WRITES = ["record_payment", "update_payment", "delete_payment", "schedule_payment", "mark_payment_paid", "log_payout", "log_team_payment", "set_beneficiary_funding", "set_monthly_goal", "ingest_bank_email", "add_donor", "update_donor", "add_campaign", "update_campaign"];
+  const moneyWrites = moneyTeam.filter((t) => MONEY_WRITES.includes(t));
+  if (moneyWrites.length > 0) fail(`R3d money team must not have write/payment tools, got ${moneyWrites.join(", ")}`);
+  else ok("R3d money team has no write/payment tools (admin only)");
 }
 
 // ---- R4: Edge cases ----
@@ -94,7 +96,7 @@ console.log("\n=== ROUTER UNIT TESTS ===\n");
 // ---- R5: Guard leakage detection ----
 {
   // Import the leakage check function
-  const { checkDomainLeakage } = await import("../../lib/agents/orchestrator");
+  const { checkDomainLeakage } = await import("../../lib/agents/manifests/index.ts");
 
   // Work specialist calling money tool should leak
   const workLeak = checkDomainLeakage("", [{ name: "record_payment", result: { ok: true } }], "work");

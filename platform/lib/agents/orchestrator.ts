@@ -14,7 +14,7 @@ import { runSasa, type SasaTurn, type SasaResult } from "./sasa";
 import { routeMessage, decomposeMessage, type Domain } from "./router";
 import { runSpecialist } from "./specialists";
 import { processIntake } from "./intake-pipeline";
-import { TOOL_TO_DOMAIN } from "./manifests";
+import { TOOL_TO_DOMAIN, checkDomainLeakage } from "./manifests";
 import { claudeJSON } from "../anthropic";
 import { emit } from "../events";
 
@@ -151,22 +151,9 @@ export async function runOrchestrated(opts: OrchestratorOpts): Promise<SasaResul
   return { reply: finalReply, actions, toolsRan: allToolsRan };
 }
 
-// Cross-domain leakage check: did any tool that ran belong to another domain?
-export function checkDomainLeakage(
-  reply: string,
-  toolRuns: { name: string; result: any }[],
-  expectedDomain: Domain,
-): { leakage: boolean; details: string } {
-  for (const toolRun of toolRuns) {
-    const toolDomain = TOOL_TO_DOMAIN[toolRun.name];
-    if (toolDomain && toolDomain !== expectedDomain) {
-      if (!["lookup_contact", "search_history", "remember_fact", "flag_for_clarity", "agent_activity"].includes(toolRun.name)) {
-        return { leakage: true, details: `Tool ${toolRun.name} belongs to ${toolDomain} domain, but specialist is ${expectedDomain}` };
-      }
-    }
-  }
-  return { leakage: false, details: "" };
-}
+// Cross-domain leakage check lives in ./manifests (single source, pure, testable).
+// Imported above for the runtime guard; re-exported here for existing callers.
+export { checkDomainLeakage } from "./manifests";
 
 export async function finalizeWithGuard(
   reply: string,

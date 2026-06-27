@@ -1,7 +1,7 @@
 // Specialist isolation tests — verifies each specialist cannot call tools
 // outside its domain. Pure local, no DB, no network, no Anthropic.
 
-import { MANIFESTS, getToolsForDomain, TOOL_TO_DOMAIN, CROSS_CUTTING_TOOLS } from "../../lib/agents/manifests/index.js";
+import { MANIFESTS, getToolsForDomain, TOOL_TO_DOMAIN, CROSS_CUTTING_TOOLS } from "../../lib/agents/manifests/index.ts";
 
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
@@ -38,7 +38,7 @@ console.log("\n=== SPECIALIST ISOLATION TESTS ===\n");
 
 // ---- S2: No tool appears in multiple domain manifests (except cross-cutting) ----
 {
-  const toolToDomains: Record<string, string[]> = {};
+  const toolToDomains = {};
   for (const [domain, manifest] of Object.entries(MANIFESTS)) {
     if (domain === "general") continue;
     for (const tool of manifest.tools) {
@@ -76,11 +76,13 @@ console.log("\n=== SPECIALIST ISOLATION TESTS ===\n");
   ok("S3b all manifest tools are in TOOL_TO_DOMAIN index");
 }
 
-// ---- S4: Money domain is admin-only (team cannot access) ----
+// ---- S4: Money WRITES are admin-only (team may have read-only/cross-cutting, never a money write) ----
 {
   const moneyTeamTools = getToolsForDomain("money", "team");
-  if (moneyTeamTools.length > 0) fail(`S4 money team should have no tools, got ${moneyTeamTools.length}`);
-  else ok("S4 money domain is admin-only (team has no tools)");
+  const MONEY_WRITES = ["record_payment", "update_payment", "delete_payment", "schedule_payment", "mark_payment_paid", "log_payout", "log_team_payment", "set_beneficiary_funding", "set_monthly_goal", "ingest_bank_email", "add_donor", "update_donor", "add_campaign", "update_campaign"];
+  const leaked = moneyTeamTools.filter((t) => MONEY_WRITES.includes(t));
+  if (leaked.length > 0) fail(`S4 money team must not have any write/payment tool, got ${leaked.join(", ")}`);
+  else ok("S4 money writes are admin-only (team has none)");
 }
 
 // ---- S5: Comms domain is admin-only (team cannot send) ----

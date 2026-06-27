@@ -10,7 +10,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const R = (p) => fs.readFileSync(path.resolve(HERE, "..", "..", p), "utf8");
 const MAN = R("lib/agents/manifests/index.ts");
 const SPEC = R("lib/agents/specialists/index.ts");
-const ROUTER = R("lib/agents/router.ts");
+// Routing patterns live in router-patterns.ts (extracted for testability); read both.
+const ROUTER = R("lib/agents/router.ts") + "\n" + R("lib/agents/router-patterns.ts");
 const INTAKE = R("lib/agents/intake-pipeline.ts");
 const TOOLS = R("lib/smart-tools.ts");
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
