@@ -42,8 +42,11 @@ const flat = (s) => s.replace(/\s+/g, " ");
 
 // ---- S1: staged-is-not-done guard exists and is wired into finalize ----
 {
-  if (!/const STAGE_ONLY_TOOLS = new Set\(\["record_payment", "record_donation"\]\)/.test(SASA))
-    fail("S1a STAGE_ONLY_TOOLS must list the stage-only money tools");
+  // Membership check (tolerant of additions): the stage-only money tools must include
+  // record_payment and ingest_bank_email (both stage money awaiting Nur's yes).
+  if (!/const STAGE_ONLY_TOOLS = new Set\(\[[^\]]*"record_payment"[^\]]*\]\)/.test(SASA) ||
+      !/const STAGE_ONLY_TOOLS = new Set\(\[[^\]]*"ingest_bank_email"[^\]]*\]\)/.test(SASA))
+    fail("S1a STAGE_ONLY_TOOLS must list the stage-only money tools (record_payment, ingest_bank_email)");
   else ok("S1a STAGE_ONLY_TOOLS present");
   if (!/function completedButOnlyStaged\(/.test(SASA))
     fail("S1b completedButOnlyStaged() must exist");

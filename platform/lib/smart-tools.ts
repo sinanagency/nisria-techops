@@ -4066,7 +4066,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     } else {
       summary = `I could not stage anything from that email just now, so I have not.`;
     }
-    return { ok: staged > 0 || dup > 0 || flagged > 0, summary: humanize(summary, opts), detail: { staged, dup, flagged } };
+    // detail.staged is a BOOLEAN (true iff something newly staged) so the deterministic
+    // staged-confirm guard (which keys on detail.staged===true) takes the pen and emits
+    // this honest summary verbatim; the model cannot narrate a stage as "logged". The
+    // count moves to staged_count. ingest_bank_email is also in STAGE_ONLY_TOOLS as the backstop.
+    return { ok: staged > 0 || dup > 0 || flagged > 0, summary: humanize(summary, opts), detail: { staged: staged > 0, staged_count: staged, dup, flagged } };
   }
 
   // ---- GATED: draft_thank_you (queues into Needs-You) ----

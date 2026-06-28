@@ -1304,7 +1304,7 @@ const HONEST_NO_STAGING =
 // fake-staging claim either, since the reply uses DONE language, not staging cues).
 // Detect: a stage-only money tool ran ok=true, the reply makes a completion claim,
 // and it lacks any staging cue -> replace with the tool's own honest staging summary.
-const STAGE_ONLY_TOOLS = new Set(["record_payment", "record_donation"]);
+const STAGE_ONLY_TOOLS = new Set(["record_payment", "record_donation", "ingest_bank_email"]);
 const STAGING_CUE = /\b(?:ready to (?:log|record|stage|file)|reply\s+["']?yes["']?|to\s+confirm|awaiting\s+(?:your\s+)?confirm|once\s+you\s+confirm|i'?ve\s+staged|i\s+have\s+staged|staged\s+(?:it|that|this))\b/i;
 // Completion verbs that read as "the money is logged/final", INCLUDING the bare shapes
 // ("Logged.", "Recorded it", "All done") that AGENT_COMPLETION/DONE_SIMPLE skip because
