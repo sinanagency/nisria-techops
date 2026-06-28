@@ -69,7 +69,11 @@ const TEAM_TOOL_NAMES = new Set(["list_tasks", "create_task", "complete_task", "
 // reach a team prompt. Strip a row if it carries finance VOCABULARY or an actual
 // CURRENCY AMOUNT, so a bare figure ("raised KES 4.2M") cannot slip through a
 // keyword gap. Org identity, programs, people, and history still ground the reply.
-const FINANCE_GROUNDING = /(financ|budget|funding|fundrais|grant|donor|donation|banking|bank account|payroll|salar|revenue)/i;
+// Includes Maisha shop-money vocabulary (sale|margin|COGS|expense|channel fee) so a
+// team-tier grounding row carrying shop revenue/cost is stripped just like donor/NGO
+// finance (spec 004 Phase 3). The finance TOOLS are already admin-only; this closes
+// the grounding-text path.
+const FINANCE_GROUNDING = /(financ|budget|funding|fundrais|grant|donor|donation|banking|bank account|payroll|salar|revenue|\bsale\b|\bsold\b|\bmargin\b|\bcogs\b|\bexpense\b|channel fee)/i;
 // A MATERIAL money figure: currency with a k/m/b or million/thousand magnitude,
 // or a thousands-separated amount (KES 100,000), in either order. Deliberately
 // NOT bare small amounts like "KSh 100" (the team's own welfare fund), so the
@@ -160,13 +164,21 @@ const COMPLETION_TOOLS = new Set([
   "add_donor", "update_donor", "set_monthly_goal", "edit_brain_section", "save_press_item", "tag_press_item",
   // Maisha inventory writes (spec 004): typed capture + lifecycle moves.
   "upsert_end_product", "upsert_supply", "upsert_textile", "classify_and_enrich", "transition_state",
+  // Maisha sales + finance writes (spec 004 Phase 3): a sale/shipment/payment/cost
+  // is a real completion, so a "recorded the sale" / "shipped it" / "logged the cost"
+  // claim must be backed by one of these tools returning ok=true.
+  "record_sale", "record_shipment", "record_payment_link", "log_expense",
 ]);
 
 // CLAIM-SHAPE → REQUIRED TOOL CATEGORY. Any completion-class tool's ok=true used
 // to back ANY completion claim, which let a "Done. Logged KES 3,625" through on
 // the back of an unrelated remember_fact / brain auto-capture (Fargo Courier
 // incident 2026-06-05, 13:11). Now the guard requires a CATEGORY-MATCHED tool.
-const PAYMENT_TOOLS = new Set(["record_payment", "update_payment", "delete_payment", "log_team_payment", "log_payout", "schedule_payment", "mark_payment_paid"]);
+// record_sale and log_expense make a MONEY claim (revenue captured / cost paid), so
+// a money-shaped completion ("recorded the sale of … for KES 12,000", "logged the
+// courier cost") is category-anchored to one of these, not an unrelated success
+// (spec 004 Phase 3). record_payment_link marks a sale PAID, also money-anchored.
+const PAYMENT_TOOLS = new Set(["record_payment", "update_payment", "delete_payment", "log_team_payment", "log_payout", "schedule_payment", "mark_payment_paid", "record_sale", "log_expense", "record_payment_link"]);
 const TASK_TOOLS = new Set(["create_task", "update_task", "complete_task", "reopen_task", "delete_task"]);
 // Read-only task tools. A successful list_tasks legitimately returns rows whose
 // TITLES may contain "complete"/"done"/"finish" (e.g. Nur's task "Complete the
@@ -188,14 +200,18 @@ const CONTACT_TOOLS = new Set(["add_contact", "update_contact", "add_team_member
 // Maisha inventory writes (spec 004): an inventory completion claim ("logged the
 // abaya", "moved TRK-0192 to shipped", "enriched it as a textile") must be backed
 // by a category-matched inventory write tool, not an unrelated success.
-const INVENTORY_TOOLS = new Set(["upsert_end_product", "upsert_supply", "upsert_textile", "classify_and_enrich", "transition_state"]);
+const INVENTORY_TOOLS = new Set(["upsert_end_product", "upsert_supply", "upsert_textile", "classify_and_enrich", "transition_state",
+  // Phase 3 sales/finance also move/affect a piece, so an inventory-shaped claim
+  // ("recorded the sale", "shipped it", "marked it paid") is backed by these too.
+  // record_shipment is lifecycle-only (no money) and lives ONLY here, not in PAYMENT_TOOLS.
+  "record_sale", "record_shipment", "record_payment_link", "log_expense"]);
 const INVENTORY_READ_TOOLS = new Set(["query_inventory", "inventory_summary", "get_lifecycle", "list_inventory"]);
 const SHAPE_MONEY = /\b(?:KES|USD|\$|KSh|Ksh)\s*[\d,\.]+|[\d,]+(?:\.\d+)?\s*(?:KES|USD|\$|KSh)\b/i;
 const SHAPE_TASK = /\b(?:task|reminder|todo)\b/i;
 const SHAPE_CASE = /\b(?:case|beneficiary|merged?\s+\w+'?s?\s+case)\b/i;
 const SHAPE_EVENT = /\b(?:meeting|event|visit|travel|appointment|reminder on)\b/i;
 const SHAPE_CONTACT = /\b(?:contact|team member|saved\s+(?:his|her|their)\s+(?:number|email|phone))\b/i;
-const SHAPE_INVENTORY = /\b(?:inventory|in stock|finished piece|end product|supply|supplies|textile|fabric|abaya|kaftan|caftan|shipped|delivered|in transit|restock(?:ed)?|enriched|lifecycle|production|TRK[-\s]?\d)\b/i;
+const SHAPE_INVENTORY = /\b(?:inventory|in stock|finished piece|end product|supply|supplies|textile|fabric|abaya|kaftan|caftan|shipped|delivered|in transit|restock(?:ed)?|enriched|lifecycle|production|TRK[-\s]?\d|sale|sold|courier|channel fee)\b/i;
 
 // Future-phrasing detector: "I will / I'll / let me / should I" etc. are
 // honest non-claims, not fake completions.
@@ -2651,6 +2667,11 @@ function stubTool(name: string, input: any): { ok: boolean; summary: string } {
   const I = input || {};
   switch (name) {
     case "record_payment": return { ok: true, summary: `Ready to log ${I.currency || "KES"} ${I.amount ?? "?"} to ${I.payee || "?"}. Reply yes to confirm.` };
+    // Maisha sales + finance (spec 004 Phase 3). Dry-run stubs for the eval gym.
+    case "record_sale": return { ok: true, summary: `Recorded the sale of ${I.tracking_no_or_name || "the piece"} for ${I.currency || "KES"} ${I.price ?? "?"} via ${I.channel || "a channel"}.` };
+    case "record_shipment": return { ok: true, summary: `Marked ${I.tracking_no_or_name || "the piece"} shipped${I.courier ? ` via ${I.courier}` : ""}.` };
+    case "record_payment_link": return { ok: true, summary: `Marked the sale of ${I.sale_id_or_tracking || "the piece"} paid.` };
+    case "log_expense": return { ok: true, summary: `Logged a Maisha cost of ${I.currency || "KES"} ${I.amount ?? "?"} (${I.category || "other"}).` };
     case "update_payment": case "delete_payment": return { ok: true, summary: `Payment updated.` };
     case "create_task": return { ok: true, summary: `Task created${I.title ? `: ${I.title}` : ""}${I.due_on ? `, due ${I.due_on}` : ""}.` };
     case "complete_task": return { ok: true, summary: `Marked "${I.title || "the task"}" done.` };

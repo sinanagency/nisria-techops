@@ -9,7 +9,9 @@ export default async function FinanceLedger() {
   const db = admin();
   const { data } = await db
     .from("payments")
-    .select("payee,purpose,category,amount,currency,status,paid_at,due_on,created_at,direction,screenshot_path,source_message_id")
+    .select("payee,purpose,category,amount,currency,status,paid_at,due_on,created_at,direction,screenshot_path,source_message_id,source")
+    // Maisha shop costs (source='maisha_inventory') are SEPARATE from the NGO ledger.
+    .or("source.is.null,source.neq.maisha_inventory")
     .eq("direction", "out")
     .limit(5000);
   const rows = (data || []) as any[];

@@ -23,7 +23,9 @@ const sevTone: Record<string, { tone: string; icon: any }> = {
 export default async function FinancePulse() {
   const db = admin();
   const [{ data: pays }, { data: insights }] = await Promise.all([
-    db.from("payments").select("amount,paid_at,recurrence,status,currency").eq("currency", "KES").limit(5000),
+    // Maisha shop costs (source='maisha_inventory') stay OUT of the NGO spend pulse
+    // (spec 004 Phase 3, SKEPTIC #16). The .or keeps NULL-source legacy rows.
+    db.from("payments").select("amount,paid_at,recurrence,status,currency,source").or("source.is.null,source.neq.maisha_inventory").eq("currency", "KES").limit(5000),
     db.from("finance_insights").select("*").order("created_at", { ascending: false }).limit(8),
   ]);
 

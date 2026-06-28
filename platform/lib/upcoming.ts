@@ -30,7 +30,9 @@ export async function loadUpcoming(db: any): Promise<UpcomingPayment[]> {
 
   const { data } = await db
     .from("payments")
-    .select("id,payee,purpose,amount,currency,due_on,category,recurrence,status,direction")
+    .select("id,payee,purpose,amount,currency,due_on,category,recurrence,status,direction,source")
+    // Maisha shop costs (source='maisha_inventory') are SEPARATE from the NGO ledger.
+    .or("source.is.null,source.neq.maisha_inventory")
     .eq("direction", "out")
     .in("status", ["scheduled", "due", "overdue"])
     .or(`due_on.lte.${window.to},due_on.is.null`)

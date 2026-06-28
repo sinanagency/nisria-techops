@@ -25,7 +25,11 @@ export default async function Treasury() {
   const [{ data: dons }, { data: grants }, { data: pays }, { data: bank }] = await Promise.all([
     db.from("donations").select("amount,currency,status").eq("status", "succeeded").limit(5000),
     db.from("grant_applications").select("amount_awarded,currency,status,funder").eq("status", "won").limit(200),
-    db.from("payments").select("amount,currency,status,category,paid_at").eq("direction", "out").eq("status", "paid").limit(5000),
+    // Maisha shop costs (source='maisha_inventory') are SEPARATE from the NGO
+    // operating spend (spec 004 Phase 3, SKEPTIC #16). Exclude them so a shop cost
+    // never inflates this nonprofit treasury view. The .or keeps NULL-source legacy
+    // rows (a bare .neq would drop them, since NULL != x is NULL → excluded).
+    db.from("payments").select("amount,currency,status,category,paid_at,source").or("source.is.null,source.neq.maisha_inventory").eq("direction", "out").eq("status", "paid").limit(5000),
     db.from("bank_transactions").select("account,txn_date,balance,currency").limit(5000),
   ]);
   const donations = (dons || []) as any[];

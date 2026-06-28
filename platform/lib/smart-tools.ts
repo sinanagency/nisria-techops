@@ -535,6 +535,11 @@ export const SMART_TOOLS = [
   { name: "query_inventory", description: "List Maisha inventory rows filtered by item type (supply/textile/end_product), lifecycle state, and/or collection. Use for 'what finished pieces are in stock', 'show me the textiles', 'what is shipped'. Costs/prices are shown with their own currency, never blended.", input_schema: { type: "object", properties: { item_type: { type: "string", enum: ["supply", "textile", "end_product"] }, lifecycle_state: { type: "string", enum: ["production", "in_stock", "reserved", "sold", "shipped", "in_transit", "delivered", "returned", "restock"] }, collection: { type: "string" } }, required: [] } },
   { name: "inventory_summary", description: "Count Maisha inventory by item type and finished pieces by lifecycle state. Use for 'inventory overview', 'how many pieces are sold vs in stock', 'what is the stock picture'.", input_schema: { type: "object", properties: {} } },
   { name: "get_lifecycle", description: "Show the lifecycle history (the audited state changes) of one finished Maisha product, by tracking number or name. Use for 'where is TRK-0192', 'show the history of the Noor abaya'.", input_schema: { type: "object", properties: { tracking_no_or_name: { type: "string" } }, required: ["tracking_no_or_name"] } },
+  // ---- Maisha sales + finance: revenue, shipment, payment, cost (spec 004 Phase 3) ----
+  { name: "record_sale", description: "Record a SALE of a finished Maisha product (shop revenue, kept entirely separate from NGO donations). In ONE atomic step it logs the revenue, moves the piece to 'sold', and creates a ship task. Use for 'sold the Noor abaya on Folklore for 12000 KES to Aisha', 'TRK-0192 sold online, USD 95'. The piece must be in stock (or reserved) to sell; an already sold/shipped piece is refused. Currency is KES, USD, or AED and is REQUIRED, never mixed, never defaulted (ask if missing). channel one of online, folklore, jensen_shopify, upaya, other.", input_schema: { type: "object", properties: { tracking_no_or_name: { type: "string" }, channel: { type: "string", enum: ["online", "folklore", "jensen_shopify", "upaya", "other"] }, price: { type: "number" }, currency: { type: "string", enum: ["KES", "USD", "AED"] }, customer: { type: "string" }, customer_phone: { type: "string" }, channel_fee: { type: "number", description: "the platform/channel fee taken off the sale, same currency as price" } }, required: ["tracking_no_or_name", "channel", "price", "currency"] } },
+  { name: "record_shipment", description: "Mark a sold Maisha product SHIPPED and store the courier and tracking link. Use for 'shipped TRK-0192 via DHL', 'the Noor abaya went out with Aramex, here is the tracking link'. The piece must be in a 'sold' state to ship; refuses an illegal jump and says why.", input_schema: { type: "object", properties: { tracking_no_or_name: { type: "string" }, courier: { type: "string" }, tracking_url: { type: "string" } }, required: ["tracking_no_or_name"] } },
+  { name: "record_payment_link", description: "Mark a Maisha SALE as paid and attach its payment reference. Use for 'the Noor abaya order is paid', 'TRK-0192 sale settled, ref MPESA-XYZ'. Idempotent: re-running on an already-paid sale is a no-op success. Identify the sale by its tracking number (the most recent open sale for that piece) or a sale id.", input_schema: { type: "object", properties: { sale_id_or_tracking: { type: "string" }, payment_ref: { type: "string" } }, required: ["sale_id_or_tracking"] } },
+  { name: "log_expense", description: "Log a Maisha shop COST (a real outflow for the business: cost of goods, courier, packaging, procurement). Tagged source='maisha_inventory' so it is kept SEPARATE from the NGO operating spend and never inflates the nonprofit view. Use for 'paid 3000 KES for packaging', 'courier cost USD 20'. Idempotent on the same payee/amount/currency/category. Currency is KES, USD, or AED and is REQUIRED, never mixed, never defaulted (ask if missing). category one of cogs, courier, packaging, procurement, other.", input_schema: { type: "object", properties: { amount: { type: "number" }, currency: { type: "string", enum: ["KES", "USD", "AED"] }, category: { type: "string", enum: ["cogs", "courier", "packaging", "procurement", "other"] }, payee: { type: "string" }, note: { type: "string" } }, required: ["amount", "currency", "category"] } },
 ] as const;
 
 export const SMART_TOOL_NAMES = new Set(SMART_TOOLS.map((t) => t.name));
@@ -711,7 +716,9 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
     const m = input.month || new Date().toISOString().slice(0, 7);
     const [{ data: don }, { data: pays }] = await Promise.all([
       db.from("donations").select("amount,currency,status,donated_at"),
-      db.from("payments").select("amount,currency,status,direction,due_on,paid_at,payee,category"),
+      // Maisha shop costs (source='maisha_inventory') stay OUT of the NGO finance
+      // summary (spec 004 Phase 3, SKEPTIC #16). The .or keeps NULL-source legacy rows.
+      db.from("payments").select("amount,currency,status,direction,due_on,paid_at,payee,category,source").or("source.is.null,source.neq.maisha_inventory"),
     ]);
     const succ = (don || []).filter((d: any) => d.status === "succeeded");
     const inMonth = succ.filter((d: any) => (d.donated_at || "").startsWith(m));
@@ -1569,7 +1576,35 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
         byLifecycle[s] = (byLifecycle[s] || 0) + 1;
       }
     }
-    return { total: rows.length, by_type: byType, by_lifecycle: byLifecycle };
+    // SALES VISIBILITY (spec 004 Phase 3, SKEPTIC #15): inventory_sales is otherwise
+    // read by ZERO live surfaces, so shop revenue would sit in a silo off the books.
+    // Surface it here. Currency law: revenue is bucketed per-currency, NEVER blended,
+    // and channel_fee is netted within the same currency only.
+    const { data: salesRows } = await db.from("inventory_sales")
+      .select("price,currency,channel_fee,payment_status").limit(5000);
+    const sales = (salesRows || []) as any[];
+    const revenueByCurrency: Record<string, number> = {};
+    const paidByCurrency: Record<string, number> = {};
+    const byPaymentStatus: Record<string, number> = {};
+    for (const s of sales) {
+      const ccy = String(s.currency || "").toUpperCase();
+      if (!["KES", "USD", "AED"].includes(ccy)) continue; // refuse unknown currency (no blend)
+      const net = Number(s.price || 0) - Number(s.channel_fee || 0);
+      revenueByCurrency[ccy] = (revenueByCurrency[ccy] || 0) + net;
+      const st = String(s.payment_status || "sold");
+      byPaymentStatus[st] = (byPaymentStatus[st] || 0) + 1;
+      if (st === "paid" || st === "settled") paidByCurrency[ccy] = (paidByCurrency[ccy] || 0) + net;
+    }
+    return {
+      total: rows.length, by_type: byType, by_lifecycle: byLifecycle,
+      sales: {
+        count: sales.length,
+        by_payment_status: byPaymentStatus,
+        // each currency rendered with its own label, never summed across currencies
+        net_revenue: Object.fromEntries(Object.entries(revenueByCurrency).map(([c, v]) => [c, money(v, c as any)])),
+        net_revenue_paid: Object.fromEntries(Object.entries(paidByCurrency).map(([c, v]) => [c, money(v, c as any)])),
+      },
+    };
   }
   if (name === "get_lifecycle") {
     const ref = String(input.tracking_no_or_name || "").trim();
@@ -4868,6 +4903,217 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     if (enErr) return { ok: false, summary: humanize(`I could not enrich "${target.tracking_no || target.name}" just now, so I have not. Want me to try again?`, opts), error: (enErr as any).message || "inventory enrich failed" };
     await emit({ type: "inventory.enriched", source: "agent:sasa", actor: "Nur", subject_type: "inventory", subject_id: target.id, payload: { item_type: itemType, tracking_no: patch.tracking_no || target.tracking_no || null, via: "smart" } });
     return { ok: true, summary: humanize(`Enriched ${target.tracking_no || target.name} as a ${itemType === "end_product" ? "finished piece" : itemType}.`, opts), affordance: { kind: "open", label: "Open inventory", href: "/inventory" }, detail: { inventory_id: target.id, item_type: itemType } };
+  }
+
+  // =========================================================================
+  // MAISHA SALES + FINANCE (spec 004 Phase 3). Shop money, kept SEPARATE from
+  // NGO donations. Every revenue/cost row is tagged source='maisha_inventory'
+  // so it never touches the nonprofit operating view (see lib/expenses.ts).
+  // =========================================================================
+
+  // record_sale: ONE atomic sale event — revenue row + lifecycle→sold + ship task.
+  // ATOMICITY (SKEPTIC #1): there is no DB transaction helper on the live admin()
+  // client, so we ORDER the writes by criticality and verify each before the next:
+  //   1) sellable-state check FIRST. If the item is not in_stock/reserved we write
+  //      NOTHING and return ok:false (no false "done", no orphan revenue row).
+  //   2) insert the revenue row (the source of truth). If it fails → ok:false,
+  //      nothing else written.
+  //   3) move lifecycle→sold. If it fails → roll back the revenue row (delete it)
+  //      and return ok:false, so we never have revenue with the piece still "in
+  //      stock" (the double-sell hole). The DB CHECK on payment_status/channel and
+  //      the per-sale UNIQUE batch_tag also backstop a bad write.
+  //   4) audit event + ship task are best-effort: by here the sale is real and the
+  //      piece is sold; a failed ship-task is surfaced in detail (the sale stands,
+  //      we tell Nur the task did not land) rather than faking either way.
+  // BATCH_TAG (SKEPTIC #2): derived per SALE EVENT — `inv:<tracking|id>:sale:<N+1>`
+  // where N = count of prior sales for THIS piece. A returned→restock→in_stock→
+  // resold piece gets a NEW tag (sale:2), so the resale is NOT swallowed as a dupe.
+  if (name === "record_sale") {
+    if (ctx.tier === "team") return { ok: false, summary: humanize("Only operators can do that, so I have not.", opts), error: "team_tier_denied" };
+    const ref = String(input.tracking_no_or_name || "").trim();
+    if (!ref) return { ok: false, summary: "Which piece sold?", error: "no ref" };
+    const channel = String(input.channel || "").toLowerCase().trim();
+    const CHANNELS = ["online", "folklore", "jensen_shopify", "upaya", "other"];
+    if (!CHANNELS.includes(channel)) return { ok: false, summary: humanize(`Which channel was the sale on (online, folklore, jensen_shopify, upaya, or other)?`, opts), error: "bad channel" };
+    const price = Number(input.price);
+    if (!(price > 0)) return { ok: false, summary: "I need the sale price.", error: "no price" };
+    // CURRENCY LAW: required, never defaulted, never blended.
+    const currency = String(input.currency || "").toUpperCase();
+    if (!["KES", "USD", "AED"].includes(currency)) return { ok: false, summary: humanize(`What currency was the sale in (KES, USD, or AED)? I will not assume one.`, opts), error: "currency missing" };
+    const channelFee = input.channel_fee != null && Number(input.channel_fee) >= 0 ? Number(input.channel_fee) : 0;
+    const customer = input.customer ? String(input.customer).slice(0, 120) : null;
+    const customerPhone = input.customer_phone ? String(input.customer_phone).slice(0, 32) : null;
+
+    const { row, ambiguous } = await findEndProduct(db, ref);
+    if (ambiguous) return { ok: false, summary: humanize(`A few pieces match: ${ambiguous.map((p) => p.tracking_no || p.name).join(", ")}. Which one?`, opts), ambiguous: true, detail: { candidates: ambiguous } };
+    if (!row) return { ok: false, summary: humanize(`I could not find a finished product matching "${ref}".`, opts), error: "no product" };
+
+    // (1) SELLABLE-STATE GATE — atomic precondition. Only in_stock/reserved (or an
+    // unset lifecycle) can sell. A sold/shipped/delivered/returned piece is refused;
+    // a returned piece must be restocked to in_stock first. WRITE NOTHING on refusal.
+    const from = (row.lifecycle_state ?? "in_stock") as InvLifecycleState;
+    if (!["in_stock", "reserved"].includes(from)) {
+      return { ok: false, summary: humanize(`I have not recorded a sale: ${row.tracking_no || row.name} is "${from}", not in stock to sell.`, opts), error: "not sellable", detail: { from: row.lifecycle_state } };
+    }
+
+    // BATCH_TAG per sale-event (resale-safe, SKEPTIC #2).
+    const { count: priorSales } = await db.from("inventory_sales").select("id", { count: "exact", head: true }).eq("inventory_id", row.id);
+    const seq = (typeof priorSales === "number" ? priorSales : 0) + 1;
+    const batchTag = `inv:${row.tracking_no || row.id}:sale:${seq}`;
+
+    // Idempotency: if this exact sale event already landed, no-op success (re-run safe).
+    const { data: existingSale } = await db.from("inventory_sales").select("id").eq("batch_tag", batchTag).limit(1);
+    if (existingSale && existingSale.length) {
+      return { ok: true, summary: humanize(`That sale of ${row.tracking_no || row.name} is already recorded.`, opts), detail: { deduped: true, sale_id: existingSale[0].id, batch_tag: batchTag } };
+    }
+
+    const token = `TOK-${randomUUID()}`;
+    const expires = new Date(Date.now() + 14 * 86400000).toISOString();
+
+    // (2) REVENUE ROW — the source of truth, written first after the gate.
+    const { data: sale, error: saleErr } = await db.from("inventory_sales").insert({
+      inventory_id: row.id, tracking_no: row.tracking_no || null, channel,
+      customer, customer_phone: customerPhone, customer_token: token, token_expires_at: expires,
+      price, currency, channel_fee: channelFee, payment_status: "sold",
+      source: "maisha_inventory", batch_tag: batchTag, created_by: ctx.operatorName || "Nur",
+    }).select("id").single();
+    // VERIFIED WRITE (KT #336): no ok:true on a failed insert.
+    if (saleErr || !sale) return { ok: false, summary: humanize(`I could not record the sale of ${row.tracking_no || row.name} just now, so I have not. Want me to try again?`, opts), error: (saleErr as any)?.message || "sale insert failed" };
+
+    // (3) LIFECYCLE → sold. If this fails, ROLL BACK the revenue row so we never
+    // leave revenue against an item still marked in stock (the double-sell hole).
+    const { error: lcErr } = await db.from("inventory").update({ lifecycle_state: "sold", updated_at: new Date().toISOString() }).eq("id", row.id);
+    if (lcErr) {
+      // Compensating delete — AWAIT and CAPTURE its error. If the rollback itself
+      // fails we have an orphan revenue row against an in-stock piece; never claim
+      // "recorded nothing" then. Tell Nur to flag it (SKEPTIC #1 atomicity).
+      const { error: rbErr } = await db.from("inventory_sales").delete().eq("id", sale.id);
+      if (rbErr) {
+        return { ok: false, summary: humanize(`I could not complete the sale of ${row.tracking_no || row.name}: the stock update failed and I could not roll back the revenue row, flag this. A revenue row (${money(price, currency as any)}) may be orphaned against a piece still in stock.`, opts), error: `lifecycle update failed AND rollback failed: ${(lcErr as any).message || "lifecycle update failed"} / ${(rbErr as any).message || "rollback delete failed"}`, detail: { orphan_sale_id: sale.id, batch_tag: batchTag } };
+      }
+      return { ok: false, summary: humanize(`I could not complete the sale of ${row.tracking_no || row.name} (the stock update failed), so I have rolled it back and recorded nothing. Want me to try again?`, opts), error: (lcErr as any).message || "lifecycle update failed" };
+    }
+
+    // (4) Best-effort: audit event + ship task. The sale is now real and the piece
+    // is sold; report a failed ship task honestly rather than fabricate either side.
+    await db.from("inventory_lifecycle_events").insert({
+      inventory_id: row.id, from_state: from, to_state: "sold",
+      evidence: `sold via ${channel}${customer ? ` to ${customer}` : ""}`,
+      source_message_external_id: ctx.sourceMessageId || null, created_by: ctx.operatorName || "Nur",
+    });
+    let shipTaskOk = false;
+    const { error: taskErr } = await db.from("tasks").insert({
+      title: `Ship ${row.tracking_no || row.name} to ${customer || "customer"} (${channel})`,
+      status: "todo", priority: "high", source: "inventory", source_kind: "ship",
+      ref_inventory_id: row.id, created_by: "sasa",
+    });
+    shipTaskOk = !taskErr;
+
+    await emit({ type: "inventory.sale_recorded", source: "agent:sasa", actor: "Nur", subject_type: "inventory_sales", subject_id: sale.id, payload: { tracking_no: row.tracking_no || null, channel, price, currency, channel_fee: channelFee, customer, via: "smart" } });
+    return {
+      ok: true,
+      summary: humanize(`Recorded the sale of ${row.tracking_no || row.name} for ${money(price, currency as any)} via ${channel}${shipTaskOk ? ", and queued the ship task" : " (the ship task did not save, you may want to add it)"}.`, opts),
+      affordance: { kind: "open", label: "Open inventory", href: "/inventory" },
+      detail: { sale_id: sale.id, batch_tag: batchTag, ship_task: shipTaskOk, currency, price, channel },
+    };
+  }
+
+  // record_shipment: lifecycle sold→shipped + store courier link (no money).
+  if (name === "record_shipment") {
+    if (ctx.tier === "team") return { ok: false, summary: humanize("Only operators can do that, so I have not.", opts), error: "team_tier_denied" };
+    const ref = String(input.tracking_no_or_name || "").trim();
+    if (!ref) return { ok: false, summary: "Which piece shipped?", error: "no ref" };
+    const courier = input.courier ? String(input.courier).slice(0, 80) : null;
+    const trackingUrl = input.tracking_url ? String(input.tracking_url).slice(0, 500) : null;
+    const { row, ambiguous } = await findEndProduct(db, ref);
+    if (ambiguous) return { ok: false, summary: humanize(`A few pieces match: ${ambiguous.map((p) => p.tracking_no || p.name).join(", ")}. Which one?`, opts), ambiguous: true, detail: { candidates: ambiguous } };
+    if (!row) return { ok: false, summary: humanize(`I could not find a finished product matching "${ref}".`, opts), error: "no product" };
+    const from = (row.lifecycle_state ?? null) as InvLifecycleState | null;
+    // Honor the transition FIRST; only mutate links if the move is legal (SKEPTIC #1 shape).
+    const verdict = evaluateInvTransition(from, "shipped");
+    if (!verdict.ok) return { ok: false, summary: humanize(`I have not marked ${row.tracking_no || row.name} shipped: ${verdict.reason}.`, opts), error: "illegal transition", detail: { from, to: "shipped" } };
+    if (verdict.idempotent) return { ok: true, summary: humanize(`${row.tracking_no || row.name} is already shipped.`, opts), already_done: true, detail: { inventory_id: row.id, idempotent: true } };
+
+    // Read current links to merge the courier link in (do not clobber other links).
+    const { data: cur } = await db.from("inventory").select("links").eq("id", row.id).single();
+    const links = { ...((cur?.links as any) || {}), courier: courier, courier_url: trackingUrl };
+    const { error: upErr } = await db.from("inventory").update({ lifecycle_state: "shipped", links, updated_at: new Date().toISOString() }).eq("id", row.id);
+    // VERIFIED WRITE: never say "shipped" unless it landed.
+    if (upErr) return { ok: false, summary: humanize(`I could not mark ${row.tracking_no || row.name} shipped just now, so I have not. Want me to try again?`, opts), error: (upErr as any).message || "shipment update failed" };
+    await db.from("inventory_lifecycle_events").insert({
+      inventory_id: row.id, from_state: from, to_state: "shipped",
+      evidence: courier ? `shipped via ${courier}` : "shipped",
+      source_message_external_id: ctx.sourceMessageId || null, created_by: ctx.operatorName || "Nur",
+    });
+    await emit({ type: "inventory.shipped", source: "agent:sasa", actor: "Nur", subject_type: "inventory", subject_id: row.id, payload: { tracking_no: row.tracking_no || null, courier, tracking_url: trackingUrl, via: "smart" } });
+    return { ok: true, summary: humanize(`Marked ${row.tracking_no || row.name} shipped${courier ? ` via ${courier}` : ""}.`, opts), affordance: { kind: "open", label: "Open inventory", href: "/inventory" }, detail: { inventory_id: row.id, courier, tracking_url: trackingUrl } };
+  }
+
+  // record_payment_link: mark a sale paid + attach ref. Idempotent (re-run no-op).
+  if (name === "record_payment_link") {
+    if (ctx.tier === "team") return { ok: false, summary: humanize("Only operators can do that, so I have not.", opts), error: "team_tier_denied" };
+    const ref = String(input.sale_id_or_tracking || "").trim();
+    if (!ref) return { ok: false, summary: "Which sale was paid?", error: "no ref" };
+    const paymentRef = input.payment_ref ? String(input.payment_ref).slice(0, 120) : null;
+    // Resolve the sale: by exact id, else the most recent sale for that tracking_no.
+    let sale: any = null;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref);
+    if (isUuid) {
+      const { data } = await db.from("inventory_sales").select("id,payment_status,tracking_no").eq("id", ref).limit(1);
+      sale = data && data.length ? data[0] : null;
+    }
+    if (!sale) {
+      const trk = ref.match(/\bTRK[-\s]?(\d+)\b/i);
+      const tn = trk ? `TRK-${trk[1].padStart(4, "0")}` : ref;
+      const { data } = await db.from("inventory_sales").select("id,payment_status,tracking_no").eq("tracking_no", tn).order("created_at", { ascending: false }).limit(1);
+      sale = data && data.length ? data[0] : null;
+    }
+    if (!sale) return { ok: false, summary: humanize(`I could not find a sale for "${ref}".`, opts), error: "no sale" };
+    // IDEMPOTENT: already paid/settled → no-op success.
+    if (sale.payment_status === "paid" || sale.payment_status === "settled") {
+      return { ok: true, summary: humanize(`The sale of ${sale.tracking_no || ref} is already marked paid.`, opts), already_done: true, detail: { sale_id: sale.id, deduped: true } };
+    }
+    const patch: Record<string, any> = { payment_status: "paid" };
+    if (paymentRef) patch.payment_ref = paymentRef;
+    const { error: upErr } = await db.from("inventory_sales").update(patch).eq("id", sale.id);
+    // VERIFIED WRITE: never say "paid" unless it landed.
+    if (upErr) return { ok: false, summary: humanize(`I could not mark that sale paid just now, so I have not. Want me to try again?`, opts), error: (upErr as any).message || "payment_link update failed" };
+    await emit({ type: "inventory.sale_paid", source: "agent:sasa", actor: "Nur", subject_type: "inventory_sales", subject_id: sale.id, payload: { tracking_no: sale.tracking_no || null, payment_ref: paymentRef, via: "smart" } });
+    return { ok: true, summary: humanize(`Marked the sale of ${sale.tracking_no || ref} paid${paymentRef ? ` (ref ${paymentRef})` : ""}.`, opts), affordance: { kind: "open", label: "Open inventory", href: "/inventory" }, detail: { sale_id: sale.id, payment_ref: paymentRef } };
+  }
+
+  // log_expense: a Maisha shop COST → payments row tagged source='maisha_inventory'
+  // so it is kept OUT of the NGO operating spend (lib/expenses.ts filters it out).
+  // Idempotent on batch_tag (DB UNIQUE backstops a race).
+  if (name === "log_expense") {
+    if (ctx.tier === "team") return { ok: false, summary: humanize("Only operators can do that, so I have not.", opts), error: "team_tier_denied" };
+    const amount = Number(input.amount);
+    if (!(amount > 0)) return { ok: false, summary: "I need the expense amount.", error: "no amount" };
+    // CURRENCY LAW: required, never defaulted, never blended.
+    const currency = String(input.currency || "").toUpperCase();
+    if (!["KES", "USD", "AED"].includes(currency)) return { ok: false, summary: humanize(`What currency was the expense in (KES, USD, or AED)? I will not assume one.`, opts), error: "currency missing" };
+    const CATS = ["cogs", "courier", "packaging", "procurement", "other"];
+    let category = String(input.category || "other").toLowerCase();
+    if (!CATS.includes(category)) category = "other";
+    const payee = input.payee ? String(input.payee).slice(0, 120) : "Maisha";
+    const note = input.note ? String(input.note).slice(0, 400) : null;
+    const paidAt = new Date().toISOString();
+
+    // Idempotency on batch_tag: same payee+amount+currency+category+day is one cost.
+    const batchTag = `inv:exp:${payee}:${amount}:${currency}:${category}:${paidAt.slice(0, 10)}`;
+    const { data: dupe } = await db.from("payments").select("id").eq("batch_tag", batchTag).limit(1);
+    if (dupe && dupe.length) return { ok: true, summary: humanize(`That expense of ${money(amount, currency as any)} (${category}) is already logged.`, opts), detail: { deduped: true, payment_id: dupe[0].id, batch_tag: batchTag } };
+
+    const { data: pay, error: payErr } = await db.from("payments").insert({
+      direction: "out", payee, purpose: note, amount, currency,
+      category, status: "paid", paid_at: paidAt, recurrence: "none",
+      ref: `MAISHA-${Date.now()}`, created_by: ctx.operatorName || "Nur",
+      source: "maisha_inventory", batch_tag: batchTag,
+    }).select("id").single();
+    // VERIFIED WRITE (KT #336): no ok:true on a failed insert.
+    if (payErr || !pay) return { ok: false, summary: humanize(`I could not log that ${money(amount, currency as any)} expense just now, so I have not. Want me to try again?`, opts), error: (payErr as any)?.message || "expense insert failed" };
+    await emit({ type: "inventory.expense_logged", source: "agent:sasa", actor: "Nur", subject_type: "payment", subject_id: pay.id, payload: { payee, amount, currency, category, source: "maisha_inventory", via: "smart" } });
+    return { ok: true, summary: humanize(`Logged a Maisha cost of ${money(amount, currency as any)} (${category})${payee !== "Maisha" ? ` to ${payee}` : ""}.`, opts), affordance: { kind: "open", label: "Open Finance", href: "/finance" }, detail: { payment_id: pay.id, amount, currency, category, source: "maisha_inventory" } };
   }
 
   // transition_state: guarded, idempotent lifecycle move + audited event.

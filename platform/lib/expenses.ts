@@ -71,7 +71,13 @@ export async function loadExpenses(db: any, period: Period): Promise<ExpenseRow[
   const [{ data: payRows }, { data: bankRows }] = await Promise.all([
     db
       .from("payments")
-      .select("id,payee,purpose,category,amount,currency,paid_at,screenshot_path,method")
+      .select("id,payee,purpose,category,amount,currency,paid_at,screenshot_path,method,source")
+      // Maisha shop costs (source='maisha_inventory') are SEPARATE from the NGO
+      // operating view (spec 004 Phase 3, SKEPTIC #16). Exclude them so a courier
+      // or COGS cost never inflates the nonprofit's donor-facing Money Out. NOTE:
+      // a bare .neq drops NULL-source legacy rows too (NULL != x is NULL → excluded),
+      // so we OR in the NULL bucket to keep every pre-existing NGO payment visible.
+      .or("source.is.null,source.neq.maisha_inventory")
       .eq("direction", "out")
       .eq("status", "paid")
       .gte("paid_at", period.from)

@@ -99,7 +99,11 @@ export default async function Finance() {
 
   const [donRes, payRes, teamRes, expRows, upcomingRows, expLastMonth, monthlyGoal, refunds] = await Promise.all([
     db.from("donations").select("amount,currency,status,donated_at").gte("donated_at", thisMonth.from).limit(2000),
-    db.from("payments").select("*").limit(1000),
+    // Maisha shop costs (source='maisha_inventory') are SEPARATE from the NGO
+    // finance view (spec 004 Phase 3, SKEPTIC #16) so they never inflate operating
+    // spend, payroll, or paid history here. The .or keeps NULL-source legacy rows
+    // (a bare .neq would drop them: NULL != x is NULL → excluded).
+    db.from("payments").select("*").or("source.is.null,source.neq.maisha_inventory").limit(1000),
     db.from("team_members").select("id,name").limit(500),
     loadExpenses(db, thisMonth),
     loadUpcoming(db),

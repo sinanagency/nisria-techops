@@ -45,8 +45,11 @@ export const MONEY_MANIFEST: DomainManifest = {
     // restored from orphan sweep (existed in smart-tools, unassigned to any domain)
     "add_donor", "update_donor", "add_campaign", "update_campaign", "set_monthly_goal",
     "log_team_payment", "set_beneficiary_funding",
+    // Maisha sales + finance (spec 004 Phase 3). Shop money, kept SEPARATE from NGO
+    // donations and operating spend. Admin-only (this domain is admin), never team.
+    "record_sale", "record_payment_link", "log_expense",
   ],
-  description: "Payments, donations, finance. Handles log payments (staged then confirmed), query donations, view financial summaries. NEVER invent figures.",
+  description: "Payments, donations, finance. Handles log payments (staged then confirmed), query donations, view financial summaries, and Maisha shop sales/costs (separate from NGO money). NEVER invent figures.",
   permission: "admin",
 };
 
@@ -121,8 +124,11 @@ export const PROGRAMS_MANIFEST: DomainManifest = {
     // Maisha inventory: typed capture + lifecycle tracking (spec 004)
     "upsert_end_product", "upsert_supply", "upsert_textile", "classify_and_enrich",
     "transition_state", "query_inventory", "inventory_summary", "get_lifecycle",
+    // Maisha shipment (spec 004 Phase 3): lifecycle sold→shipped + courier link.
+    // Money-bearing sale/cost tools live in the MONEY domain, not here.
+    "record_shipment",
   ],
-  description: "Maisha inventory and donor wishlist. Handles stock items (quantity, Folklore listing) and fundable needs (school kits, beds, fees). Inventory counts and wishlist funding never invent figures.",
+  description: "Maisha inventory and donor wishlist. Handles stock items (quantity, Folklore listing), lifecycle and shipment, and fundable needs (school kits, beds, fees). Inventory counts and wishlist funding never invent figures.",
   permission: "both",
 };
 

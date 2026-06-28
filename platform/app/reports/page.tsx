@@ -36,7 +36,9 @@ export default async function Reports() {
 
   const [donRes, payRes, invoices] = await Promise.all([
     db.from("donations").select("amount,status,currency,donated_at").limit(5000),
-    db.from("payments").select("*").limit(5000),
+    // Maisha shop costs (source='maisha_inventory') are excluded from NGO report
+    // figures (spec 004 Phase 3, SKEPTIC #16). The .or keeps NULL-source legacy rows.
+    db.from("payments").select("*").or("source.is.null,source.neq.maisha_inventory").limit(5000),
     listInvoices(20),
   ]);
   const donations = (donRes.data || []) as any[];
