@@ -209,7 +209,13 @@ export async function readEmail(id: string, subject?: string): Promise<{ id: str
   const mj = await mr.json();
   if (mj.error) return null;
   const headers = mj.payload?.headers || [];
-  return { id, from: header(headers, "From"), subject: header(headers, "Subject"), date: header(headers, "Date"), body: extractGmailBody(mj.payload) };
+  const result = { id, from: header(headers, "From"), subject: header(headers, "Subject"), date: header(headers, "Date"), body: extractGmailBody(mj.payload) };
+  // Full email awareness: remember every email the bot reads. Both callers route
+  // through here (the read_email tool + the deterministic worker read path), so
+  // capturing at this primitive covers both with one seam. Deduped by message id,
+  // dynamic import to avoid any cycle, fire-and-forget so the read stays snappy.
+  void import("./memory").then((m) => m.rememberEmail(result)).catch(() => {});
+  return result;
 }
 
 // Search the sasa@ inbox with a Gmail query string (e.g. 'from:imbank subject:statement

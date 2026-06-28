@@ -4,6 +4,7 @@
 // work + imported assets + the ORG'S OWN HISTORY (key events, losses, assets,
 // people, programs captured in Settings onboarding).
 import { admin } from "./supabase-admin";
+import { cleanEmail } from "./email-render";
 import { embed, embedderConfigured, toVectorLiteral } from "./embedder";
 import { OWNER_PRIVATE_KIND } from "./privacy";
 import { isSandbox } from "./sandbox";
@@ -92,6 +93,40 @@ export async function rememberUpsert(
     console.error("rememberUpsert failed", err);
     return null;
   }
+}
+
+// Pure formatter (testable, zero-drift between code and wall): the brain-row
+// text for an email. Keeps sender + subject + full body up to the embed window.
+export function emailMemoryText(e: { from?: string | null; subject?: string | null; date?: string | null; body?: string | null }): string {
+  const who = (e.from || "unknown sender").trim();
+  const when = e.date ? ` on ${e.date}` : "";
+  const subj = e.subject ? ` re "${e.subject}"` : "";
+  const body = String(e.body || "").replace(/\s+/g, " ").trim().slice(0, 3800);
+  return `Email from ${who}${when}${subj}: ${body}`.slice(0, 4000);
+}
+
+// Email -> brain (full email awareness). Persists every email the bot READS —
+// on-demand owner reads (read_email tool + worker) and the proactive meeting
+// sweep — so a later reference resolves ("what did X email about", "the doc he
+// sent"). Body is cleaned through the one allowed render path (cleanEmail, lib
+// law 5) before storage. Deduped by gmail message id via the singleton slug, so
+// re-reading the same email overwrites in place instead of piling up.
+// Best-effort + callers fire-and-forget, so a read never blocks on the write.
+export async function rememberEmail(e: { id: string; from?: string | null; subject?: string | null; date?: string | null; body?: string | null }): Promise<void> {
+  if (!e?.id) return;
+  const cleaned = cleanEmail(String(e.body || ""));
+  const content = emailMemoryText({ from: e.from, subject: e.subject, date: e.date, body: cleaned });
+  if (content.length < 20) return;
+  try {
+    await rememberUpsert({
+      kind: "message",
+      title: `Email: ${e.subject || "(no subject)"}`.slice(0, 200),
+      content,
+      metadata: { source: "email", from: e.from || null, date: e.date || null },
+      source_type: "email",
+      slug: `email:${e.id}`,
+    });
+  } catch { /* best-effort; brain capture never blocks a read */ }
 }
 
 // Retrieve grounding for a draft. Strategy:

@@ -8,6 +8,7 @@
 // pipeline already uses. No new consent step.
 
 import { fetchFullMessage, searchInboxFor } from "@/lib/gmail";
+import { rememberEmail } from "@/lib/memory";
 import { dispatchMeetingBot } from "@/lib/digital-u";
 import { admin } from "@/lib/supabase-admin";
 import { sendTextAndLog, phoneKey } from "@/lib/whatsapp";
@@ -147,6 +148,9 @@ export async function sweepNurInbox(): Promise<SweepResult> {
     candidates++;
     try {
       const full = await fetchFullMessage(NUR_SUBJECT, hit.id);
+      // Full email awareness: remember every email the sweep reads (deduped by
+      // message id), so a later reference resolves on recall. Fire-and-forget.
+      void rememberEmail({ id: hit.id, from: hit.from, subject: hit.subject, date: hit.date, body: full.body });
       const ext = await extractInvite(hit.subject || "", hit.snippet || "", full.body);
 
       if (!ext.link || !ext.startIso) {
