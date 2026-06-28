@@ -81,7 +81,9 @@ ${extractedText.slice(0, 3000)}
     if (!jsonMatch) return { domain: "general", confidence: 0.3, reason: "classify_no_json" };
 
     const parsed = JSON.parse(jsonMatch[0]);
-    const domain = ["work", "money", "people", "comms", "knowledge", "general"].includes(parsed.domain)
+    // All 8 domains (programs + library were missing, so an inventory photo or a
+    // saved-link screenshot silently coerced to general on the media path).
+    const domain = ["work", "money", "people", "comms", "knowledge", "programs", "library", "general"].includes(parsed.domain)
       ? parsed.domain
       : "general";
     const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0.5;

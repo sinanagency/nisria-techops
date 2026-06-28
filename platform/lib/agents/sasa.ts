@@ -152,13 +152,19 @@ const COMPLETION_TOOLS = new Set([
   "set_bot_access", "import_contacts", "transfer_drive_file",
   "approve_case", "decline_case", "move_case", "edit_case", "merge_case", "delete_case",
   "set_public_profile", "set_beneficiary_funding", "delete_beneficiary", "merge_beneficiary",
+  // Added after the tool-contract audit: real write/send tools that were missing,
+  // so a true success is not falsely rewritten as a failure (inverted lie) and a
+  // false completion claim is still caught by a category-matched tool.
+  "complete_calendar_event", "log_team_payment", "log_payout", "schedule_payment", "mark_payment_paid",
+  "publish_social_post", "send_resource", "add_grant", "update_grant_status", "add_campaign", "update_campaign",
+  "add_donor", "update_donor", "set_monthly_goal", "edit_brain_section", "save_press_item", "tag_press_item",
 ]);
 
 // CLAIM-SHAPE → REQUIRED TOOL CATEGORY. Any completion-class tool's ok=true used
 // to back ANY completion claim, which let a "Done. Logged KES 3,625" through on
 // the back of an unrelated remember_fact / brain auto-capture (Fargo Courier
 // incident 2026-06-05, 13:11). Now the guard requires a CATEGORY-MATCHED tool.
-const PAYMENT_TOOLS = new Set(["record_payment", "update_payment", "delete_payment"]);
+const PAYMENT_TOOLS = new Set(["record_payment", "update_payment", "delete_payment", "log_team_payment", "log_payout", "schedule_payment", "mark_payment_paid"]);
 const TASK_TOOLS = new Set(["create_task", "update_task", "complete_task", "reopen_task", "delete_task"]);
 // Read-only task tools. A successful list_tasks legitimately returns rows whose
 // TITLES may contain "complete"/"done"/"finish" (e.g. Nur's task "Complete the
@@ -175,7 +181,7 @@ const CASE_TOOLS = new Set(["approve_case", "decline_case", "move_case", "edit_c
 // (the row actually landed). The case shape's backing set must also accept the
 // beneficiary write tools. (Same family as the Jensen-banned-word break, KT #335.)
 const CASE_OR_BENEFICIARY_TOOLS = new Set([...CASE_TOOLS, "add_beneficiary", "update_beneficiary", "set_public_profile", "set_beneficiary_funding", "delete_beneficiary", "merge_beneficiary"]);
-const EVENT_TOOLS = new Set(["create_event", "move_event", "delete_event"]);
+const EVENT_TOOLS = new Set(["create_event", "move_event", "delete_event", "complete_calendar_event"]);
 const CONTACT_TOOLS = new Set(["add_contact", "update_contact", "add_team_member", "update_team_member", "add_beneficiary", "update_beneficiary"]);
 const SHAPE_MONEY = /\b(?:KES|USD|\$|KSh|Ksh)\s*[\d,\.]+|[\d,]+(?:\.\d+)?\s*(?:KES|USD|\$|KSh)\b/i;
 const SHAPE_TASK = /\b(?:task|reminder|todo)\b/i;
@@ -371,7 +377,7 @@ function claimsPluralCompletionMismatch(reply: string, toolRuns: { name: string;
 // in Needs You for your approval, nothing has sent yet." so the queue/send wall is
 // already a tenant policy. SEND_TOOLS now reflects only tools that deliver to a
 // human recipient on this turn.
-const SEND_TOOLS = new Set(["message_person", "post_to_group", "send_file_to_person", "transfer_drive_file", "relay_to_colleague"]);
+const SEND_TOOLS = new Set(["message_person", "post_to_group", "send_file_to_person", "transfer_drive_file", "relay_to_colleague", "publish_social_post", "send_resource"]);
 // HONESTY-1 (2026-06-15, KT #287 audit). Shared verb list so PASSIVE_SEND,
 // ELLIPTICAL_SEND, NAMED_PAIR_SEND, and the new claimsSequentialSendMismatch all
 // inherit the same family. Drift between these three regexes was the original

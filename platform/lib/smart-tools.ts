@@ -553,7 +553,7 @@ export const isReadTool = (name: string) => READ_TOOLS.has(name);
 // the group, or any non-owner), tools that read the raw message log exclude the
 // owner's (Taona's) 727 line. Defaults to true so the web console + unknown
 // callers keep full visibility; the WhatsApp path passes the real rank.
-async function runRead(db: any, name: string, input: any, tier: "admin" | "team" = "admin", viewerIsOwner: boolean = true, contactId: string | null = null): Promise<any> {
+async function runRead(db: any, name: string, input: any, tier: "admin" | "team" = "admin", viewerIsOwner: boolean = true, contactId: string | null = null, rank: "owner" | "founder" | "member" | null = null): Promise<any> {
   // PII WALL (code-enforced, not prompt-only): donor + finance reads are owner/admin
   // only. Team-tier callers (incl. the group surface) are refused here regardless of
   // what the model was offered, so an injection naming one of these still fails.
@@ -726,9 +726,12 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
   }
   // ---- READ: get_credential (vault password retrieval) ----
   if (name === "get_credential") {
-    // SECRET WALL: logins are owner-only. Never in a team group, never for anyone
-    // but Nur on her own channel. Mirror the beneficiary PII wall.
-    if (tier === "team" || !viewerIsOwner) return { error: "not available", note: "Saved logins are private to Nur and are not available here." };
+    // SECRET WALL (fail-closed): logins are for the MASTER tier only, Nur (founder)
+    // and Taona (owner), never team, never a member, and never a rank-absent/ambiguous
+    // caller. Gating on rank (not the owner-only viewerIsOwner) both restores Nur, who
+    // is "founder", and closes the rank-absent default-open leak a skeptic found.
+    const isMaster = rank === "owner" || rank === "founder";
+    if (tier === "team" || !isMaster) return { error: "not available", note: "Saved logins are available only to Nur and Taona on their own channel." };
     const q = String(input.query || "").trim().toLowerCase();
     if (!q) return { error: "no query", note: "Which login do you want — name the platform." };
     const { data } = await db.from("resources").select("id,title,url,username,secret_ciphertext,secret_iv,secret_tag").eq("is_credential", true).order("created_at", { ascending: false }).limit(200);
@@ -4660,7 +4663,7 @@ export async function runSmartTool(name: string, input: any, ctx?: { sourceGroup
   // (web console / legacy callers), preserving full visibility there.
   const viewerIsOwner = ctx?.tier === "team" ? false : (ctx?.rank ? ctx.rank === "owner" : true);
   try {
-    if (isReadTool(name)) return await runRead(db, name, input || {}, ctx?.tier || "admin", viewerIsOwner, ctx?.contactId || null);
+    if (isReadTool(name)) return await runRead(db, name, input || {}, ctx?.tier || "admin", viewerIsOwner, ctx?.contactId || null, ctx?.rank ?? null);
     return await runAction(db, name, input || {}, ctx || {});
   } catch (e: any) {
     return { ok: false, summary: "", error: e?.message || "tool failed" };
