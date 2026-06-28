@@ -65,9 +65,16 @@ const flat = (s) => s.replace(/\s+/g, " ");
 
 // ---- A5: skeptic E — an irreversible/money confirm requires a STRICT yes (no soft praise) ----
 {
-  if (!/const hasIrreversible = \(pend \|\| \[\]\)\.some\(\(p: any\) => p\.kind === "confirm_action"\)/.test(W))
-    fail("A5a the gate must detect when an irreversible confirm_action is staged");
-  else ok("A5a gate detects a staged irreversible action");
+  // H1 (2026-06-29): the strict-yes guard must cover EVERY high-side-effect kind, not
+  // just confirm_action. record_payment + bank_import (money), send_message (a real
+  // outbound), and case_to_approve (roster admission) are all irreversible and must
+  // never commit on soft praise ("great"/"sure"/"fine").
+  if (!/const IRREVERSIBLE_KINDS = new Set\(\["confirm_action", "record_payment", "send_message", "case_to_approve", "bank_import"\]\)/.test(W))
+    fail("A5a the strict-yes guard must treat money/send/approval kinds as irreversible, not only confirm_action");
+  else ok("A5a guard covers confirm_action + record_payment + send_message + case_to_approve + bank_import");
+  if (!/const hasIrreversible = \(pend \|\| \[\]\)\.some\(\(p: any\) => IRREVERSIBLE_KINDS\.has\(p\.kind\)\)/.test(W))
+    fail("A5a2 hasIrreversible must test membership in IRREVERSIBLE_KINDS");
+  else ok("A5a2 hasIrreversible tests IRREVERSIBLE_KINDS membership");
   if (!/const strictYes = /.test(W)) fail("A5b must define a STRICT yes for irreversible confirms");
   else ok("A5b defines a strict yes");
   if (!/const effectiveYes = hasIrreversible \? strictYes : yes;/.test(W)) fail("A5c an irreversible confirm must require strictYes, not the broad conversational yes");
@@ -78,6 +85,10 @@ const flat = (s) => s.replace(/\s+/g, " ");
   const sm = W.match(/const strictYes = \/([^\n]*?)\/\.test\(t\)/);
   if (sm && /\bperfect\b|\bgreat\b|sounds good|lgtm|\bfine\b|\bsure\b/.test(sm[1])) fail("A5e strictYes must EXCLUDE soft praise words (perfect/great/sounds good/lgtm/fine/sure)");
   else ok("A5e strictYes excludes the soft praise words (the 🙏-class lesson, applied to money)");
+  // H1: 'verified' must STAY in the strict set — the bank_import summary instructs the
+  // operator to reply "verified", so dropping it would silently stop bank imports committing.
+  if (sm && !/verif/.test(sm[1])) fail("A5f strictYes must keep 'verif(y|ied)' or bank_import 'verified' confirmations regress");
+  else ok("A5f strictYes keeps 'verified' for the bank_import confirmation path");
 }
 
 // ---- A4: 'yes' / 'no' vocab + the gate is reached for any awaiting_confirm kind ----

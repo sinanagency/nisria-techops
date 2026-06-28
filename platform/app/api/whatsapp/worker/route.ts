@@ -537,13 +537,18 @@ async function processJob(db: any, job: any): Promise<void> {
       // Confirmations must be unambiguous; gratitude must not commit money.
       const yes = /^(?:👍|✅|💯)|^(?:please\s+|ok(?:ay)?\s+|yes\s+|yeah\s+|sure\s+)?(?:y|yes|yep+|yeah|yup|yebo|confirm(?:ed)?|verif(?:y|ied)|correct|that'?s right|go ahead|go for it|do it|do that|make it so|proceed|send(?: it)?|post it|log it|save it|please do|approved?|ok(?:ay)?|sounds good|looks good|lgtm|perfect|great|absolutely|sure|fine|sawa(?:\s+sawa)?|ndio|ndiyo|haya|poa)\b/.test(t);
       const no = /^(?:👎|🚫)|^(?:n|no|nope|nah|cancel|don'?t|do not|stop|wrong|hold(?:\s+on)?|wait|not yet|later|scrap|hapana|la)\b/.test(t);
-      // C2 (KT #374, skeptic E): an irreversible MONEY/destructive action (kind confirm_action)
-      // must NEVER commit on a soft conversational affirmative ("perfect", "great", "ok", "sure",
-      // "sounds good") — the team already paid for that class once (🙏 auto-logged a payment,
-      // see above). When the pending set holds a confirm_action, require a STRICT, unambiguous
-      // yes (yes/confirm/do it/log it/go ahead + explicit ✅👍), excluding the praise words.
-      const hasIrreversible = (pend || []).some((p: any) => p.kind === "confirm_action");
-      const strictYes = /^(?:✅|👍)\s*$|^(?:please\s+|ok(?:ay)?\s+)?(?:yes|yeah|yep+|yup|confirm(?:ed)?|do it|do that|log it|send it|go ahead|go for it|approved?|correct|ndio|ndiyo)\b/.test(t);
+      // C2 (KT #374, skeptic E) + H1: an irreversible action must NEVER commit on a
+      // soft conversational affirmative ("perfect", "great", "ok", "sure", "fine",
+      // "sounds good") — the team already paid for that class once (🙏 auto-logged a
+      // payment, see above). This now guards EVERY high-side-effect kind, not just
+      // confirm_action: real money (record_payment, bank_import), a real outbound
+      // (send_message), and roster admission (case_to_approve). When any of these is
+      // staged, require a STRICT, unambiguous yes, excluding the praise words.
+      // "verif(y|ied)" stays in the strict set because the bank_import summary tells
+      // the operator to reply "verified" (an explicit confirmation, not praise).
+      const IRREVERSIBLE_KINDS = new Set(["confirm_action", "record_payment", "send_message", "case_to_approve", "bank_import"]);
+      const hasIrreversible = (pend || []).some((p: any) => IRREVERSIBLE_KINDS.has(p.kind));
+      const strictYes = /^(?:✅|👍)\s*$|^(?:please\s+|ok(?:ay)?\s+)?(?:yes|yeah|yep+|yup|confirm(?:ed)?|verif(?:y|ied)|do it|do that|log it|send it|go ahead|go for it|approved?|correct|ndio|ndiyo)\b/.test(t);
       const effectiveYes = hasIrreversible ? strictYes : yes;
       if (effectiveYes) {
         // The resolver now serves more than one kind. Payments commit to a row
