@@ -56,7 +56,15 @@ export async function POST(req: NextRequest) {
   // are rejected.
   const secret = process.env.WHATSAPP_APP_SECRET;
   if (!secret) {
-    return new NextResponse("WHATSAPP_APP_SECRET not configured", { status: 500 });
+    // L1 (2026-06-29): a MISSING app secret is a config error, not an attack. Returning
+    // 500 here makes Meta retry then DISABLE the webhook subscription, which leaves the
+    // bot permanently deaf even after the secret is restored (it needs a manual re-enable
+    // in the Meta dashboard). Return 200 so the subscription survives, DROP the unverified
+    // message (never process unsigned traffic), and fire a P0 so the gap is fixed fast.
+    try {
+      await emit({ type: "whatsapp.app_secret_missing", source: "api:whatsapp.webhook", actor: "system", subject_type: "config", subject_id: null, payload: { severity: "P0", note: "WHATSAPP_APP_SECRET unset; inbound dropped unverified to keep the Meta subscription alive" } });
+    } catch { /* never block the 200 */ }
+    return new NextResponse("ok", { status: 200 });
   }
   const sig = req.headers.get("x-hub-signature-256") || "";
   const expected = "sha256=" + crypto.createHmac("sha256", secret).update(raw).digest("hex");
