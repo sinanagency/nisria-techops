@@ -118,6 +118,9 @@ export const PROGRAMS_MANIFEST: DomainManifest = {
   tools: [
     "list_inventory", "add_inventory_item", "update_inventory_item",
     "list_wishlist", "add_wishlist_item", "update_wishlist_item", "fund_wishlist_item",
+    // Maisha inventory: typed capture + lifecycle tracking (spec 004)
+    "upsert_end_product", "upsert_supply", "upsert_textile", "classify_and_enrich",
+    "transition_state", "query_inventory", "inventory_summary", "get_lifecycle",
   ],
   description: "Maisha inventory and donor wishlist. Handles stock items (quantity, Folklore listing) and fundable needs (school kits, beds, fees). Inventory counts and wishlist funding never invent figures.",
   permission: "both",

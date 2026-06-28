@@ -125,7 +125,7 @@ const HONEST_NO_ACTION_REASK = "Tell me a bit more so I can do that for you.";
 // review" (passive state) while still catching "I logged a task for Mark"
 // (agent claim). The old DONE_CLAIM regex matched the WORD "logged" anywhere
 // and produced false positives on status reads.
-const AGENT_COMPLETION = /\b(?:i'?ve|i\s+have|i|we)\s+(?:marked|logged|recorded|created|completed|scheduled|sent|updated|saved|noted|added|removed|deleted|set|moved|tracked|reassigned)\b/i;
+const AGENT_COMPLETION = /\b(?:i'?ve|i\s+have|i|we)\s+(?:marked|logged|recorded|created|completed|scheduled|sent|updated|saved|noted|added|removed|deleted|set|moved|tracked|reassigned|shipped|delivered|sold|consumed|enriched|restocked)\b/i;
 // Simpler shorthand for "it's done", "that's complete", etc., which imply
 // agent action just happened. 2026-06-12: agent prefix REQUIRED (was optional)
 // after this regex over-fired on the model's standard CTA "Reply with the
@@ -158,6 +158,8 @@ const COMPLETION_TOOLS = new Set([
   "complete_calendar_event", "log_team_payment", "log_payout", "schedule_payment", "mark_payment_paid",
   "publish_social_post", "send_resource", "add_grant", "update_grant_status", "add_campaign", "update_campaign",
   "add_donor", "update_donor", "set_monthly_goal", "edit_brain_section", "save_press_item", "tag_press_item",
+  // Maisha inventory writes (spec 004): typed capture + lifecycle moves.
+  "upsert_end_product", "upsert_supply", "upsert_textile", "classify_and_enrich", "transition_state",
 ]);
 
 // CLAIM-SHAPE → REQUIRED TOOL CATEGORY. Any completion-class tool's ok=true used
@@ -183,11 +185,17 @@ const CASE_TOOLS = new Set(["approve_case", "decline_case", "move_case", "edit_c
 const CASE_OR_BENEFICIARY_TOOLS = new Set([...CASE_TOOLS, "add_beneficiary", "update_beneficiary", "set_public_profile", "set_beneficiary_funding", "delete_beneficiary", "merge_beneficiary"]);
 const EVENT_TOOLS = new Set(["create_event", "move_event", "delete_event", "complete_calendar_event"]);
 const CONTACT_TOOLS = new Set(["add_contact", "update_contact", "add_team_member", "update_team_member", "add_beneficiary", "update_beneficiary"]);
+// Maisha inventory writes (spec 004): an inventory completion claim ("logged the
+// abaya", "moved TRK-0192 to shipped", "enriched it as a textile") must be backed
+// by a category-matched inventory write tool, not an unrelated success.
+const INVENTORY_TOOLS = new Set(["upsert_end_product", "upsert_supply", "upsert_textile", "classify_and_enrich", "transition_state"]);
+const INVENTORY_READ_TOOLS = new Set(["query_inventory", "inventory_summary", "get_lifecycle", "list_inventory"]);
 const SHAPE_MONEY = /\b(?:KES|USD|\$|KSh|Ksh)\s*[\d,\.]+|[\d,]+(?:\.\d+)?\s*(?:KES|USD|\$|KSh)\b/i;
 const SHAPE_TASK = /\b(?:task|reminder|todo)\b/i;
 const SHAPE_CASE = /\b(?:case|beneficiary|merged?\s+\w+'?s?\s+case)\b/i;
 const SHAPE_EVENT = /\b(?:meeting|event|visit|travel|appointment|reminder on)\b/i;
 const SHAPE_CONTACT = /\b(?:contact|team member|saved\s+(?:his|her|their)\s+(?:number|email|phone))\b/i;
+const SHAPE_INVENTORY = /\b(?:inventory|in stock|finished piece|end product|supply|supplies|textile|fabric|abaya|kaftan|caftan|shipped|delivered|in transit|restock(?:ed)?|enriched|lifecycle|production|TRK[-\s]?\d)\b/i;
 
 // Future-phrasing detector: "I will / I'll / let me / should I" etc. are
 // honest non-claims, not fake completions.
@@ -224,6 +232,11 @@ function _SASA_COMPLETION_GUARD(reply: string, toolRuns: { name: string; result:
         { name: "case", regex: SHAPE_CASE, requiredTools: CASE_OR_BENEFICIARY_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },
         { name: "event", regex: SHAPE_EVENT, requiredTools: EVENT_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },
         { name: "contact", regex: SHAPE_CONTACT, requiredTools: CONTACT_TOOLS, readTools: TASK_READ_TOOLS, parseTasksExempt: true },
+        // Maisha inventory (spec 004): a "logged/moved/shipped/enriched" claim is
+        // only honest if a category-matched inventory write ran. A read (query_inventory
+        // / inventory_summary / get_lifecycle) legitimately renders state words from
+        // data, so those reads exempt the shape the way list_tasks does for tasks.
+        { name: "inventory", regex: SHAPE_INVENTORY, requiredTools: INVENTORY_TOOLS, readTools: INVENTORY_READ_TOOLS, parseTasksExempt: true },
       ],
       parseTasksSucceeded: (toolRuns) =>
         toolRuns.some((t) => t.name === "create_task" && (t.result as any)?.ok === true && (t.result as any)?.detail?.source_kind === "parsed_task"),

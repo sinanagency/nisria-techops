@@ -526,6 +526,15 @@ export const SMART_TOOLS = [
   { name: "edit_brain_section", description: "Update a section of the org profile / Brain that Settings exposes (e.g. org_profile, mission, programs). Use for 'update our mission to ...', 'set the org overview'. Owner/founder only.", input_schema: { type: "object", properties: { section: { type: "string", description: "the section key, e.g. org_profile, mission, programs" }, content: { type: "string" } }, required: ["section", "content"] } },
   { name: "delete_contact", description: "Delete a saved contact by name. Use for 'remove the contact John Doe', 'delete that duplicate contact'. Match by name; if more than one matches, ask. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "activate_member", description: "Activate a team member (set status active + activated). Use for 'activate Dorcas', 'bring Eliza back to active'. Match by name. Admin only.", input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  // ---- Maisha inventory: typed capture + lifecycle tracking (spec 004) ----
+  { name: "upsert_end_product", description: "Log a finished Maisha product (a piece ready to sell, e.g. an abaya, dress, bag). Lifecycle starts at 'production'. Use for 'log the new Noor abaya', 'add finished piece TRK-0192'. If a tracking_no is given and already exists, this UPDATES that piece instead of duplicating. Currency on a cost/price is KES, USD, or AED and NEVER mixed; state it back so Nur can correct.", input_schema: { type: "object", properties: { name: { type: "string" }, tracking_no: { type: "string" }, collection: { type: "string" }, style: { type: "string" }, maker: { type: "string" }, size: { type: "string" }, unit_cost: { type: "number" }, cost_currency: { type: "string", enum: ["KES", "USD", "AED"] }, unit_price: { type: "number" }, price_currency: { type: "string", enum: ["KES", "USD", "AED"] } }, required: ["name"] } },
+  { name: "upsert_supply", description: "Log a Maisha supply (a consumable input, e.g. thread, buttons, zips, packaging). Use for 'add 200 buttons to supplies', 'log a roll of packaging tape'. Currency on a cost is KES, USD, or AED and NEVER mixed.", input_schema: { type: "object", properties: { name: { type: "string" }, quantity: { type: "number" }, unit_cost: { type: "number" }, cost_currency: { type: "string", enum: ["KES", "USD", "AED"] }, collection: { type: "string" } }, required: ["name"] } },
+  { name: "upsert_textile", description: "Log a Maisha textile (raw fabric/material by the metre/roll, e.g. cotton, silk, kikoy, ankara). Use for 'add 10 metres of silk', 'log the new ankara fabric'. Currency on a cost is KES, USD, or AED and NEVER mixed.", input_schema: { type: "object", properties: { name: { type: "string" }, quantity: { type: "number" }, unit_cost: { type: "number" }, cost_currency: { type: "string", enum: ["KES", "USD", "AED"] }, collection: { type: "string" }, style: { type: "string" } }, required: ["name"] } },
+  { name: "classify_and_enrich", description: "Take a pending/draft inventory row (one captured but not yet typed, enriched=false) that matches 'query', read free 'text' to decide whether it is a supply, textile, or finished product, fill in the typed fields it states, and mark it enriched. Use after a photo or rough note was logged and the details arrive. Never invents fields it cannot read from the text.", input_schema: { type: "object", properties: { query: { type: "string", description: "name/tracking fragment of the pending row to enrich" }, text: { type: "string", description: "the free-text details to classify and extract from" } }, required: ["query", "text"] } },
+  { name: "transition_state", description: "Move a finished Maisha product along its lifecycle: production then in_stock then reserved then sold then shipped then in_transit then delivered, with a returned then restock branch. Use for 'the Noor abaya shipped', 'mark TRK-0192 delivered'. Idempotent (moving to the state it is already in is a no-op success). Refuses an illegal skip or backward jump and says why.", input_schema: { type: "object", properties: { tracking_no_or_name: { type: "string" }, to_state: { type: "string", enum: ["production", "in_stock", "reserved", "sold", "shipped", "in_transit", "delivered", "returned", "restock"] } }, required: ["tracking_no_or_name", "to_state"] } },
+  { name: "query_inventory", description: "List Maisha inventory rows filtered by item type (supply/textile/end_product), lifecycle state, and/or collection. Use for 'what finished pieces are in stock', 'show me the textiles', 'what is shipped'. Costs/prices are shown with their own currency, never blended.", input_schema: { type: "object", properties: { item_type: { type: "string", enum: ["supply", "textile", "end_product"] }, lifecycle_state: { type: "string", enum: ["production", "in_stock", "reserved", "sold", "shipped", "in_transit", "delivered", "returned", "restock"] }, collection: { type: "string" } }, required: [] } },
+  { name: "inventory_summary", description: "Count Maisha inventory by item type and finished pieces by lifecycle state. Use for 'inventory overview', 'how many pieces are sold vs in stock', 'what is the stock picture'.", input_schema: { type: "object", properties: {} } },
+  { name: "get_lifecycle", description: "Show the lifecycle history (the audited state changes) of one finished Maisha product, by tracking number or name. Use for 'where is TRK-0192', 'show the history of the Noor abaya'.", input_schema: { type: "object", properties: { tracking_no_or_name: { type: "string" } }, required: ["tracking_no_or_name"] } },
 ] as const;
 
 export const SMART_TOOL_NAMES = new Set(SMART_TOOLS.map((t) => t.name));
@@ -542,8 +551,117 @@ const READ_TOOLS = new Set([
   "list_learned", "list_wishlist", "query_memory", "get_credential",
   "list_task_comments", "list_task_dependencies",
   "search_resources", "get_resource", "list_resources",
+  "query_inventory", "inventory_summary", "get_lifecycle",
 ]);
 export const isReadTool = (name: string) => READ_TOOLS.has(name);
+
+// ===========================================================================
+// MAISHA INVENTORY — typed capture + guarded lifecycle (spec 004).
+// Ported from specs/004-maisha-inventory/sandbox (tools.ts / lifecycle.ts /
+// classify.ts), adapted to the live schema (uuid ids, admin().from() API, the
+// live column names). Phase 1 only: capture + lifecycle tracking. No sales,
+// no finance, no group-ingest, no portal.
+// ===========================================================================
+
+// Guarded forward-only lifecycle for finished products. Anything not listed is
+// illegal; the same target is an idempotent no-op (the double-ship guard).
+type InvLifecycleState =
+  | "production" | "in_stock" | "reserved" | "sold"
+  | "shipped" | "in_transit" | "delivered" | "returned" | "restock";
+const INV_LIFECYCLE_STATES: InvLifecycleState[] = [
+  "production", "in_stock", "reserved", "sold",
+  "shipped", "in_transit", "delivered", "returned", "restock",
+];
+const INV_LIFECYCLE_EDGES: Record<InvLifecycleState, InvLifecycleState[]> = {
+  production: ["in_stock"],
+  in_stock: ["reserved", "sold"],
+  reserved: ["sold", "in_stock"],            // can release a reservation
+  sold: ["shipped", "returned"],
+  shipped: ["in_transit", "delivered", "returned"],
+  in_transit: ["delivered", "returned"],
+  delivered: ["returned"],
+  returned: ["restock"],
+  restock: ["in_stock"],
+};
+type InvTransition =
+  | { ok: true; idempotent: boolean; from: InvLifecycleState | null; to: InvLifecycleState }
+  | { ok: false; reason: string; from: InvLifecycleState | null; to: string };
+function evaluateInvTransition(from: InvLifecycleState | null, to: string): InvTransition {
+  if (!INV_LIFECYCLE_STATES.includes(to as InvLifecycleState)) {
+    return { ok: false, reason: `unknown lifecycle state "${to}"`, from, to };
+  }
+  if (from === to) return { ok: true, idempotent: true, from, to: to as InvLifecycleState };
+  const legal = from === null
+    ? (to === "production" || to === "in_stock")          // entry points
+    : (INV_LIFECYCLE_EDGES[from] ?? []).includes(to as InvLifecycleState);
+  if (!legal) {
+    const allowed = from === null ? "production, in_stock" : ((INV_LIFECYCLE_EDGES[from] ?? []).join(", ") || "none");
+    return { ok: false, reason: `cannot move ${from ?? "unset"} to ${to} (allowed from ${from ?? "unset"}: ${allowed})`, from, to };
+  }
+  return { ok: true, idempotent: false, from, to: to as InvLifecycleState };
+}
+
+// Deterministic keyword classifier (the prod vision/LLM swap-in is out of scope
+// for Phase 1). Low confidence => the caller asks once, never guesses silently.
+type InvItemType = "supply" | "textile" | "end_product";
+const INV_SUPPLY_HINTS = /\b(thread|needle|button|zip|zipper|glue|packaging|box|label|tag|elastic|supply|supplies|restock|spool)\b/i;
+const INV_TEXTILE_HINTS = /\b(fabric|textile|cotton|silk|linen|kikoy|ankara|chiffon|metre|metres|meter|yard|roll|bolt|material)\b/i;
+const INV_PRODUCT_HINTS = /\b(abaya|dress|kaftan|caftan|gown|bag|scarf|shawl|kimono|jacket|set|piece|collection|style|made by|maker|trk[-\s]?\d|tracking)\b/i;
+function classifyInvItem(text: string): { itemType: InvItemType | null; confidence: number; reason: string } {
+  const t = (text || "").trim();
+  if (/\btrk[-\s]?\d/i.test(t) || /\b(?:made by|maker)\b/i.test(t)) {
+    return { itemType: "end_product", confidence: 0.95, reason: "tracking#/maker present" };
+  }
+  const supply = INV_SUPPLY_HINTS.test(t);
+  const textile = INV_TEXTILE_HINTS.test(t);
+  const product = INV_PRODUCT_HINTS.test(t);
+  const hits = [supply, textile, product].filter(Boolean).length;
+  if (hits === 0) return { itemType: null, confidence: 0.2, reason: "no type signal" };
+  if (hits > 1) {
+    if (product) return { itemType: "end_product", confidence: 0.5, reason: "mixed signal, product-leaning" };
+    if (textile) return { itemType: "textile", confidence: 0.5, reason: "mixed signal, textile-leaning" };
+    return { itemType: "supply", confidence: 0.5, reason: "mixed signal" };
+  }
+  if (product) return { itemType: "end_product", confidence: 0.85, reason: "product keywords" };
+  if (textile) return { itemType: "textile", confidence: 0.85, reason: "textile keywords" };
+  return { itemType: "supply", confidence: 0.85, reason: "supply keywords" };
+}
+// Loose field grammar parse (e.g. "TRK-0192 Noor abaya, style A-line, size M, made by Aisha").
+function parseInvFields(text: string): { trackingNo?: string; collection?: string; style?: string; size?: string; maker?: string } {
+  const out: { trackingNo?: string; collection?: string; style?: string; size?: string; maker?: string } = {};
+  const t = ` ${text || ""} `;
+  const trk = t.match(/\bTRK[-\s]?(\d+)\b/i);
+  if (trk) out.trackingNo = `TRK-${trk[1].padStart(4, "0")}`;
+  const collection = t.match(/\bcollection[:\s]+([A-Za-z][\w' ]*?)(?=[,\n]|$)/i);
+  if (collection) out.collection = collection[1].trim();
+  const style = t.match(/\bstyle[:\s]+([A-Za-z][\w'\- ]*?)(?=[,\n]|$)/i);
+  if (style) out.style = style[1].trim();
+  const size = t.match(/\bsize[:\s]+([A-Za-z0-9]+)\b/i) || t.match(/\b(XS|S|M|L|XL|XXL)\b/);
+  if (size) out.size = (size[1] || size[0]).trim();
+  const maker = t.match(/\b(?:made by|maker)[:\s]+([A-Za-z][\w' ]*?)(?=[,\n]|$)/i);
+  if (maker) out.maker = maker[1].trim();
+  return out;
+}
+// Resolve a finished product by tracking_no (exact) or name (ilike). Returns the
+// single match, a multi-match marker, or null.
+async function findEndProduct(db: any, ref: string): Promise<{ row: any | null; ambiguous?: any[] }> {
+  const r = String(ref || "").trim();
+  if (!r) return { row: null };
+  const trk = r.match(/\bTRK[-\s]?(\d+)\b/i);
+  if (trk) {
+    const tn = `TRK-${trk[1].padStart(4, "0")}`;
+    const { data } = await db.from("inventory").select("id,name,tracking_no,lifecycle_state,item_type").eq("tracking_no", tn).limit(1);
+    if (data && data.length) return { row: data[0] };
+  }
+  const { data: byTrk } = await db.from("inventory").select("id,name,tracking_no,lifecycle_state,item_type").eq("tracking_no", r).limit(1);
+  if (byTrk && byTrk.length) return { row: byTrk[0] };
+  const { data } = await db.from("inventory").select("id,name,tracking_no,lifecycle_state,item_type")
+    .eq("item_type", "end_product").ilike("name", `%${r.replace(/[(),:*%_]/g, "")}%`).limit(5);
+  const list = (data || []) as any[];
+  if (!list.length) return { row: null };
+  if (list.length > 1) return { row: null, ambiguous: list };
+  return { row: list[0] };
+}
 
 // ===========================================================================
 // READ tools — copied from the assistant read layer so the agent answers with
@@ -1412,6 +1530,60 @@ async function runRead(db: any, name: string, input: any, tier: "admin" | "team"
       facts: facts.map((f: any) => ({ kind: f.kind, title: f.title || null, fact: f.content })),
       entities: entities.map((e: any) => ({ name: e.name, type: e.type, summary: e.summary || null, known_facts: (e.facts || []).map((x: any) => x.content) })),
       note: (!facts.length && !entities.length) ? "The Brain has nothing stored on that yet." : undefined,
+    };
+  }
+
+  // ---- Maisha inventory reads (spec 004) ----
+  if (name === "query_inventory") {
+    let qb = db.from("inventory")
+      .select("id,item_type,tracking_no,name,collection,style,maker,size,quantity,unit_cost,cost_currency,unit_price,price_currency,lifecycle_state,status")
+      .eq("enriched", true);
+    if (["supply", "textile", "end_product"].includes(input.item_type)) qb = qb.eq("item_type", input.item_type);
+    if (INV_LIFECYCLE_STATES.includes(input.lifecycle_state)) qb = qb.eq("lifecycle_state", input.lifecycle_state);
+    if (input.collection) qb = qb.ilike("collection", `%${String(input.collection).replace(/[(),:*%_]/g, "")}%`);
+    const { data } = await qb.order("created_at", { ascending: true }).limit(200);
+    const rows = (data || []) as any[];
+    return {
+      count: rows.length,
+      filters: { item_type: input.item_type || null, lifecycle_state: input.lifecycle_state || null, collection: input.collection || null },
+      items: rows.map((i) => ({
+        tracking_no: i.tracking_no || null, name: i.name, item_type: i.item_type || null,
+        collection: i.collection || null, style: i.style || null, maker: i.maker || null, size: i.size || null,
+        quantity: i.quantity ?? null, lifecycle_state: i.lifecycle_state || null, status: i.status || null,
+        // Currency law: each money field carries its own currency, never blended.
+        unit_cost: i.unit_cost != null ? money(i.unit_cost, i.cost_currency) : null,
+        unit_price: i.unit_price != null ? money(i.unit_price, i.price_currency) : null,
+      })),
+    };
+  }
+  if (name === "inventory_summary") {
+    const { data } = await db.from("inventory").select("item_type,lifecycle_state").eq("enriched", true).limit(2000);
+    const rows = (data || []) as any[];
+    const byType: Record<string, number> = {};
+    const byLifecycle: Record<string, number> = {};
+    for (const r of rows) {
+      const t = r.item_type || "untyped";
+      byType[t] = (byType[t] || 0) + 1;
+      if (r.item_type === "end_product") {
+        const s = r.lifecycle_state || "none";
+        byLifecycle[s] = (byLifecycle[s] || 0) + 1;
+      }
+    }
+    return { total: rows.length, by_type: byType, by_lifecycle: byLifecycle };
+  }
+  if (name === "get_lifecycle") {
+    const ref = String(input.tracking_no_or_name || "").trim();
+    if (!ref) return { error: "give a tracking number or product name" };
+    const { row, ambiguous } = await findEndProduct(db, ref);
+    if (ambiguous) return { found: false, note: `A few pieces match: ${ambiguous.map((p) => p.tracking_no || p.name).join(", ")}. Which one?` };
+    if (!row) return { found: false, note: `No finished product matching "${ref}".` };
+    const { data: events } = await db.from("inventory_lifecycle_events")
+      .select("from_state,to_state,evidence,created_at").eq("inventory_id", row.id).order("created_at", { ascending: true }).limit(100);
+    const evs = (events || []) as any[];
+    return {
+      found: true,
+      tracking_no: row.tracking_no || null, name: row.name, current_state: row.lifecycle_state || null,
+      history: evs.map((e) => ({ from: e.from_state || null, to: e.to_state || null, at: e.created_at, evidence: e.evidence || null })),
     };
   }
 
@@ -4602,6 +4774,128 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       return { ok: true, summary: humanize(`Digital Nur will join "${title || "the meeting"}" when it starts. The notes and action items come here automatically when the call ends.`, opts) };
     }
     return { ok: true, summary: humanize(`Digital Nur is joining the meeting now as "Digital Nur". I will send you the summary and action items here when the call ends.`, opts) };
+  }
+
+  // ---- Maisha inventory: typed capture + lifecycle (spec 004) ----
+  // SAFE: internal records. Currency law — each money field carries its currency.
+  if (name === "upsert_end_product" || name === "upsert_supply" || name === "upsert_textile") {
+    const itemType: InvItemType = name === "upsert_supply" ? "supply" : name === "upsert_textile" ? "textile" : "end_product";
+    const iname = String(input.name || "").trim();
+    if (!iname) return { ok: false, summary: "I need an item name.", error: "no name" };
+    const costCcy = ["KES", "USD", "AED"].includes(String(input.cost_currency || "").toUpperCase()) ? String(input.cost_currency).toUpperCase() : null;
+    const priceCcy = ["KES", "USD", "AED"].includes(String(input.price_currency || "").toUpperCase()) ? String(input.price_currency).toUpperCase() : null;
+    const unit_cost = input.unit_cost != null && Number(input.unit_cost) >= 0 ? Number(input.unit_cost) : null;
+    const unit_price = input.unit_price != null && Number(input.unit_price) >= 0 ? Number(input.unit_price) : null;
+    // Currency law: a money figure must carry a currency. If a cost/price is given
+    // without one, ASK rather than blend or default silently.
+    if (unit_cost != null && !costCcy) return { ok: false, summary: humanize(`What currency is the cost for ${iname} (KES, USD, or AED)?`, opts), error: "cost currency missing" };
+    if (unit_price != null && !priceCcy) return { ok: false, summary: humanize(`What currency is the price for ${iname} (KES, USD, or AED)?`, opts), error: "price currency missing" };
+
+    const row: Record<string, any> = {
+      item_type: itemType, name: iname,
+      collection: input.collection ? String(input.collection).slice(0, 80) : null,
+      status: "in_stock", enriched: true, created_by: ctx.operatorName || "Nur",
+      unit_cost, cost_currency: unit_cost != null ? costCcy : null,
+      unit_price, price_currency: unit_price != null ? priceCcy : null,
+    };
+    if (itemType === "end_product") {
+      row.lifecycle_state = "production";
+      row.tracking_no = input.tracking_no ? String(input.tracking_no).trim() : null;
+      row.style = input.style ? String(input.style).slice(0, 80) : null;
+      row.maker = input.maker ? String(input.maker).slice(0, 80) : null;
+      row.size = input.size ? String(input.size).slice(0, 16) : null;
+    } else {
+      row.quantity = Number(input.quantity) >= 0 ? Math.round(Number(input.quantity)) : 0;
+      if (itemType === "textile" && input.style) row.style = String(input.style).slice(0, 80);
+    }
+
+    // Dedup an end_product by tracking_no: if it exists, UPDATE in place.
+    if (itemType === "end_product" && row.tracking_no) {
+      const { data: existing } = await db.from("inventory").select("id,name").eq("tracking_no", row.tracking_no).limit(1);
+      if (existing && existing.length) {
+        const patch: Record<string, any> = { name: iname, updated_at: new Date().toISOString() };
+        for (const k of ["collection", "style", "maker", "size"]) if (row[k] != null) patch[k] = row[k];
+        if (unit_cost != null) { patch.unit_cost = unit_cost; patch.cost_currency = costCcy; }
+        if (unit_price != null) { patch.unit_price = unit_price; patch.price_currency = priceCcy; }
+        const { error: upErr } = await db.from("inventory").update(patch).eq("id", existing[0].id);
+        // VERIFIED WRITE (KT #336): never say "Updated" unless the update landed.
+        if (upErr) return { ok: false, summary: humanize(`I could not update ${row.tracking_no} just now, so I have not. Want me to try again?`, opts), error: (upErr as any).message || "inventory update failed" };
+        await emit({ type: "inventory.item_updated", source: "agent:sasa", actor: "Nur", subject_type: "inventory", subject_id: existing[0].id, payload: { name: iname, tracking_no: row.tracking_no, item_type: itemType, via: "smart" } });
+        return { ok: true, summary: humanize(`Updated finished piece ${row.tracking_no} (${iname}).`, opts), affordance: { kind: "open", label: "Open inventory", href: "/inventory" }, detail: { inventory_id: existing[0].id, item_type: itemType, updated: true } };
+      }
+    }
+
+    const { data: item, error: invErr } = await db.from("inventory").insert(row).select("id,name,tracking_no").single();
+    // VERIFIED WRITE (KT #336): never say "Logged" unless the row actually landed.
+    if (invErr || !item) return { ok: false, summary: humanize(`I could not log ${iname} just now, so I have not. Want me to try again?`, opts), error: (invErr as any)?.message || "inventory insert failed" };
+    await emit({ type: "inventory.item_added", source: "agent:sasa", actor: "Nur", subject_type: "inventory", subject_id: item.id, payload: { name: iname, item_type: itemType, tracking_no: item.tracking_no || null, via: "smart" } });
+    const label = itemType === "end_product" ? "finished piece" : itemType;
+    return { ok: true, summary: humanize(`Logged ${label} ${item.tracking_no || iname}.`, opts), affordance: { kind: "open", label: "Open inventory", href: "/inventory" }, detail: { inventory_id: item.id, item_type: itemType } };
+  }
+
+  // classify_and_enrich: type a pending/draft row from free text, fill stated fields.
+  if (name === "classify_and_enrich") {
+    const query = String(input.query || "").trim();
+    const text = String(input.text || "").trim();
+    if (!query) return { ok: false, summary: "Which pending item should I enrich?", error: "no query" };
+    if (!text) return { ok: false, summary: "Give me the details to classify it.", error: "no text" };
+    const { data: pend } = await db.from("inventory").select("id,name,tracking_no")
+      .eq("enriched", false).or(`name.ilike.%${query.replace(/[(),:*%_]/g, "")}%,tracking_no.ilike.%${query.replace(/[(),:*%_]/g, "")}%`)
+      .order("created_at", { ascending: false }).limit(5);
+    const list = (pend || []) as any[];
+    if (!list.length) return { ok: false, summary: humanize(`I could not find a pending item matching "${query}" to enrich.`, opts), error: "no pending row" };
+    if (list.length > 1) return { ok: false, summary: humanize(`A few pending items match: ${list.map((p) => p.tracking_no || p.name).join(", ")}. Which one?`, opts), ambiguous: true, detail: { candidates: list } };
+    const target = list[0];
+
+    const cls = classifyInvItem(text);
+    if (!cls.itemType || cls.confidence < 0.55) {
+      // Law 4: ambiguous => ask once, never guess silently.
+      return { ok: false, summary: humanize(`I could not tell the type of "${target.tracking_no || target.name}" (${cls.reason}). Is it a supply, textile, or finished product?`, opts), error: "ambiguous type" };
+    }
+    const itemType = cls.itemType;
+    const fields = parseInvFields(text);
+    const patch: Record<string, any> = {
+      item_type: itemType, status: "in_stock", enriched: true, updated_at: new Date().toISOString(),
+      lifecycle_state: itemType === "end_product" ? "in_stock" : null,
+    };
+    if (fields.trackingNo) patch.tracking_no = fields.trackingNo;
+    if (fields.collection) patch.collection = fields.collection.slice(0, 80);
+    if (fields.style) patch.style = fields.style.slice(0, 80);
+    if (fields.size) patch.size = fields.size.slice(0, 16);
+    if (fields.maker) patch.maker = fields.maker.slice(0, 80);
+    const { error: enErr } = await db.from("inventory").update(patch).eq("id", target.id);
+    // VERIFIED WRITE (KT #336): never say "Enriched" unless the update landed.
+    if (enErr) return { ok: false, summary: humanize(`I could not enrich "${target.tracking_no || target.name}" just now, so I have not. Want me to try again?`, opts), error: (enErr as any).message || "inventory enrich failed" };
+    await emit({ type: "inventory.enriched", source: "agent:sasa", actor: "Nur", subject_type: "inventory", subject_id: target.id, payload: { item_type: itemType, tracking_no: patch.tracking_no || target.tracking_no || null, via: "smart" } });
+    return { ok: true, summary: humanize(`Enriched ${target.tracking_no || target.name} as a ${itemType === "end_product" ? "finished piece" : itemType}.`, opts), affordance: { kind: "open", label: "Open inventory", href: "/inventory" }, detail: { inventory_id: target.id, item_type: itemType } };
+  }
+
+  // transition_state: guarded, idempotent lifecycle move + audited event.
+  if (name === "transition_state") {
+    const ref = String(input.tracking_no_or_name || "").trim();
+    const to = String(input.to_state || "").trim();
+    if (!ref) return { ok: false, summary: "Which piece should I move?", error: "no ref" };
+    if (!to) return { ok: false, summary: "Move it to which state?", error: "no state" };
+    const { row, ambiguous } = await findEndProduct(db, ref);
+    if (ambiguous) return { ok: false, summary: humanize(`A few pieces match: ${ambiguous.map((p) => p.tracking_no || p.name).join(", ")}. Which one?`, opts), ambiguous: true, detail: { candidates: ambiguous } };
+    if (!row) return { ok: false, summary: humanize(`I could not find a finished product matching "${ref}".`, opts), error: "no product" };
+    const from = (row.lifecycle_state ?? null) as InvLifecycleState | null;
+    const verdict = evaluateInvTransition(from, to);
+    if (!verdict.ok) return { ok: false, summary: humanize(`I have not moved ${row.tracking_no || row.name}: ${verdict.reason}.`, opts), error: "illegal transition", detail: { from, to } };
+    if (verdict.idempotent) return { ok: true, summary: humanize(`${row.tracking_no || row.name} is already ${to}, so there was nothing to move.`, opts), already_done: true, detail: { inventory_id: row.id, state: to, idempotent: true } };
+
+    const { error: upErr } = await db.from("inventory").update({ lifecycle_state: verdict.to, updated_at: new Date().toISOString() }).eq("id", row.id);
+    // VERIFIED WRITE (KT #336): never say "Moved" unless the update landed.
+    if (upErr) return { ok: false, summary: humanize(`I could not move ${row.tracking_no || row.name} just now, so I have not. Want me to try again?`, opts), error: (upErr as any).message || "lifecycle update failed" };
+    // Audit row. The state already moved (above); if the event insert fails, we
+    // surface it in detail but the move itself is honest and stands.
+    const { error: evErr } = await db.from("inventory_lifecycle_events").insert({
+      inventory_id: row.id, from_state: from, to_state: verdict.to,
+      evidence: ctx.userText ? String(ctx.userText).slice(0, 400) : null,
+      source_message_external_id: ctx.sourceMessageId || null, created_by: ctx.operatorName || "Nur",
+    });
+    await emit({ type: "inventory.transitioned", source: "agent:sasa", actor: "Nur", subject_type: "inventory", subject_id: row.id, payload: { from, to: verdict.to, tracking_no: row.tracking_no || null, via: "smart" } });
+    return { ok: true, summary: humanize(`Moved ${row.tracking_no || row.name} to ${verdict.to}.`, opts), affordance: { kind: "open", label: "Open inventory", href: "/inventory" }, detail: { inventory_id: row.id, from, to: verdict.to, audited: !evErr } };
   }
 
   return { ok: false, summary: "I do not have a tool for that yet.", error: "unknown action" };
