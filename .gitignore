@@ -41,3 +41,4 @@ __pycache__/
 
 # stray git worktrees (never commit)
 .claude/worktrees/
+.gstack/
