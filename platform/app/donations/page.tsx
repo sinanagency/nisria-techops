@@ -2,6 +2,7 @@ import Shell from "../../components/Shell";
 import { Card, Table, Badge, Col, statusTone } from "../../components/ui";
 import { admin, date } from "../../lib/supabase-admin";
 import { Heart, Check, Clock, Repeat } from "lucide-react";
+import { SubmitButton } from "../../components/SubmitButton";
 import { draftThankYouFor, draftAllThankYous } from "./actions";
 import DonationPeek from "../../components/DonationPeek";
 import { Money, MoneyHideToggle } from "../../components/Money";
@@ -175,9 +176,10 @@ export default async function Donations({
       sub={sub}
       action={
         <form action={draftAllThankYous}>
-          <button id="donations-thank-all" type="submit" className="btn teal">
+          {/* L-2 (Law 6): pending state so the batch-draft button gives feedback. */}
+          <SubmitButton id="donations-thank-all" className="btn teal" pendingLabel="Drafting thank-yous…">
             <Heart size={14} /> Draft thank-yous for all un-thanked recent gifts
-          </button>
+          </SubmitButton>
         </form>
       }
     >

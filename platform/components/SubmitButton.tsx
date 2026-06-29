@@ -15,11 +15,15 @@ export function SubmitButton({
   name,
   value,
   formNoValidate,
+  id,
 }: {
   className?: string;
   pendingLabel?: string;
   children: React.ReactNode;
   style?: React.CSSProperties;
+  // id lets a quick-action / deeplink target this button (e.g. ContextBar's
+  // "Draft thank-yous" targets #donations-thank-all).
+  id?: string;
   // name/value let several SubmitButtons share one form (e.g. Approve vs
   // Decline, distinguished by decision=approve|reject). formNoValidate skips
   // HTML validation for destructive/secondary actions (Decline shouldn't be
@@ -32,6 +36,7 @@ export function SubmitButton({
   return (
     <button
       type="submit"
+      id={id}
       name={name}
       value={value}
       formNoValidate={formNoValidate}

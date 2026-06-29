@@ -1,6 +1,7 @@
 import Link from "next/link";
 import Shell from "../../components/Shell";
 import { Card, Stat, Badge } from "../../components/ui";
+import { SubmitButton } from "../../components/SubmitButton";
 import { Money, MoneyHideToggle } from "../../components/Money";
 import { admin } from "../../lib/supabase-admin";
 import { getCurrentUser } from "../../lib/auth";
@@ -229,10 +230,12 @@ export default async function Inventory() {
                         rows={2}
                         style={{ width: "100%", resize: "vertical" }}
                       />
-                      <button className="btn teal sm" type="submit" style={{ alignSelf: "flex-start" }}>
+                      {/* M-4 (Law 6): this fires a multi-second Claude call; show a pending
+                          state so the operator gets feedback instead of a dead button. */}
+                      <SubmitButton className="btn teal sm" pendingLabel="Generating the listing…" style={{ alignSelf: "flex-start" }}>
                         <Sparkles size={14} />{" "}
                         {listing ? "Regenerate Folklore listing" : "Generate Folklore listing"}
-                      </button>
+                      </SubmitButton>
                     </form>
 
                     {listing && (

@@ -23,6 +23,8 @@ const GA = rd("app", "grants", "actions.ts");
 const CA = rd("app", "contacts", "actions.ts");
 const CP = rd("app", "contacts", "[id]", "page.tsx");
 const DP = rd("app", "donors", "[id]", "page.tsx");
+const INV = rd("app", "inventory", "page.tsx");
+const DON = rd("app", "donations", "page.tsx");
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
 
@@ -136,6 +138,16 @@ const ok = (m) => console.log("PASS:", m);
     if (!/failed \? "Send failed" : "We replied"/.test(src)) fail(`M-2b the ${name} thread must label a failed send distinctly`);
     else ok(`M-2b ${name} thread marks a failed send`);
   }
+}
+
+// ---- M-4 + L-2: long-running form buttons get a pending state (reuse SubmitButton) ----
+{
+  if (/<button className="btn teal sm" type="submit"[\s\S]{0,80}Folklore listing/.test(INV)) fail("M-4 the generate-listing button must show a pending state (SubmitButton), not a dead plain button");
+  else if (!/<SubmitButton className="btn teal sm" pendingLabel="Generating the listing/.test(INV)) fail("M-4 inventory must use SubmitButton with a pending label");
+  else ok("M-4 inventory generate-listing has a pending state");
+  if (/<button id="donations-thank-all" type="submit"/.test(DON)) fail("L-2 the draft-all button must use SubmitButton, not a plain button");
+  else if (!/<SubmitButton id="donations-thank-all" className="btn teal" pendingLabel="Drafting thank-yous/.test(DON)) fail("L-2 donations draft-all must use SubmitButton (id preserved for the quick-action deeplink)");
+  else ok("L-2 donations draft-all has a pending state, id preserved");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");
