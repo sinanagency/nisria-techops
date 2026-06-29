@@ -65,7 +65,7 @@ const flat = (s) => s.replace(/\s+/g, " ");
 // ---- R4: never claim delivery it did not get (verified) ----
 {
   const i = ST.indexOf('if (name === "relay_to_colleague")');
-  const region = i >= 0 ? ST.slice(i, i + 6400) : "";
+  const region = i >= 0 ? ST.slice(i, i + 6800) : "";
   // the only ok:true 'Passed it to' delivered:true return must be AFTER a successful send
   const passedIdx = region.indexOf("Passed it to");
   const sendIdx = region.indexOf("await sendText(number, body)");

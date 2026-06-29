@@ -76,7 +76,7 @@ const eq = (a, b, m) => (a === b ? ok(m) : fail(`${m} (got ${JSON.stringify(a)},
 {
   if (!/const resend = input\.resend === true/.test(ST)) fail("P5a message_person must read input.resend");
   if (!/if \(!resend\) \{[\s\S]{0,1200}?fuzzyDupe/.test(ST)) fail("P5b the exact+fuzzy dedup must be SKIPPED when resend is set");
-  if (!/resend \? `\$\{last4\}:\$\{textHash\}:\$\{minuteBucket\}:resend:\$\{claimId\}`/.test(ST)) fail("P5c the atomic claim key must be resend-unique so a genuine retry always wins");
+  if (!/resend \? `\$\{toHash\}:\$\{textHash\}:\$\{minuteBucket\}:resend:\$\{claimId\}`/.test(ST)) fail("P5c the atomic claim key must be resend-unique so a genuine retry always wins (H2: keyed on the full-number hash)");
   if (!/resend:\s*\{ type: "boolean"/.test(ST)) fail("P5d resend must be in the message_person tool schema");
   // skeptic C: resend must keep a backstop (one retry, then hold identical inside 2m)
   else if (!/if \(resend\) \{[\s\S]{0,700}?alreadyResent[\s\S]{0,600}?resend_capped/.test(ST)) fail("P5e resend must have a backstop (cap an identical resend inside 2 min)");

@@ -35,6 +35,16 @@ import { emit } from "./events";
 import { now, formatClock, DEFAULT_TZ } from "./now";
 import { convertWallClock } from "./tzconvert.mjs";
 import { randomUUID, createHash } from "node:crypto";
+
+// H2 (2026-06-29): a non-PII recipient key for send-dedup. The old dedup keyed on the
+// last 4 phone digits (to_last4), so two DIFFERENT people who share the same last 4 +
+// identical text in the same short window collided — a real send to person B was
+// suppressed as a "duplicate" of person A and reported as already sent (Law 6 + 11). This
+// hashes the FULL normalized number, so the key is unique per line but still carries no
+// raw phone number into the event log. to_last4 stays on events for the "ending 1234" UX,
+// the NUR_LAST4 exclusion, and the proactive-send honesty layer; only the short-window
+// dedup comparisons switch to this key.
+const recipHash = (n: string): string => createHash("sha256").update(phoneKey(String(n || ""))).digest("hex").slice(0, 16);
 import { humanize, withHumanSystem } from "./humanize";
 import { claudeJSON } from "./anthropic";
 import { getBrief } from "./brief";
@@ -2573,13 +2583,14 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // amplifier. Beyond the exact-text dedup, cap how many DISTINCT relays one sender can
     // push to one colleague in a rolling 10 min window. Over the cap, refuse honestly.
     try {
+      const rh = recipHash(number); // H2: dedup + rate-cap on the full-number hash, not last4
       const since = new Date(Date.now() - 3 * 60 * 1000).toISOString();
       const { data: recent } = await db.from("events").select("id,payload").eq("type", "sasa.relayed_colleague").gte("created_at", since).limit(30);
-      const dupe = ((recent || []) as any[]).some((e) => e.payload?.to_last4 === number.slice(-4) && String(e.payload?.text || "").slice(0, 120) === safeMessage.slice(0, 120));
+      const dupe = ((recent || []) as any[]).some((e) => e.payload?.to_hash === rh && String(e.payload?.text || "").slice(0, 120) === safeMessage.slice(0, 120));
       if (dupe) return { ok: true, summary: humanize(`I already passed that to ${toName} a moment ago, so I won't send it twice.`, opts), detail: { deduped: true, to: toName } };
       const rateSince = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const { data: rl } = await db.from("events").select("id,actor,payload").eq("type", "sasa.relayed_colleague").gte("created_at", rateSince).limit(60);
-      const fromMe = ((rl || []) as any[]).filter((e) => e.actor === senderName && e.payload?.to_last4 === number.slice(-4)).length;
+      const fromMe = ((rl || []) as any[]).filter((e) => e.actor === senderName && e.payload?.to_hash === rh).length;
       if (fromMe >= 8) return { ok: false, summary: humanize(`I've already passed several of your messages to ${toName} in the last few minutes. Give them a moment to reply before I send more.`, opts), error: "rate_capped", detail: { rate_capped: true, to: toName } };
     } catch { /* best-effort dedup + rate cap */ }
     const res: any = await sendText(number, body);
@@ -2592,11 +2603,11 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
         requesterWaId: senderKey || null, requesterContactId: ctx.contactId ?? null,
         reason: "team relay (colleague outside 24h window)",
       });
-      await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: safeMessage.slice(0, 300), delivered: false, queued: !!sub } });
+      await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), to_hash: recipHash(number), text: safeMessage.slice(0, 300), delivered: false, queued: !!sub } });
       if (sub) return { ok: true, summary: humanize(`${toName} has not messaged this line in the last 24 hours, so WhatsApp won't let me reach them right now. I've held your message and will send it the moment they next message in.`, opts), detail: { delivered: false, queued: true, to: toName } };
       return { ok: false, summary: humanize(`I could not reach ${toName} just now${res?.error ? ` (${res.error})` : ""}, so I have not passed it on.`, opts), error: res?.error || "send failed", detail: { delivered: false } };
     }
-    await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: safeMessage.slice(0, 300), delivered: true } });
+    await emit({ type: "sasa.relayed_colleague", source: "agent:sasa", actor: senderName, subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), to_hash: recipHash(number), text: safeMessage.slice(0, 300), delivered: true } });
     return { ok: true, summary: humanize(`Passed it to ${toName}: "${safeMessage.slice(0, 140)}". I told them it's from you.`, opts), detail: { delivered: true, to: toName, to_last4: number.slice(-4) } };
   }
 
@@ -2683,6 +2694,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     //   sends in 8 min because Sasa rephrased each one and the exact dedup
     //   missed them all.
     const last4 = number!.slice(-4);
+    const toHash = recipHash(number!); // H2: the unique-per-line dedup key
     const since2m = new Date(Date.now() - 120000).toISOString();
     const since10m = new Date(Date.now() - 600000).toISOString();
     // The intent-dedup (exact + fuzzy) is SKIPPED on an explicit operator resend, so
@@ -2694,12 +2706,12 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       // it over-eagerly must not reopen the rapid-duplicate hole (Violet: 3 sends in
       // 8 min). Allow ONE genuine retry, then hold an identical resend inside 2 min.
       const { data: r2 } = await db.from("events").select("created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since2m).limit(40);
-      const alreadyResent = (r2 || []).some((e: any) => e?.payload?.to_last4 === last4 && e?.payload?.text === text.slice(0, 300));
+      const alreadyResent = (r2 || []).some((e: any) => e?.payload?.to_hash === toHash && e?.payload?.text === text.slice(0, 300));
       if (alreadyResent) return { ok: true, summary: humanize(`I already re-sent that to ${toName} a moment ago, so I won't send it a third time. Give it a minute, or change the message if it still hasn't landed.`, opts), detail: { deduped: true, mode: "resend_capped", to: toName, to_last4: last4 } };
     }
     if (!resend) {
       const { data: recent } = await db.from("events").select("id,created_at,payload").eq("type", "whatsapp.message_out").gte("created_at", since10m).limit(40);
-      const sameRecipient = (recent || []).filter((e: any) => e?.payload?.to_last4 === last4);
+      const sameRecipient = (recent || []).filter((e: any) => e?.payload?.to_hash === toHash);
       const exactDupe = sameRecipient.some((e: any) => String(e?.created_at || "") >= since2m && e?.payload?.text === text.slice(0, 300));
       if (exactDupe) return { ok: true, summary: humanize(`Already sent that to ${toName}.`, opts), detail: { deduped: true, mode: "exact", to: toName, to_last4: last4 } };
       const tok = (s: string) => new Set(String(s).toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length >= 3));
@@ -2737,8 +2749,8 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     const minuteBucket = new Date().toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
     // On a resend, salt the claim key with our unique claim_id so this genuine retry
     // always "wins" (never collides with the original send's same-minute claim).
-    const claimKey = resend ? `${last4}:${textHash}:${minuteBucket}:resend:${claimId}` : `${last4}:${textHash}:${minuteBucket}`;
-    await emit({ type: "whatsapp.message_out_claim", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: ctx.contactId || null, payload: { claim_id: claimId, claim_key: claimKey, to_last4: last4 } }).catch(() => null);
+    const claimKey = resend ? `${toHash}:${textHash}:${minuteBucket}:resend:${claimId}` : `${toHash}:${textHash}:${minuteBucket}`;
+    await emit({ type: "whatsapp.message_out_claim", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: ctx.contactId || null, payload: { claim_id: claimId, claim_key: claimKey, to_last4: last4, to_hash: toHash } }).catch(() => null);
     // Recheck: did anyone else stake a claim with the same key first?
     const sinceClaim = new Date(Date.now() - 65000).toISOString();
     const { data: claims } = await db.from("events").select("id,created_at,payload").eq("type", "whatsapp.message_out_claim").gte("created_at", sinceClaim).limit(20);
@@ -2770,7 +2782,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
           // SCHEMA-4 (2026-06-15 audit): payload.via canonicalized to "template"
           // so the events table matches detail.via. show_outbound_audit filters
           // on the canonical set {"whatsapp","template"}.
-          await emit({ type: "whatsapp.message_out", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: text.slice(0, 300), via: "template" } });
+          await emit({ type: "whatsapp.message_out", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), to_hash: toHash, text: text.slice(0, 300), via: "template" } });
           return { ok: true, summary: humanize(`${toName} is outside the 24-hour window, so I delivered it as an update notification instead. Sent.`, opts), detail: { delivered: true, to: toName, to_last4: number.slice(-4), via: "template" } };
         }
       }
@@ -2801,7 +2813,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // SCHEMA-4 (2026-06-15 audit): payload.via canonicalized to "whatsapp" so
     // events.payload.via matches detail.via. show_outbound_audit filters on
     // the canonical set {"whatsapp","template"}.
-    await emit({ type: "whatsapp.message_out", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), text: text.slice(0, 300), via: "whatsapp", wamid: res.id } });
+    await emit({ type: "whatsapp.message_out", source: "agent:sasa", actor: "Nur", subject_type: "contact", subject_id: ctx.contactId || null, payload: { to_name: toName, to_last4: number.slice(-4), to_hash: toHash, text: text.slice(0, 300), via: "whatsapp", wamid: res.id } });
     // detail.via discriminates "whatsapp" (real Cloud API send) from "template"
     // (operator_update fallback, line 1572 above). The reply-side honesty guard
     // claimsPluralSendMismatch uses detail.to and detail.to_last4 to dedupe
@@ -4191,10 +4203,15 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     let paid_at = new Date().toISOString();
     if (input.date) { const d = new Date(String(input.date) + "T12:00:00Z"); if (!isNaN(d.getTime())) paid_at = d.toISOString(); }
 
-    // soft dedup: same payee + amount + currency, paid the same day, already logged
-    const day = paid_at.slice(0, 10);
-    const { data: dupe } = await db.from("payments").select("id").eq("payee", payee).eq("amount", amount).eq("currency", currency).eq("status", "paid").gte("paid_at", `${day}T00:00:00Z`).lte("paid_at", `${day}T23:59:59Z`).limit(1);
-    if (dupe && dupe.length) return { ok: true, summary: humanize(`Already logged: ${currency} ${amount.toLocaleString()} to ${payee}.`, opts), detail: { deduped: true } };
+    // soft dedup (M3): catch an accidental RAPID double-commit (same payee+amount+currency
+    // logged within a few minutes), but DO NOT collapse two genuinely separate same-day
+    // payments — merging two real petty-cash disbursements of the same amount under-records
+    // spend (Law 1, source-of-truth). Key on created_at (when it was logged), not paid_at,
+    // which can be backdated. The confirm gate already guards the staged-commit path; this
+    // is only a backstop against a rapid double-fire.
+    const dupSince = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    const { data: dupe } = await db.from("payments").select("id").eq("payee", payee).eq("amount", amount).eq("currency", currency).eq("status", "paid").gte("created_at", dupSince).limit(1);
+    if (dupe && dupe.length) return { ok: true, summary: humanize(`I logged ${currency} ${amount.toLocaleString()} to ${payee} a moment ago, so I did not log it twice. If this is a separate payment, tell me and I'll add it.`, opts), detail: { deduped: true } };
 
     const pargs = { payee, purpose, amount, currency, method, paid_at, category, screenshot_path: ctx.proofPath || null, source_message_id: ctx.sourceMessageId || null };
     const human = `${currency} ${amount.toLocaleString()} to ${payee}${purpose ? ` for ${purpose}` : ""}`;
