@@ -18,16 +18,21 @@ export async function sendReply(fd: FormData) {
   const contact_id = String(fd.get("contact_id") || "") || null;
   const account = String(fd.get("account") || "") || null;
   const refs = parseAttachRefs(fd.get("attach_refs") as string | null);
-  let status = "replied";
+  // Audit #2 (Law 11): the thread must only be marked answered when a reply ACTUALLY went
+  // out. Default to "failed" so an empty recipient/body or a send error never closes the
+  // inbound as "replied" (which would silently drop a real donor/volunteer out of the
+  // needs-reply queue while they received nothing).
+  let status = "failed";
   if (to && body) {
     try {
       const { attachments } = await resolveAttachments(refs);
       await sendEmail(to, subject, body, { account, attachments });
+      status = "replied";
     }
     catch (e: any) { status = "failed"; }
   }
   await admin().from("messages").insert({ contact_id, channel: "email", direction: "out", subject, body, handled_by: "nur", status, account });
-  if (contact_id) await admin().from("messages").update({ status: "replied" }).eq("contact_id", contact_id).eq("direction", "in").eq("status", "new");
+  if (contact_id && status === "replied") await admin().from("messages").update({ status: "replied" }).eq("contact_id", contact_id).eq("direction", "in").eq("status", "new");
   await emit({ type: "action.executed", source: "connector:email", actor: "nur", subject_type: "contact", subject_id: contact_id, payload: { action: "send_email", to } });
   revalidatePath("/inbox");
 }

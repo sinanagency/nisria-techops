@@ -114,13 +114,21 @@ export async function computeFigures(cfg: ReportConfig): Promise<Figures> {
     // figures (spec 004 Phase 3, SKEPTIC #16). The .or keeps NULL-source legacy rows.
     db.from("payments").select("*").or("source.is.null,source.neq.maisha_inventory").limit(5000),
   ]);
+  // Audit #3 (Law 11): a funder/board report must FAIL LOUD, never render "$0" from a
+  // query error. Throw instead of coalescing the error to [] and printing fake zeros.
+  if (donRes.error || payRes.error) {
+    throw new Error(`report figures query failed: ${donRes.error?.message || payRes.error?.message}`);
+  }
   const donations = (donRes.data || []) as any[];
   const payments = (payRes.data || []) as any[];
 
   const succeeded = donations.filter(
     (d) => (d.status || "").toLowerCase() === "succeeded" && (!cfg.from && !cfg.to ? true : inWindow(d.donated_at, cfg.from, cfg.to)),
   );
-  const incomeUsd = succeeded.reduce((s, d) => s + num(d.amount), 0);
+  // Audit #4 (Law 2): the income total is rendered with money() as USD, so it must sum only
+  // USD donations — the expense side already filters isUsd. A non-USD donation summed into a
+  // USD figure mixes currencies on a funder-facing number.
+  const incomeUsd = succeeded.filter(isUsd).reduce((s, d) => s + num(d.amount), 0);
 
   const paidUsd = payments.filter(
     (p) => p.status === "paid" && isUsd(p) && (!cfg.from && !cfg.to ? true : inWindow(p.paid_at, cfg.from, cfg.to)),

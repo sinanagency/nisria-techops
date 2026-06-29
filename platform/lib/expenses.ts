@@ -68,7 +68,7 @@ function inferCategory(description: string): string | null {
 }
 
 export async function loadExpenses(db: any, period: Period): Promise<ExpenseRow[]> {
-  const [{ data: payRows }, { data: bankRows }] = await Promise.all([
+  const [payRes, bankRes] = await Promise.all([
     db
       .from("payments")
       .select("id,payee,purpose,category,amount,currency,paid_at,screenshot_path,method,source")
@@ -91,6 +91,13 @@ export async function loadExpenses(db: any, period: Period): Promise<ExpenseRow[
       .lte("txn_date", period.to)
       .limit(2000),
   ]);
+  // Audit #3 (Law 11): the /finance Money-Out headline reads this — fail loud on a query
+  // error instead of silently returning [] (which renders as $0 spend on Nur's dashboard).
+  if (payRes.error || bankRes.error) {
+    throw new Error(`loadExpenses query failed: ${payRes.error?.message || bankRes.error?.message}`);
+  }
+  const payRows = payRes.data;
+  const bankRows = bankRes.data;
 
   // operator side, filtered (no Givebutter payouts, no payouts category)
   const ops: ExpenseRow[] = ((payRows || []) as any[])
