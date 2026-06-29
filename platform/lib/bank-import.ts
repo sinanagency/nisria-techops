@@ -37,29 +37,46 @@ export async function composeBankSummary(
     .limit(5000);
   if (error || !data || !data.length) return null;
 
-  const ccy = ((data as any[]).find((r) => r.currency)?.currency || "KES").toUpperCase();
-  const byMonth = new Map<string, { inSum: number; outSum: number; outCount: number }>();
-  let outTotal = 0, outCount = 0;
+  // #9 (Law 2, currency-never-mix): a statement can carry KES/USD/AED rows. Group per
+  // currency so the draft never sums them together under one tag. Outer key = currency,
+  // inner = month -> {inSum,outSum,outCount}.
+  const byCur = new Map<string, { months: Map<string, { inSum: number; outSum: number; outCount: number }>; outTotal: number; outCount: number }>();
   for (const r of data as any[]) {
+    const cur = String(r.currency || "KES").toUpperCase();
+    const slot = byCur.get(cur) || { months: new Map(), outTotal: 0, outCount: 0 };
     const m = monthOf(r.txn_date);
-    const cur = byMonth.get(m) || { inSum: 0, outSum: 0, outCount: 0 };
+    const mm = slot.months.get(m) || { inSum: 0, outSum: 0, outCount: 0 };
     const amt = Number(r.amount) || 0;
-    if (r.direction === "out") { cur.outSum += amt; cur.outCount += 1; outTotal += amt; outCount += 1; }
-    else { cur.inSum += amt; }
-    byMonth.set(m, cur);
+    if (r.direction === "out") { mm.outSum += amt; mm.outCount += 1; slot.outTotal += amt; slot.outCount += 1; }
+    else { mm.inSum += amt; }
+    slot.months.set(m, mm);
+    byCur.set(cur, slot);
   }
-  const months = Array.from(byMonth.keys()).filter((m) => m !== "unknown").sort();
-  const lines = months.map((m) => {
-    const c = byMonth.get(m)!;
-    return `- ${m}: ${money(c.outSum, ccy)} out (${c.outCount}), ${money(c.inSum, ccy)} in`;
-  });
+  const allMonths = new Set<string>();
+  const lines: string[] = [];
+  const totalLines: string[] = [];
+  // currencies ordered by out-payment count, dominant first
+  const curOrder = Array.from(byCur.entries()).sort((a, b) => b[1].outCount - a[1].outCount);
+  for (const [cur, slot] of curOrder) {
+    const ms = Array.from(slot.months.keys()).filter((m) => m !== "unknown").sort();
+    for (const m of ms) allMonths.add(m);
+    for (const m of ms) {
+      const c = slot.months.get(m)!;
+      lines.push(`- ${m} (${cur}): ${money(c.outSum, cur)} out (${c.outCount}), ${money(c.inSum, cur)} in`);
+    }
+    totalLines.push(`Total out (${cur}): ${money(slot.outTotal, cur)} across ${slot.outCount} payments.`);
+  }
+  const months = Array.from(allMonths).sort();
   const text =
     `Bank extraction, account ${scope.account}.\n` +
     `${data.length} transactions across ${months.length} months.\n\n` +
     `${lines.join("\n")}\n\n` +
-    `Total out: ${money(outTotal, ccy)} across ${outCount} payments.\n` +
+    `${totalLines.join("\n")}\n` +
     `Reply "verified" and I record this against the platform and draft the note to Nur.`;
-  return { text, months, outTotal, outCount, account: scope.account, currency: ccy };
+  // Single-figure contract for the caller: the DOMINANT currency's REAL total, never a
+  // cross-currency blend. The full per-currency breakdown lives in `text`.
+  const dominant = curOrder[0];
+  return { text, months, outTotal: dominant?.[1].outTotal || 0, outCount: dominant?.[1].outCount || 0, account: scope.account, currency: dominant?.[0] || "KES" };
 }
 
 // Record the intent token. Thin by design (Option R): the rows already live in

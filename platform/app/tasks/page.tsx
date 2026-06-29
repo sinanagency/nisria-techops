@@ -2,6 +2,7 @@ import Link from "next/link";
 import Shell from "../../components/Shell";
 import { Badge, Stat, statusTone } from "../../components/ui";
 import { admin, date } from "../../lib/supabase-admin";
+import { openTasksCount } from "../../lib/counts";
 import { getCurrentUser } from "../../lib/auth";
 import { getCurrentTeamMember } from "../../lib/profile";
 import DispatchBox from "../../components/DispatchBox";
@@ -42,6 +43,11 @@ export default async function Tasks({ searchParams }: { searchParams?: { mine?: 
   const overdue = openTasks.filter((t: any) => t.due_on && t.due_on < today);
   const assignedCount = openTasks.filter((t: any) => t.assignee_id).length;
   const unassignedCount = openTasks.length - assignedCount;
+  // #6: the headline "Open tasks" must be the canonical count (counts.ts, a head:true exact
+  // count), not openTasks.length off the capped limit(300) fetch — past 300 tasks the header
+  // would silently undercount and disagree with the dashboard + bell. The "mine" view counts
+  // the filtered set, which is small, so its length is accurate.
+  const openCount = mine ? openTasks.length : await openTasksCount(db);
 
   const pill = (active: boolean) => ({
     fontSize: 12.5, padding: "5px 12px", borderRadius: 999,
@@ -58,7 +64,7 @@ export default async function Tasks({ searchParams }: { searchParams?: { mine?: 
       </div>
 
       <div className="grid cols-4">
-        <Stat label="Open tasks" value={<span className="disp2">{openTasks.length}</span>} />
+        <Stat label="Open tasks" value={<span className="disp2">{openCount}</span>} />
         <Stat label="Overdue" value={<span className="disp2" style={overdue.length ? { color: "var(--danger)" } : undefined}>{overdue.length}</span>} delta={overdue.length ? "needs attention" : "on track"} />
         <Stat label="Assigned" value={<span className="disp2">{assignedCount}</span>} delta={`${unassignedCount} unassigned`} />
         <Stat label="Done" value={<span className="disp2">{tasks.filter(isDone).length}</span>} />
