@@ -169,6 +169,20 @@ export async function advanceStatus(fd: FormData) {
     }
   }
   if (status === "won" || status === "lost") patch.decision_on = new Date().toISOString();
+  if (status === "won") {
+    // H-3: a won grant must carry an awarded amount, or it contributes $0 to "funding we hold
+    // now" / Treasury and never appears under Active grants (which require amount_awarded > 0).
+    // Prefer an explicit amount_awarded from the form; otherwise default to the amount
+    // requested (you usually win what you asked for) so marking won from the portal never
+    // silently lands $0. Never overwrite an amount already recorded.
+    const explicit = Number(fd.get("amount_awarded"));
+    if (Number.isFinite(explicit) && explicit > 0) {
+      patch.amount_awarded = explicit;
+    } else {
+      const { data: g } = await admin().from("grant_applications").select("amount_requested,amount_awarded").eq("id", id).single();
+      if (!(Number(g?.amount_awarded) > 0)) patch.amount_awarded = Number(g?.amount_requested) || null;
+    }
+  }
   await admin().from("grant_applications").update(patch).eq("id", id);
 
   await emit({

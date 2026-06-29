@@ -36,7 +36,7 @@ export default async function Donor360({ params }: { params: { id: string } }) {
     if (contactIds.length) {
       const { data: m } = await db
         .from("messages")
-        .select("id,channel,direction,subject,body,created_at,handled_by")
+        .select("id,channel,direction,subject,body,created_at,handled_by,status")
         .in("contact_id", contactIds)
         .order("created_at", { ascending: false });
       msgs = m || [];
@@ -59,14 +59,18 @@ export default async function Donor360({ params }: { params: { id: string } }) {
   // renders inside a <Money> (blurrable) instead of being baked into a string.
   type T = { icon: any; aico: string; title: string; amount?: number; titleAfter?: string; meta?: string; at: string };
   const timeline: T[] = [];
-  for (const m of msgs)
+  // M-2: a failed email (status="failed") must show as a failed send, not an identical
+  // "We replied" bubble, so a bounce is never mistaken for a delivered reply.
+  for (const m of msgs) {
+    const failed = m.direction === "out" && m.status === "failed";
     timeline.push({
       icon: m.direction === "out" ? Mail : MessageSquare,
-      aico: m.direction === "out" ? "teal" : "peri",
-      title: `${m.direction === "out" ? "We replied" : "They wrote"}${m.subject ? `: ${m.subject}` : ""}`,
+      aico: failed ? "gray" : m.direction === "out" ? "teal" : "peri",
+      title: `${m.direction === "out" ? (failed ? "Send failed" : "We replied") : "They wrote"}${m.subject ? `: ${m.subject}` : ""}`,
       meta: snippet(m.body || "", 90),
       at: m.created_at,
     });
+  }
   for (const g of gifts)
     timeline.push({
       icon: DollarSign,

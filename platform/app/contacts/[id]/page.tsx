@@ -16,7 +16,7 @@ export default async function Contact360({ params }: { params: { id: string } })
   const c: any = contact || {};
 
   const [{ data: msgs }, { data: events }] = await Promise.all([
-    db.from("messages").select("id,channel,direction,subject,body,created_at,handled_by").eq("contact_id", id).order("created_at", { ascending: false }),
+    db.from("messages").select("id,channel,direction,subject,body,created_at,handled_by,status").eq("contact_id", id).order("created_at", { ascending: false }),
     db.from("events").select("type,payload,created_at").eq("subject_id", id).order("created_at", { ascending: false }).limit(40),
   ]);
 
@@ -45,7 +45,9 @@ export default async function Contact360({ params }: { params: { id: string } })
   // renders inside a <span.money> (blurrable) instead of being baked into a string.
   type T = { t: string; icon: any; aico: string; title: string; amount?: string; titleAfter?: string; meta?: string; at: string };
   const timeline: T[] = [];
-  for (const m of (msgs || []) as any[]) timeline.push({ t: "msg", icon: m.direction === "out" ? Mail : MessageSquare, aico: m.direction === "out" ? "teal" : "peri", title: `${m.direction === "out" ? "We replied" : "They wrote"}${m.subject ? `: ${m.subject}` : ""}`, meta: snippet(m.body || "", 90), at: m.created_at });
+  // M-2: a failed email is logged with status="failed"; show it as a failed send, not an
+  // identical "We replied" bubble, so a bounce is never mistaken for a delivered reply.
+  for (const m of (msgs || []) as any[]) { const failed = m.direction === "out" && m.status === "failed"; timeline.push({ t: "msg", icon: m.direction === "out" ? Mail : MessageSquare, aico: failed ? "gray" : m.direction === "out" ? "teal" : "peri", title: `${m.direction === "out" ? (failed ? "Send failed" : "We replied") : "They wrote"}${m.subject ? `: ${m.subject}` : ""}`, meta: snippet(m.body || "", 90), at: m.created_at }); }
   for (const d of donations) timeline.push({ t: "don", icon: DollarSign, aico: "green", title: "Gift ", amount: money(d.amount), titleAfter: d.campaign?.name ? ` to ${d.campaign.name}` : "", meta: d.status, at: d.donated_at });
   for (const e of (events || []) as any[]) if (e.type?.startsWith("agent") || e.type?.startsWith("approval")) timeline.push({ t: "evt", icon: Bot, aico: "gold", title: e.type.replace(/\./g, " "), meta: e.payload?.category || "", at: e.created_at });
   timeline.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());

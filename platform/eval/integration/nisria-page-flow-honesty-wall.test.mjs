@@ -19,6 +19,10 @@ const RES = rd("app", "resources", "page.tsx");
 const BEN = rd("app", "beneficiaries", "page.tsx");
 const LIB = rd("app", "library", "page.tsx");
 const FIL = rd("app", "filing", "page.tsx");
+const GA = rd("app", "grants", "actions.ts");
+const CA = rd("app", "contacts", "actions.ts");
+const CP = rd("app", "contacts", "[id]", "page.tsx");
+const DP = rd("app", "donors", "[id]", "page.tsx");
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
 
@@ -101,6 +105,37 @@ const ok = (m) => console.log("PASS:", m);
   else ok("L-5b filing detects the 50+ cap");
   if (!/\$\{capped \? "50\+" : results\.length\}/.test(FIL)) fail("L-5c the heading must say 50+ when capped");
   else ok("L-5c filing heading honestly says 50+ when capped");
+}
+
+// ---- H-3: won grant records an awarded amount (Treasury/Active no longer $0) ----
+{
+  const wi = GA.indexOf('if (status === "won") {');
+  const region = wi >= 0 ? GA.slice(wi, wi + 1100) : "";
+  if (!region) fail("H-3a advanceStatus must handle the won amount");
+  else if (!/patch\.amount_awarded = explicit;/.test(region)) fail("H-3b an explicit amount_awarded must be honored");
+  else if (!/patch\.amount_awarded = Number\(g\?\.amount_requested\) \|\| null;/.test(region)) fail("H-3c a won grant must default amount_awarded to the requested amount, not leave it null");
+  else ok("H-3 won grants record an awarded amount (explicit or default to requested)");
+}
+
+// ---- H-5: donor/contact email find-or-upserts a contact so it isn't orphaned ----
+{
+  if (!/let resolvedContactId = contact_id;/.test(CA)) fail("H-5a emailContact must resolve a contact id");
+  if (!/\.from\("contacts"\)\.insert\(\{ name: to\.split\("@"\)\[0\] \|\| to, email: to, channel: "email" \}\)/.test(CA)) fail("H-5b emailContact must create a contact by email when none matches");
+  else ok("H-5b emailContact find-or-creates a contact by email");
+  if (!/contact_id: resolvedContactId, channel: "email"/.test(CA)) fail("H-5c the logged message must link to the resolved contact, not null");
+  else ok("H-5c the email logs against the resolved contact (no orphan)");
+  if (!/let status = "failed";/.test(CA)) fail("H-5d emailContact must default status to failed, not replied");
+  else ok("H-5d emailContact defaults to failed");
+}
+
+// ---- M-2: failed email shows as a failed send, not "We replied" ----
+{
+  for (const [name, src] of [["contact", CP], ["donor", DP]]) {
+    if (!/,created_at,handled_by,status"/.test(src)) fail(`M-2a the ${name} thread must select messages.status`);
+    else ok(`M-2a ${name} thread selects status`);
+    if (!/failed \? "Send failed" : "We replied"/.test(src)) fail(`M-2b the ${name} thread must label a failed send distinctly`);
+    else ok(`M-2b ${name} thread marks a failed send`);
+  }
 }
 
 if (process.exitCode) console.error("\nWALL RED.");
