@@ -92,7 +92,10 @@ export default async function Beneficiaries({
   const all = (data || []) as any[];
   const inCat = (needle: string) => all.filter((r: any) => (r.category || "").toLowerCase().includes(needle));
   const rescue = inCat("kwetu");
-  const rescueInCare = rescue.filter((r: any) => (r.status || "") !== "transitioned");
+  // L-3: drives the "Rescue children · in care now" tile, whose href filters status:"active".
+  // Counting !== "transitioned" also included exited/paused rows, so the tile count diverged
+  // from the list it links to (tile said 12, click landed on 10). Match the link: active only.
+  const rescueInCare = rescue.filter((r: any) => (r.status || "") === "active");
   const alumni = all.filter((r: any) => (r.status || "") === "transitioned");
   const microfund = inCat("microfund");
   const KWETU = "Kwetu Haven (rescue)", MICRO = "Microfund (women)";

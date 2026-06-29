@@ -188,6 +188,12 @@ export default async function Resources({ searchParams }: { searchParams?: { [k:
         </div>
       )}
 
+      {/* M-3: when there ARE links but a search/filter matches none, grouped is empty and the
+          page rendered blank below the filter (looked broken). Show a no-match card, like Library. */}
+      {allLinks.length > 0 && grouped.length === 0 && (
+        <div className="card"><div className="empty"><Link2 size={20} color="var(--faint)" /><div style={{ marginTop: 8 }}>{q ? `No links match “${q}”.` : "No links match this filter."} Try a different search, or clear the filter.</div></div></div>
+      )}
+
       {allLinks.length === 0 && (
         <div className="card"><div className="empty"><Link2 size={20} color="var(--faint)" /><div style={{ marginTop: 8 }}>No links yet. Add a platform or supplier above, or drop links to Sasa on WhatsApp and she&rsquo;ll file them here.</div></div></div>
       )}

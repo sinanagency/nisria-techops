@@ -47,16 +47,20 @@ export default async function Filing({ searchParams }: { searchParams?: { [k: st
       .from("documents")
       .select("id,title,folder,doc_type,drive_url,extracted_text")
       .or(`title.ilike.${like},extracted_text.ilike.${like}`)
-      .limit(50);
+      .limit(51); // L-5: fetch one past the display cap so we can honestly say "50+"
     const needle = q.toLowerCase();
-    const results = (hits || []).map((d: any) => {
+    const allResults = (hits || []).map((d: any) => {
       const txt = d.extracted_text || "";
       const i = txt.toLowerCase().indexOf(needle);
       const snippet = i >= 0 ? (i > 60 ? "…" : "") + txt.slice(Math.max(0, i - 60), i + 140).replace(/\s+/g, " ").trim() + "…" : "";
       return { id: d.id, title: d.title, folder: d.folder, doc_type: d.doc_type, drive_url: d.drive_url, snippet, inBody: i >= 0 };
     });
+    // L-5: the heading used to say "N documents match" off a hard limit(50), silently dropping
+    // the rest once there were 50+ hits. Show "50+" and render the first 50.
+    const capped = allResults.length > 50;
+    const results = capped ? allResults.slice(0, 50) : allResults;
     return (
-      <Shell title="Search" sub={`${results.length} ${results.length === 1 ? "document matches" : "documents match"} “${q}”`}>
+      <Shell title="Search" sub={`${capped ? "50+" : results.length} ${results.length === 1 ? "document matches" : "documents match"} “${q}”${capped ? " · showing the first 50, narrow your search to see more" : ""}`}>
         <div className="card card-pad" style={{ marginBottom: 16 }}>
           <form method="GET" action="/filing" className="flex" style={{ gap: 8 }}>
             <input name="q" defaultValue={q} placeholder="Search across every document…" style={{ maxWidth: 380 }} autoFocus />

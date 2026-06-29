@@ -15,6 +15,10 @@ const INB = rd("app", "inbox", "page.tsx");
 const TM = rd("app", "team", "[id]", "page.tsx");
 const SC = rd("components", "SmartConsole.tsx");
 const RA = rd("components", "ReportArchive.tsx");
+const RES = rd("app", "resources", "page.tsx");
+const BEN = rd("app", "beneficiaries", "page.tsx");
+const LIB = rd("app", "library", "page.tsx");
+const FIL = rd("app", "filing", "page.tsx");
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
 
@@ -68,6 +72,35 @@ const ok = (m) => console.log("PASS:", m);
   else ok("M-6a ReportArchive no longer returns null on empty");
   if (!/if \(!rows\.length\) return <div className="empty">/.test(RA)) fail("M-6b ReportArchive must render an empty state when there are no reports");
   else ok("M-6b ReportArchive renders an empty state");
+}
+
+// ---- M-3: resources no-match empty state ----
+{
+  if (!/allLinks\.length > 0 && grouped\.length === 0 &&/.test(RES)) fail("M-3 resources must show a no-match card when a search/filter matches nothing");
+  else ok("M-3 resources renders a no-match empty state");
+}
+
+// ---- L-3: beneficiaries rescue count matches its active-only link ----
+{
+  if (/const rescueInCare = rescue\.filter\(\(r: any\) => \(r\.status \|\| ""\) !== "transitioned"\)/.test(BEN)) fail("L-3 the rescue 'in care now' count must not include exited/paused (it links to status:active)");
+  else if (!/const rescueInCare = rescue\.filter\(\(r: any\) => \(r\.status \|\| ""\) === "active"\)/.test(BEN)) fail("L-3 the rescue 'in care now' count must be active-only to match its link");
+  else ok("L-3 rescue tile count is active-only (matches the link)");
+}
+
+// ---- L-4: library Drive badge gated on the real env ----
+{
+  if (!/process\.env\.GOOGLE_SERVICE_ACCOUNT_B64 \? <Badge tone="green">connected<\/Badge> : <Badge tone="gray">not connected<\/Badge>/.test(LIB)) fail("L-4 the Drive badge must be gated on the real service-account env, not hardcoded connected");
+  else ok("L-4 Drive badge reflects the real env");
+}
+
+// ---- L-5: filing search shows 50+ instead of silently dropping rows ----
+{
+  if (/\.limit\(50\);/.test(FIL)) fail("L-5 filing search must not hard-cap at 50 with no indicator");
+  else ok("L-5 filing search no longer hard-caps at 50 silently");
+  if (!/const capped = allResults\.length > 50;/.test(FIL)) fail("L-5b filing must detect the cap");
+  else ok("L-5b filing detects the 50+ cap");
+  if (!/\$\{capped \? "50\+" : results\.length\}/.test(FIL)) fail("L-5c the heading must say 50+ when capped");
+  else ok("L-5c filing heading honestly says 50+ when capped");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");

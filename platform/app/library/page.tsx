@@ -110,9 +110,11 @@ export default async function Library({ searchParams }: { searchParams?: { [k: s
             <div className="ftitle disp2">{list.length} files</div>
             <div className="fmeta">{fmtSize(totalSize)} stored · all private, RLS-gated</div>
           </div>
+          {/* L-4: gate the badge on the REAL service-account env, not a hardcoded "connected".
+              A misconfigured/rotated key must not show a green "connected · syncs daily" lie. */}
           <div className="card card-pad">
-            <div className="flex" style={{ marginBottom: 6 }}><CheckCircle2 size={16} color="var(--teal-700)" /><span style={{ fontWeight: 600, fontSize: 13.5 }}>Google Drive</span><span style={{ marginLeft: "auto" }}><Badge tone="green">connected</Badge></span></div>
-            <div className="muted" style={{ fontSize: 12 }}>Connected via service account. Drive files sync daily through the same ingestion and memory.</div>
+            <div className="flex" style={{ marginBottom: 6 }}><CheckCircle2 size={16} color={process.env.GOOGLE_SERVICE_ACCOUNT_B64 ? "var(--teal-700)" : "var(--faint)"} /><span style={{ fontWeight: 600, fontSize: 13.5 }}>Google Drive</span><span style={{ marginLeft: "auto" }}>{process.env.GOOGLE_SERVICE_ACCOUNT_B64 ? <Badge tone="green">connected</Badge> : <Badge tone="gray">not connected</Badge>}</span></div>
+            <div className="muted" style={{ fontSize: 12 }}>{process.env.GOOGLE_SERVICE_ACCOUNT_B64 ? "Connected via service account. Drive files sync daily through the same ingestion and memory." : "Not connected. Set the service-account key (GOOGLE_SERVICE_ACCOUNT_B64) to enable the daily Drive sync."}</div>
           </div>
         </div>
       </div>
