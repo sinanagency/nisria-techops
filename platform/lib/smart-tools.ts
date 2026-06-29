@@ -1713,15 +1713,21 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   // without touching their internals. Web console (no confirmWrites = a human clicked it) is
   // direct. Graceful: if staging fails (kind not migrated) fall through — never worse than today.
   const DELETE_TOOLS = new Set(["delete_event", "delete_contact", "delete_case", "delete_document", "delete_payment"]);
-  if (ctx.confirmWrites && ctx.contactId && DELETE_TOOLS.has(name)) {
+  if (ctx.confirmWrites && DELETE_TOOLS.has(name)) {
     const what = String(input.title || input.name || input.payee || input.query || input.case || input.event || "").trim();
     const noun = name.replace("delete_", "");
+    // FAIL CLOSED (audit #1): confirmWrites means the MODEL picked this irreversible delete on
+    // a WhatsApp turn, so it MUST be staged for a human "yes" and NEVER executed on model
+    // judgment. If we cannot stage (no contactId, or the insert errors), refuse honestly. The
+    // old code fell through to the real delete here, which is the exact class-C2 hole C2 closes.
+    if (!ctx.contactId) return { ok: false, summary: humanize(`I can only delete the ${noun} after you confirm, and I can't set that confirmation up right now, so I have deleted nothing.`, opts), error: "no contact for confirm", detail: { refused: true } };
     const { error: stErr } = await db.from("pending_actions").insert({
       contact_id: ctx.contactId, kind: "confirm_action", status: "awaiting_confirm",
       summary: `${name}${what ? ` ${what}` : ""}`,
       payload: { tool: name, args: input, preview: `delete the ${noun}${what ? ` "${what.slice(0, 60)}"` : ""}` },
     });
-    if (!stErr) return { ok: true, summary: humanize(`That permanently deletes the ${noun}${what ? ` "${what.slice(0, 60)}"` : ""}, which cannot be undone. Reply yes to confirm, or tell me to cancel.`, opts), detail: { staged: true } };
+    if (stErr) return { ok: false, summary: humanize(`I couldn't set up the confirmation to delete the ${noun}, so I have deleted nothing. Try again in a moment.`, opts), error: stErr.message, detail: { refused: true } };
+    return { ok: true, summary: humanize(`That permanently deletes the ${noun}${what ? ` "${what.slice(0, 60)}"` : ""}, which cannot be undone. Reply yes to confirm, or tell me to cancel.`, opts), detail: { staged: true } };
   }
 
   // C2 STAGE-THEN-CONFIRM for the MERGE family (KT #384, 727 cartography). merge_contact does
@@ -1730,16 +1736,21 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
   // like the delete family: stage a confirm whose preview names BOTH sides, so the operator
   // catches a wrong-person merge (name ≠ identity, KT #375) before any history/money moves.
   const MERGE_TOOLS = new Set(["merge_contact", "merge_beneficiary", "merge_case"]);
-  if (ctx.confirmWrites && ctx.contactId && MERGE_TOOLS.has(name)) {
+  if (ctx.confirmWrites && MERGE_TOOLS.has(name)) {
     const dup = String(input.name || "").trim();
     const into = String(input.into || "").trim();
     const noun = name.replace("merge_", "");
+    // FAIL CLOSED (audit #1): a merge irreversibly folds history/funding and hard-deletes the
+    // duplicate, so on a confirmWrites turn it must be staged for a human "yes", never executed
+    // on model judgment. If staging is impossible, refuse — do not fall through to the merge.
+    if (!ctx.contactId) return { ok: false, summary: humanize(`I can only merge those after you confirm, and I can't set that confirmation up right now, so I have merged nothing.`, opts), error: "no contact for confirm", detail: { refused: true } };
     const { error: stErr } = await db.from("pending_actions").insert({
       contact_id: ctx.contactId, kind: "confirm_action", status: "awaiting_confirm",
       summary: `${name} ${dup}${into ? ` into ${into}` : ""}`,
       payload: { tool: name, args: input, preview: `merge the ${noun} "${dup.slice(0, 60)}"${into ? ` into "${into.slice(0, 60)}"` : ""}` },
     });
-    if (!stErr) return { ok: true, summary: humanize(`Merging the ${noun} "${dup.slice(0, 60)}"${into ? ` into "${into.slice(0, 60)}"` : ""} moves its history and funding across and removes the duplicate, which is hard to undo. Reply yes to confirm it is the same ${noun === "contact" ? "person" : noun}, or tell me to cancel.`, opts), detail: { staged: true } };
+    if (stErr) return { ok: false, summary: humanize(`I couldn't set up the confirmation for that merge, so I have merged nothing. Try again in a moment.`, opts), error: stErr.message, detail: { refused: true } };
+    return { ok: true, summary: humanize(`Merging the ${noun} "${dup.slice(0, 60)}"${into ? ` into "${into.slice(0, 60)}"` : ""} moves its history and funding across and removes the duplicate, which is hard to undo. Reply yes to confirm it is the same ${noun === "contact" ? "person" : noun}, or tell me to cancel.`, opts), detail: { staged: true } };
   }
 
   // ---- SAFE: create_task ----
@@ -3811,14 +3822,19 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // verified result (mirrors record_payment). The web console (a human clicked it) writes
     // directly. Graceful: if staging fails (e.g. the confirm_action kind is not migrated yet)
     // fall through to the direct write — never WORSE than today's behaviour.
-    if (ctx.confirmWrites && ctx.contactId) {
+    if (ctx.confirmWrites) {
+      // FAIL CLOSED (audit #1): a payout MOVES money, so on a confirmWrites turn it must be
+      // staged for a human "yes", never logged on model judgment. If staging is impossible,
+      // refuse honestly — do not fall through to the direct ledger write below.
       const preview = `a Givebutter payout of USD ${money(amount)}${input.note ? ` (${String(input.note).slice(0, 80)})` : ""}`;
+      if (!ctx.contactId) return { ok: false, summary: humanize(`I can only log ${preview} after you confirm, and I can't set that confirmation up right now, so I have logged nothing.`, opts), error: "no contact for confirm", detail: { refused: true } };
       const { error: stErr } = await db.from("pending_actions").insert({
         contact_id: ctx.contactId, kind: "confirm_action", status: "awaiting_confirm",
         summary: `log payout USD ${money(amount)}`,
         payload: { tool: "log_payout", args: { amount, note: input.note || null }, preview },
       });
-      if (!stErr) return { ok: true, summary: humanize(`Want me to log ${preview}? Reply yes to confirm.`, opts), detail: { staged: true } };
+      if (stErr) return { ok: false, summary: humanize(`I couldn't set up the confirmation for ${preview}, so I have logged nothing. Try again in a moment.`, opts), error: stErr.message, detail: { refused: true } };
+      return { ok: true, summary: humanize(`Want me to log ${preview}? Reply yes to confirm.`, opts), detail: { staged: true } };
     }
     const ref = `GB-PAYOUT-${Date.now().toString(36).toUpperCase()}`;
     const { data: row, error: lpErr } = await db.from("payments").insert({ direction: "in", payee: "Givebutter payout", purpose: input.note ? String(input.note).slice(0, 300) : "Givebutter USD payout to Kenya", amount, currency: "USD", method: "givebutter", status: "paid", paid_at: new Date().toISOString(), category: "payout", ref, created_by: "Sasa" }).select("id").single();

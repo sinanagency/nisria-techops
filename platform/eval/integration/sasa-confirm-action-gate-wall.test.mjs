@@ -17,10 +17,11 @@ const flat = (s) => s.replace(/\s+/g, " ");
 // ---- A1: log_payout STAGES on the WhatsApp surface, never fires on model judgment ----
 {
   const i = ST.indexOf('name === "log_payout"');
-  const region = i >= 0 ? ST.slice(i, i + 1600) : "";
+  const region = i >= 0 ? ST.slice(i, i + 2900) : "";
   if (!region) fail("A1 log_payout must exist");
-  // staging branch gated on confirmWrites + contactId, BEFORE the direct write (ref = ...)
-  else if (!/if \(ctx\.confirmWrites && ctx\.contactId\) \{/.test(region)) fail("A1a log_payout must stage on the WhatsApp surface (confirmWrites)");
+  // staging branch gated on confirmWrites (contactId is checked INSIDE so a null contactId
+  // refuses instead of falling through), BEFORE the direct write.
+  else if (!/if \(ctx\.confirmWrites\) \{/.test(region)) fail("A1a log_payout must stage on the WhatsApp surface (confirmWrites)");
   else if (!/kind: "confirm_action", status: "awaiting_confirm"/.test(flat(region))) fail("A1b must stage a confirm_action pending_action");
   else if (!/payload: \{ tool: "log_payout", args:/.test(flat(region))) fail("A1c the staged payload must carry tool + args for the gate to dispatch");
   else if (!/Reply yes to confirm/.test(region)) fail("A1d a staged payout must ask the operator to confirm with yes");
@@ -33,14 +34,18 @@ const flat = (s) => s.replace(/\s+/g, " ");
   }
 }
 
-// ---- A2: graceful fall-through — never WORSE than today if staging is unavailable ----
+// ---- A2: FAIL CLOSED (audit #1) — a staging failure REFUSES, never falls through to the write ----
 {
   const i = ST.indexOf('name === "log_payout"');
-  const region = i >= 0 ? ST.slice(i, i + 1600) : "";
-  // only RETURN the staged confirmation when the insert did NOT error; otherwise fall through
-  if (!/if \(!stErr\) return \{ ok: true, summary: humanize\(`Want me to log/.test(region))
-    fail("A2a must only confirm-stage when the insert succeeded (else fall through to the direct write)");
-  else ok("A2 staging fails safe: a rejected insert falls through to today's direct write (never worse)");
+  const region = i >= 0 ? ST.slice(i, i + 2900) : "";
+  // the old fall-open pattern (stage on !stErr, else drop to the direct write) must be GONE
+  if (/if \(!stErr\) return \{ ok: true, summary: humanize\(`Want me to log/.test(region))
+    fail("A2a log_payout must NOT fall through to the direct write when staging fails (the class-C2 fail-open hole)");
+  else ok("A2a log_payout no longer falls open on a staging error");
+  if (!/if \(stErr\) return \{ ok: false[\s\S]*?refused: true/.test(region)) fail("A2b a staging error must return an honest refusal");
+  else ok("A2b a staging error refuses honestly");
+  if (!/if \(!ctx\.contactId\) return \{ ok: false[\s\S]*?refused: true/.test(region)) fail("A2c a confirmWrites turn with no contactId must refuse, not write");
+  else ok("A2c no-contactId on a confirmWrites turn refuses (never executes the payout)");
 }
 
 // ---- A3: the confirm gate runs the REAL tool, owner/founder only, verified ----
@@ -103,15 +108,19 @@ const flat = (s) => s.replace(/\s+/g, " ");
 {
   // the interceptor sits at the TOP of runAction (before the tool dispatch) so it covers all 5
   const i = ST.indexOf("C2 STAGE-THEN-CONFIRM for the DELETE family");
-  const region = i >= 0 ? ST.slice(i, i + 1400) : "";
+  const region = i >= 0 ? ST.slice(i, i + 2600) : "";
   if (!region) fail("A6 the delete-family stage interceptor must exist");
   else if (!/const DELETE_TOOLS = new Set\(\["delete_event", "delete_contact", "delete_case", "delete_document", "delete_payment"\]\)/.test(region))
     fail("A6a all five delete tools must be gated");
-  else if (!/if \(ctx\.confirmWrites && ctx\.contactId && DELETE_TOOLS\.has\(name\)\)/.test(region))
-    fail("A6b the interceptor must fire only on the WhatsApp surface (confirmWrites)");
+  else if (!/if \(ctx\.confirmWrites && DELETE_TOOLS\.has\(name\)\)/.test(region))
+    fail("A6b the interceptor must fire on the WhatsApp surface (confirmWrites), with contactId checked INSIDE so a null contactId refuses");
   else if (!/kind: "confirm_action"/.test(region)) fail("A6c a delete must stage a confirm_action");
   else if (!/permanently deletes/.test(region)) fail("A6d the confirm prompt must warn it is permanent/irreversible");
-  else ok("A6 the delete family (5 tools) is gated by one stage-then-confirm interceptor with an irreversibility warning");
+  // FAIL CLOSED (audit #1): a staging error or a null contactId must refuse, NEVER fall through
+  // to the real delete (the old `if (!stErr) return staged` with no else was the fail-open hole).
+  else if (!/if \(stErr\) return \{ ok: false[\s\S]*?refused: true/.test(region)) fail("A6f a staging error must refuse the delete, not fall through");
+  else if (!/if \(!ctx\.contactId\) return \{ ok: false[\s\S]*?refused: true/.test(region)) fail("A6g a confirmWrites delete with no contactId must refuse, not execute");
+  else ok("A6 the delete family is gated AND fails closed: staging error / no contactId refuses, never executes");
   // it must run BEFORE the tool dispatch (so the model can't reach the delete) — interceptor is
   // above the first `if (name === "create_task")`
   const interceptIdx = ST.indexOf("DELETE_TOOLS.has(name)");

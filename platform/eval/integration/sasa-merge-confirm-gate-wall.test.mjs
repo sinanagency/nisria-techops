@@ -16,23 +16,26 @@ const ok = (m) => console.log("PASS:", m);
 // ---- M1: the MERGE interceptor stages a confirm for all three merges, on the WA surface ----
 {
   const i = ST.indexOf("C2 STAGE-THEN-CONFIRM for the MERGE family");
-  const region = i >= 0 ? ST.slice(i, i + 1400) : "";
+  const region = i >= 0 ? ST.slice(i, i + 2100) : "";
   if (!region) fail("M1 the merge stage interceptor must exist");
   else if (!/const MERGE_TOOLS = new Set\(\["merge_contact", "merge_beneficiary", "merge_case"\]\)/.test(region))
     fail("M1a all three merges must be gated");
-  else if (!/if \(ctx\.confirmWrites && ctx\.contactId && MERGE_TOOLS\.has\(name\)\)/.test(region))
-    fail("M1b the interceptor must fire only on the WhatsApp surface (confirmWrites)");
+  else if (!/if \(ctx\.confirmWrites && MERGE_TOOLS\.has\(name\)\)/.test(region))
+    fail("M1b the interceptor must fire on the WhatsApp surface (confirmWrites), contactId checked INSIDE so a null contactId refuses");
   else if (!/kind: "confirm_action", status: "awaiting_confirm"/.test(region.replace(/\s+/g, " ")))
     fail("M1c must stage a confirm_action");
   else if (!/payload: \{ tool: name, args: input/.test(region)) fail("M1d staged payload must carry tool + args for the gate to dispatch");
   else if (!/Reply yes to confirm/.test(region)) fail("M1e must ask the operator to confirm with yes");
-  else ok("M1 merge family stages-then-confirms on WhatsApp");
+  // FAIL CLOSED (audit #1): staging error / null contactId must refuse, never fall through to the merge
+  else if (!/if \(stErr\) return \{ ok: false[\s\S]*?refused: true/.test(region)) fail("M1f a staging error must refuse the merge, not fall through");
+  else if (!/if \(!ctx\.contactId\) return \{ ok: false[\s\S]*?refused: true/.test(region)) fail("M1g a confirmWrites merge with no contactId must refuse, not execute");
+  else ok("M1 merge family stages-then-confirms on WhatsApp AND fails closed on a staging error / no contactId");
 }
 
 // ---- M2: the preview names BOTH sides (so a wrong-person merge is caught) ----
 {
   const i = ST.indexOf("C2 STAGE-THEN-CONFIRM for the MERGE family");
-  const region = i >= 0 ? ST.slice(i, i + 1400) : "";
+  const region = i >= 0 ? ST.slice(i, i + 2100) : "";
   if (!/const dup = String\(input\.name/.test(region) || !/const into = String\(input\.into/.test(region))
     fail("M2a must extract both the duplicate and the keep target");
   else ok("M2a preview extracts both sides (dup + into)");
