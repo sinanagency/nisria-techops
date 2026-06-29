@@ -47,7 +47,10 @@ export default async function ReportArchive() {
     .eq("doc_type", "report")
     .limit(500);
   let rows = (data || []) as any[];
-  if (!rows.length) return null;
+  // M-6: on a fresh org with no reports, returning null left the page's always-rendered
+  // "Past reports" header dangling and the Archive tab wholly blank (reads as a load failure).
+  // Render an honest empty state instead.
+  if (!rows.length) return <div className="empty">No reports filed yet. Reports you generate are archived here.</div>;
 
   // collapse duplicate/redundant copies (same normalized title), keep one
   const ntitle = (t: string) => (t || "").toLowerCase().replace(/\[ns\]/g, "").replace(/\bcopy of\b/g, "").replace(/\.(pdf|docx?|doc|xlsx?)$/i, "").replace(/[\s_]*\(?\d+\)?\s*$/g, "").replace(/[^a-z0-9]+/g, " ").trim();

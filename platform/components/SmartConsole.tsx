@@ -61,10 +61,14 @@ export default function SmartConsole() {
     e.preventDefault(); setDrag(false);
     const f = e.dataTransfer.files?.[0];
     if (!f) return;
-    const isImg = f.type.startsWith("image/");
+    // H-2 (Law 6/11): this drop zone does NOT upload the file (real drag-drop intake is a
+    // separate feature). The old handler pushed a "Done. Saved in the platform." card, which
+    // was a lie. Tell the truth and point to the page that has a real upload, with no fake
+    // success card.
     const looksReceipt = /screenshot|mpesa|receipt|pay/i.test(f.name);
-    const aff: Affordance = looksReceipt ? { kind: "open", href: "/finance", label: "Open Finance" } : { kind: "open", href: "/library", label: "Open Library" };
-    setMsgs((m) => [...m, { role: "user", content: `Dropped ${f.name}` }, { role: "assistant", content: looksReceipt ? "Looks like a payment screenshot. Open Finance and I'll read it." : isImg ? "I'll add this to the Library and caption it." : "I'll file this to the Library.", actions: [{ ok: true, summary: "", affordance: aff }] }]);
+    setMsgs((m) => [...m, { role: "user", content: `Dropped ${f.name}` }, { role: "assistant", content: looksReceipt
+      ? "That looks like a payment receipt. I can't capture a dropped file here yet. Open Finance and use 'Log an M-Pesa receipt' to attach it."
+      : "I can't capture a dropped file here yet. Open the Library and use Upload to file it." }]);
   }
 
   return (

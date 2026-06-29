@@ -13,6 +13,8 @@ const MEM = rd("app", "memory", "page.tsx");
 const WS = rd("app", "workspace", "actions.ts");
 const INB = rd("app", "inbox", "page.tsx");
 const TM = rd("app", "team", "[id]", "page.tsx");
+const SC = rd("components", "SmartConsole.tsx");
+const RA = rd("components", "ReportArchive.tsx");
 const fail = (m) => { console.error("FAIL:", m); process.exitCode = 1; };
 const ok = (m) => console.log("PASS:", m);
 
@@ -45,6 +47,27 @@ const ok = (m) => console.log("PASS:", m);
   else ok("L-1a team/[id] imports notFound");
   if (!/if \(!row\) notFound\(\);/.test(TM)) fail("L-1b team/[id] must 404 an unknown id, not render a phantom profile");
   else ok("L-1b team/[id] 404s an unknown id");
+}
+
+// ---- H-2: Smart drop no longer fabricates a "Saved" card ----
+{
+  if (/I'll add this to the Library and caption it|I'll file this to the Library/.test(SC))
+    fail("H-2a the file-drop must not promise it filed a file it never uploaded");
+  else ok("H-2a Smart drop no longer claims it filed the dropped file");
+  const di = SC.indexOf("function onDrop");
+  const region = di >= 0 ? SC.slice(di, di + 900) : "";
+  if (/affordance: aff/.test(region)) fail("H-2b the drop must not push a 'Done. Saved in the platform.' affordance card");
+  else ok("H-2b the drop pushes no fake success card");
+  if (!/can't capture a dropped file here yet/.test(SC)) fail("H-2c the drop must honestly say it can't capture the file yet and point to a real upload");
+  else ok("H-2c the drop tells the truth and points to a real upload path");
+}
+
+// ---- M-6: report archive renders an empty state, not null ----
+{
+  if (/if \(!rows\.length\) return null;/.test(RA)) fail("M-6a ReportArchive must not return null on empty (dangling header + blank tab)");
+  else ok("M-6a ReportArchive no longer returns null on empty");
+  if (!/if \(!rows\.length\) return <div className="empty">/.test(RA)) fail("M-6b ReportArchive must render an empty state when there are no reports");
+  else ok("M-6b ReportArchive renders an empty state");
 }
 
 if (process.exitCode) console.error("\nWALL RED.");
