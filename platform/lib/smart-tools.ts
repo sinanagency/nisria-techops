@@ -4400,7 +4400,7 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
       ``,
       body,
       ``,
-      `I've queued it in Needs You for your approval. Tell me what to change, or approve it there. I never send until you say so.`,
+      `Reply *send it* to send it now, or tell me what to change. It's also in Needs You if you'd rather approve there. Nothing goes out until you say so.`,
     ].join("\n");
     const msg = created ? draftBubble : `That email is already drafted and waiting in Needs You${hasRealRecipient ? ` (to ${recipientName})` : ""}.\n\n*Subject:* ${subjectFinal}\n\n${body}`;
     return { ok: true, summary: humanize(msg, opts), affordance: { kind: "queued", label: "Review in Needs You", href: "/" }, detail: { gated: true, sent: false, created, preview: true } };

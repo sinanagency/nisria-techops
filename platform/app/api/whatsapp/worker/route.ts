@@ -1572,6 +1572,64 @@ async function processJob(db: any, job: any): Promise<void> {
     }
   }
 
+  // DETERMINISTIC EMAIL SEND-ON-CONFIRM (KT #357 pattern, this session). A drafted
+  // email lands in approvals(email_reply, pending). Approving it used to REQUIRE the
+  // portal "Needs You" (a second surface, the friction Taona flagged). Now an in-chat
+  // "send it" / "fire it" / "email it", or a bare "yes" right after a draft preview,
+  // approves + sends it via the SAME approveApproval the portal button calls. ONE
+  // in-chat confirm, no portal. Owner/founder only (email PII + recipient). NEVER auto
+  // sends: only fires on an explicit send-confirm AND when a pending draft exists; with
+  // several pending and no named recipient it ASKS which, so a stray "yes" can never
+  // fire the wrong email. Honesty: claims "Sent" only when approveApproval returns ok.
+  {
+    const sendEmailConfirm = /\b(?:send it|send the email|send that email|send this email|fire it|email it|go ahead and send(?: it)?|send the draft|send it now)\b/i.test(command || "");
+    const bareYesSend = /^\s*(?:yes|yeah|yep|yup|ok(?:ay)?|sure|go\s*ahead|do it|send|send it|confirm(?:ed)?|approve(?:d)?)\s*[.!]*\s*$/i.test(command || "");
+    // a bare "yes" only counts as a send-confirm when the LAST bubble we showed was a
+    // draft preview (its Subject line), so a generic "yes" never sends an email.
+    const lastWasDraftPreview = !!swipeAnchorNote && /here'?s (?:the|what will go|your)[^\n]*\b(?:draft|email)\b|\*?subject:?\*?/i.test(swipeAnchorNote);
+    if (contactId && (opRank === "owner" || opRank === "founder") && (sendEmailConfirm || (bareYesSend && lastWasDraftPreview))) {
+      try {
+        const { data: dr } = await db.from("approvals").select("id,proposed,created_at").eq("kind", "email_reply").eq("status", "pending").order("created_at", { ascending: false }).limit(10);
+        let drafts = (dr || []) as any[];
+        if (drafts.length) {
+          // if they named a recipient ("send the email to mwangi"), narrow to it
+          const STOP = new Set(["send", "it", "the", "email", "draft", "that", "this", "now", "fire", "go", "ahead", "yes", "yeah", "please", "to", "out", "off", "and", "approve", "approved", "confirm", "confirmed", "ok", "okay", "sure"]);
+          const tokens = (command || "").toLowerCase().replace(/[^a-z0-9@.]+/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w));
+          if (tokens.length && drafts.length > 1) {
+            const f = drafts.filter((a) => { const blob = JSON.stringify(a.proposed || {}).toLowerCase(); return tokens.some((t) => blob.includes(t)); });
+            if (f.length) drafts = f;
+          }
+          if (drafts.length > 1) {
+            // ambiguous: list and ask, never guess which email to actually send
+            const lines = drafts.slice(0, 8).map((a, i) => { const p = (a.proposed || {}) as any; return `${i + 1}. to ${p.to || p.from || "?"} - ${String(p.subject || "(no subject)").slice(0, 70)}`; });
+            const msg = `You have ${drafts.length} drafts waiting. Which should I send?\n\n${lines.join("\n")}\n\nSay e.g. "send the one to ${(drafts[0].proposed?.to || "them").split("@")[0]}".`;
+            await sendTextAndLog(db, from, msg, { contactId, handledBy: "sasa", trace_id: traceId });
+            await markJobDone(job.id); return;
+          }
+          const chosen = drafts[0];
+          const to = (chosen.proposed || {}).to || (chosen.proposed || {}).from || "them";
+          // HONESTY GUARD (skeptic catch): approveApproval only truly SENDS when the draft
+          // has a resolved email + linked intent; a name-only draft (no '@') would return
+          // ok:true but merely log. Never claim "Sent" without a real address.
+          if (!String((chosen.proposed || {}).to || "").includes("@")) {
+            await sendTextAndLog(db, from, `I don't have a verified email address for ${to} yet, so I can't send it. Give me the address and I'll fire it.`, { contactId, handledBy: "sasa", trace_id: traceId });
+            await markJobDone(job.id); return;
+          }
+          const { approveApproval } = await import("../../../../lib/gateway");
+          let res: any; try { res = await approveApproval(chosen.id, { decidedBy: "Nur via WhatsApp" }); } catch (e: any) { res = { ok: false, error: e?.message || "send failed" }; }
+          const sent = res && res.ok !== false;
+          const msg = sent
+            ? `Sent the email to ${to}.`
+            : `I could not send it: ${String(res?.error || "the send failed").slice(0, 120)}. It is still in Needs You, nothing went out.`;
+          await sendTextAndLog(db, from, msg, { contactId, handledBy: "sasa", trace_id: traceId });
+          await emit({ type: sent ? "sasa.email_sent_on_confirm" : "sasa.email_send_failed", source: "agent:sasa", actor: "Nur", subject_type: "approval", subject_id: chosen.id, correlation_id: traceId, payload: { to, ok: sent } }).catch(() => {});
+          await markJobDone(job.id); return;
+        }
+        // no pending draft -> fall through to the brain
+      } catch (e: any) { console.error("[worker:email_send_confirm]", e?.message || e); }
+    }
+  }
+
   // READ-EMAIL RECALL (KT #356). The model mishandled read_email and replied "the
   // email reader isn't available" even though Gmail works (token + list + format=full
   // all verified 200). So reading an inbox email is now DETERMINISTIC, like the draft
