@@ -1781,6 +1781,55 @@ async function processJob(db: any, job: any): Promise<void> {
     }
   }
 
+  // DETERMINISTIC CALENDAR-CREATE (KT #206540, the Dorje silent-fail). create_event
+  // WORKS when called (lands on the calendar + Google sync), but the model sometimes
+  // fails to call it, narrates "scheduled it", and the honesty rail rewrites that to a
+  // stub -> the event silently never lands. Same fix family as the intake + send blocks:
+  // detect a calendar-create intent BEFORE the brain, extract the fields with a scoped
+  // Haiku (relative dates resolved against today, owner TZ), then CODE calls create_event
+  // so the action ALWAYS fires. Owner/founder + team (calendar is a team tool, line 64).
+  // Precision: an imperative scheduling VERB + an event noun is required, so a bare
+  // statement ("I have a meeting tomorrow") or a reminder/task ("remind me", "task") is
+  // NOT hijacked; list/move/cancel are excluded. The Haiku is the strict gate: if it
+  // cannot pull a title + a real YYYY-MM-DD date it falls through to the brain untouched.
+  if (contactId && command && (isAdminIntake || (role === "team" && botAccess === true))) {
+    const calCreate = /\b(?:schedule|set\s*up|book|arrange|put|add|block|pencil(?:\s+in)?|plan|create)\b[\s\S]{0,40}\b(?:meeting|call|event|appointment|appt|visit|trip|travel|session|catch[- ]?up|sync|review|interview|demo|day)\b/i.test(command);
+    const notCal = /\b(?:remind\s+me|reminder|^remind|a?\s*task\b|to-?do|todo|list|show|what'?s\s+on|move|reschedule|cancel|delete|remove|did\s+i|do\s+i\s+have)\b/i.test(command);
+    if (calCreate && !notCal) {
+      try {
+        const nowD = new Date();
+        const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Dubai" }).format(nowD);
+        const dow = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Dubai", weekday: "long" }).format(nowD);
+        const SYS = `You extract calendar-event fields from ONE message. Today is ${today} (${dow}); the operator's timezone is Asia/Dubai. Return STRICT JSON with keys: title (string), date (YYYY-MM-DD; RESOLVE relative dates like "tomorrow", "Tuesday", "next Friday", "the 14th" against today), time (HH:MM 24-hour, or null for an all-day event), end_time (HH:MM 24h or null), source_timezone (string or null; set ONLY if the user stated the time in a zone OTHER than Dubai, e.g. "Nairobi", "9am Kenya time" -> "Nairobi"; do NOT convert it yourself), kind (one of meeting|call|event|visit|travel, or null), location (string or null). Use ONLY facts EXPLICITLY stated. NEVER invent a title, date, or time. If no clear title, set title to null. If no date can be resolved from the message, set date to null.`;
+        const ex: any = await claudeJSON(SYS, command, 350, HAIKU);
+        const pad = (t: any) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || "")); return m ? `${m[1].padStart(2, "0")}:${m[2]}` : undefined; };
+        if (ex && typeof ex.title === "string" && ex.title.trim() && /^\d{4}-\d{2}-\d{2}$/.test(String(ex.date || ""))) {
+          const r: any = await runSmartTool("create_event", {
+            title: String(ex.title).trim(),
+            date: ex.date,
+            time: pad(ex.time),
+            end_time: pad(ex.end_time),
+            source_timezone: typeof ex.source_timezone === "string" && ex.source_timezone.trim() ? ex.source_timezone.trim() : undefined,
+            kind: ["meeting", "call", "event", "visit", "travel"].includes(ex.kind) ? ex.kind : undefined,
+            location: ex.location || undefined,
+          }, { contactId, tier: isAdminIntake ? "admin" : "team", rank: opRank, operatorName: opName || "Nur", traceId: traceId || undefined });
+          if (r?.ok) {
+            await sendTextAndLog(db, from, r.summary || `Added "${String(ex.title).trim()}" to the calendar on ${ex.date}.`, { contactId, handledBy: "sasa", trace_id: traceId });
+            await emit({ type: "sasa.event_created_deterministic", source: "agent:sasa", actor: opName || "Nur", subject_type: "calendar_event", subject_id: contactId, correlation_id: traceId, payload: { title: String(ex.title).trim(), date: ex.date, time: pad(ex.time) || null, by_role: role || "admin" } }).catch(() => {});
+            await markJobDone(job.id); return;
+          }
+          // tool not-ok -> fall through to the brain (it answers honestly)
+        } else if (ex && typeof ex.title === "string" && ex.title.trim() && !ex.date) {
+          // clear event intent but no resolvable date -> ask deterministically, never drop it
+          await sendTextAndLog(db, from, `I can put "${String(ex.title).trim()}" on the calendar. What day, and a time if it has one?`, { contactId, handledBy: "sasa", trace_id: traceId });
+          await emit({ type: "sasa.event_needs_date", source: "agent:sasa", actor: opName || "Nur", subject_type: "contact", subject_id: contactId, correlation_id: traceId, payload: {} }).catch(() => {});
+          await markJobDone(job.id); return;
+        }
+        // no clean extract -> fall through to the brain
+      } catch (e: any) { console.error("[worker:cal_create]", e?.message || e); }
+    }
+  }
+
   let reply: string | undefined;
   try {
     // Inject the parseTasks context note (if any) so the model narrates the
