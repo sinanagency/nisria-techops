@@ -4,8 +4,12 @@
 // them about a task they just typed is wrong (operator call, 2026-06-20: Nur set
 // her own Mamoun reminder and got the template).
 //
-// Fix: in create_task, suppress the urgent pushTaskAlert("new") when the assignee
+// Fix: in create_task, suppress the new-task pushTaskAlert("new") when the assignee
 // resolves to the same person as the creator (senderMember.id === member.id).
+// 2026-06-30 UPDATE: the old `urgent && !selfAssigned` gate was widened to
+// `member?.id && !selfAssigned` so EVERY teammate assignment templates them (Taona:
+// "she'll mostly send tasks to team members, message her"). The self-assignment
+// suppression below is the INVARIANT that must survive that change.
 // CRITICAL: this must NOT touch the timed-reminder path (/api/cron/timed ->
 // pushTaskDigest) — a self-set 9pm reminder must still ping at 9pm. Only the
 // redundant new-task alert is suppressed.
@@ -37,10 +41,10 @@ if (!/selfAssigned/.test(region) || !/senderMember/.test(region)) fail("S1 creat
 else if (!/senderMember\??\.id\s*===\s*member\??\.id|member\??\.id\s*===\s*senderMember\??\.id/.test(region)) fail("S1 selfAssigned must compare senderMember.id to member.id");
 else ok("S1 create_task computes selfAssigned (senderMember.id === member.id)");
 
-// ---- S2 ----
-if (!/if\s*\(\s*urgent\s*&&\s*!selfAssigned\s*\)\s*await pushTaskAlert/.test(region.replace(/\s+/g, " ")) &&
-    !/urgent\s*&&\s*!selfAssigned[\s\S]{0,40}pushTaskAlert/.test(region)) fail("S2 the urgent pushTaskAlert('new') must be gated on !selfAssigned");
-else ok("S2 urgent pushTaskAlert gated on !selfAssigned");
+// ---- S2: the new-task pushTaskAlert('new') must still be gated on !selfAssigned ----
+// (urgent-only gate removed 2026-06-30; the self-assign suppression is the invariant.)
+if (!/!selfAssigned\)\s*await pushTaskAlert\(db,[\s\S]{0,200}"new"\)/.test(SMART)) fail("S2 the new-task pushTaskAlert('new') must be gated on !selfAssigned");
+else ok("S2 new-task pushTaskAlert gated on !selfAssigned (urgent-only gate removed)");
 
 // ---- S3: timed reminder path must NOT be suppressed by self-assignment ----
 if (/selfAssigned/.test(TIMED)) fail("S3 the timed cron must NOT suppress self-assigned tasks (self reminders must still fire)");

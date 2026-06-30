@@ -1921,7 +1921,16 @@ async function runAction(db: any, name: string, input: any, ctx: { sourceGroup?:
     // separate path, so a self-set 9pm reminder still fires at 9pm.
     const senderMember = ctx.senderPhone ? await findMemberByPhone(db, ctx.senderPhone) : null;
     const selfAssigned = !!(senderMember?.id && member?.id && senderMember.id === member.id);
-    if (urgent && !selfAssigned) await pushTaskAlert(db, { id: task.id, title, due_on, priority, assignee_id: member?.id || null }, "new");
+    // ASSIGNMENT PING (2026-06-30, Taona: "she'll mostly send tasks to team members,
+    // message her via template"). A teammate is now MESSAGED whenever a task lands on
+    // them, not only when it is urgent (non-urgent tasks used to wait for the morning
+    // brief, so the assignee often never knew). Fire the new-task template on ANY
+    // assignment to someone OTHER than the creator. Routing in pushTaskAlert keeps it
+    // safe + quiet: only a bot_access member gets a direct template (others reach via the
+    // group bot), a self-assignment is skipped, quiet-hours + a 6-min dedup apply, and
+    // Nur is NOT double-pinged for tasks she delegates (notify.ts teamMemberTask branch).
+    // `urgent` still drives the wording adjective (priority) inside pushTaskAlert.
+    if (member?.id && !selfAssigned) await pushTaskAlert(db, { id: task.id, title, due_on, priority, assignee_id: member?.id || null }, "new");
     const who = member?.name ? `assigned to ${member.name}` : "unassigned";
     // Holiday guard: if the due date lands on a Kenya public holiday (Eid,
     // Madaraka Day, etc.) the team is off, so flag it in the same breath. The
